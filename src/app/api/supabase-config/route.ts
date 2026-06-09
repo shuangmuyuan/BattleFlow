@@ -6,18 +6,17 @@ export async function GET() {
     const { url, anonKey } = getSupabaseCredentials();
 
     if (!url || !anonKey) {
-      return NextResponse.json(
-        { error: 'Supabase credentials not configured' },
-        { status: 500 }
-      );
+      return NextResponse.json({
+        configured: false,
+        error: 'Supabase credentials not configured',
+      });
     }
 
-    return NextResponse.json({ url, anonKey });
+    return NextResponse.json({ configured: true, url, anonKey });
   } catch (error) {
-    console.error('Failed to get Supabase config:', error);
-    return NextResponse.json(
-      { error: 'Failed to get Supabase config' },
-      { status: 500 }
-    );
+    return NextResponse.json({
+      configured: false,
+      error: error instanceof Error ? error.message : 'Failed to get Supabase config',
+    });
   }
 }

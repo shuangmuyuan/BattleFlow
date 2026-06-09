@@ -31,7 +31,14 @@ import {
   Globe,
   Star,
   Tag,
+  RotateCcw,
 } from 'lucide-react';
+
+interface SkillVersion {
+  version: string;
+  updated_at: string;
+  changelog: string;
+}
 
 interface Skill {
   id: string;
@@ -47,6 +54,7 @@ interface Skill {
   checklist: string[];
   scope: 'personal' | 'team' | 'official';
   updated_at: string;
+  versions?: SkillVersion[];
 }
 
 export default function SkillsPage() {
@@ -55,6 +63,7 @@ export default function SkillsPage() {
   const [activeTab, setActiveTab] = useState('all');
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [detailSkill, setDetailSkill] = useState<Skill | null>(null);
+  const [versionSkill, setVersionSkill] = useState<Skill | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Import form state
@@ -87,6 +96,11 @@ export default function SkillsPage() {
           checklist: ['至少包含3个竞品', '功能对比完整', '有明确差异化结论'],
           scope: 'official',
           updated_at: '2025-01-15',
+          versions: [
+            { version: '1.2.0', updated_at: '2025-01-15', changelog: '补充差异化策略输出结构，优化竞品范围定义。' },
+            { version: '1.1.0', updated_at: '2024-12-18', changelog: '新增用户评价分析维度。' },
+            { version: '1.0.0', updated_at: '2024-11-20', changelog: '首个官方版本。' },
+          ],
         },
         {
           id: '2',
@@ -102,6 +116,10 @@ export default function SkillsPage() {
           checklist: ['引用数据来源', '趋势有量化支撑', '机会点可执行'],
           scope: 'team',
           updated_at: '2025-01-10',
+          versions: [
+            { version: '1.0.0', updated_at: '2025-01-10', changelog: '团队发布版本。' },
+            { version: '0.9.0', updated_at: '2024-12-26', changelog: '补充市场规模估算步骤。' },
+          ],
         },
         {
           id: '3',
@@ -117,6 +135,11 @@ export default function SkillsPage() {
           checklist: ['每个故事有验收标准', '覆盖所有角色', '优先级已标注'],
           scope: 'personal',
           updated_at: '2025-01-12',
+          versions: [
+            { version: '2.0.0', updated_at: '2025-01-12', changelog: '升级用户故事与验收标准结构。' },
+            { version: '1.5.0', updated_at: '2024-12-30', changelog: '新增优先级标注建议。' },
+            { version: '1.0.0', updated_at: '2024-11-15', changelog: '个人空间初始版本。' },
+          ],
         },
         {
           id: '4',
@@ -132,6 +155,10 @@ export default function SkillsPage() {
           checklist: ['覆盖所有技术维度', '风险有缓解方案', '实现路径有工时估算'],
           scope: 'team',
           updated_at: '2025-01-08',
+          versions: [
+            { version: '1.1.0', updated_at: '2025-01-08', changelog: '新增工时估算和风险缓解建议。' },
+            { version: '1.0.0', updated_at: '2024-12-05', changelog: '团队发布版本。' },
+          ],
         },
       ]);
     } finally {
@@ -180,6 +207,64 @@ export default function SkillsPage() {
     } catch (error) {
       console.error('Import error:', error);
     }
+  };
+
+  const getSkillVersions = (skill: Skill) => (
+    skill.versions && skill.versions.length > 0
+      ? skill.versions
+      : [{ version: skill.version, updated_at: skill.updated_at, changelog: '当前版本' }]
+  );
+
+  const handleDownloadVersion = (skill: Skill, version: SkillVersion) => {
+    const content = [
+      `# ${skill.name}`,
+      '',
+      `版本：${version.version}`,
+      `更新时间：${version.updated_at}`,
+      `作者：${skill.author}`,
+      '',
+      '## 变更说明',
+      version.changelog,
+      '',
+      '## 描述',
+      skill.description,
+      '',
+      '## 方法论框架',
+      skill.methodology,
+      '',
+      '## Checklist',
+      ...skill.checklist.map((item) => `- ${item}`),
+      '',
+      '## 输出结构',
+      '```json',
+      JSON.stringify(skill.outputs, null, 2),
+      '```',
+    ].join('\n');
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${skill.name}-v${version.version}.md`.replace(/[\\/:*?"<>|]/g, '-');
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleRollbackVersion = (skill: Skill, version: SkillVersion) => {
+    setSkills((prev) => prev.map((item) => (
+      item.id === skill.id
+        ? { ...item, version: version.version, updated_at: version.updated_at }
+        : item
+    )));
+    setVersionSkill((prev) => (
+      prev && prev.id === skill.id
+        ? { ...prev, version: version.version, updated_at: version.updated_at }
+        : prev
+    ));
+    setDetailSkill((prev) => (
+      prev && prev.id === skill.id
+        ? { ...prev, version: version.version, updated_at: version.updated_at }
+        : prev
+    ));
   };
 
   const getSourceIcon = (type: string) => {
@@ -329,6 +414,14 @@ export default function SkillsPage() {
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem onClick={(e) => e.stopPropagation()}>更新到最新版本</DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setVersionSkill(skill);
+                              }}
+                            >
+                              版本管理
+                            </DropdownMenuItem>
                             <DropdownMenuItem onClick={(e) => e.stopPropagation()}>复制到个人空间</DropdownMenuItem>
                             <DropdownMenuItem onClick={(e) => e.stopPropagation()} className="text-red-600">移除</DropdownMenuItem>
                           </DropdownMenuContent>
@@ -379,6 +472,10 @@ export default function SkillsPage() {
                   <DialogTitle className="text-xl">{detailSkill.name}</DialogTitle>
                   <Badge variant="outline">v{detailSkill.version}</Badge>
                   {getScopeBadge(detailSkill.scope)}
+                  <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setVersionSkill(detailSkill)}>
+                    <GitBranch className="h-3.5 w-3.5" />
+                    版本管理
+                  </Button>
                 </div>
                 <DialogDescription>{detailSkill.description}</DialogDescription>
               </DialogHeader>
@@ -427,6 +524,65 @@ export default function SkillsPage() {
                   </div>
                 </div>
               </ScrollArea>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Skill Version Dialog */}
+      <Dialog open={!!versionSkill} onOpenChange={(open) => !open && setVersionSkill(null)}>
+        <DialogContent className="max-w-2xl">
+          {versionSkill && (
+            <>
+              <DialogHeader>
+                <DialogTitle>{versionSkill.name} 版本管理</DialogTitle>
+                <DialogDescription>
+                  选择指定版本下载，或将当前 Skill 回滚到历史版本。
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3 mt-4">
+                {getSkillVersions(versionSkill).map((version) => {
+                  const isCurrent = version.version === versionSkill.version;
+                  return (
+                    <div
+                      key={version.version}
+                      className="rounded-lg border border-border/60 bg-muted/20 p-4"
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <p className="font-medium">v{version.version}</p>
+                            {isCurrent && <Badge variant="default" className="text-xs">当前版本</Badge>}
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1">更新于 {version.updated_at}</p>
+                          <p className="text-sm text-muted-foreground mt-2">{version.changelog}</p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="gap-1.5"
+                            onClick={() => handleDownloadVersion(versionSkill, version)}
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                            下载
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="gap-1.5"
+                            disabled={isCurrent}
+                            onClick={() => handleRollbackVersion(versionSkill, version)}
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                            回滚
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </>
           )}
         </DialogContent>

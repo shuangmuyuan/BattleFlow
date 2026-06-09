@@ -7,6 +7,13 @@ interface SupabaseConfig {
   anonKey: string;
 }
 
+interface SupabaseConfigResponse {
+  configured?: boolean;
+  url?: string;
+  anonKey?: string;
+  error?: string;
+}
+
 interface SupabaseConfigContextType {
   config: SupabaseConfig | null;
   isLoading: boolean;
@@ -42,18 +49,25 @@ export function SupabaseConfigProvider({ children }: SupabaseConfigProviderProps
         }
         return res.json();
       })
-      .then((data) => {
+      .then((data: SupabaseConfigResponse) => {
+        if (data.configured === false) {
+          setConfig(null);
+          setError(data.error || null);
+          return;
+        }
+
         if (data.url && data.anonKey) {
-          setConfig(data);
-          (window as unknown as { __SUPABASE_CONFIG__: SupabaseConfig }).__SUPABASE_CONFIG__ = data;
-          window.dispatchEvent(new CustomEvent(SUPABASE_CONFIG_READY_EVENT, { detail: data }));
+          const config = { url: data.url, anonKey: data.anonKey };
+          setConfig(config);
+          (window as unknown as { __SUPABASE_CONFIG__: SupabaseConfig }).__SUPABASE_CONFIG__ = config;
+          window.dispatchEvent(new CustomEvent(SUPABASE_CONFIG_READY_EVENT, { detail: config }));
         } else {
           throw new Error('Invalid config response');
         }
       })
       .catch((err) => {
         setError(err.message);
-        console.error('Failed to load Supabase config:', err);
+        console.warn('Supabase config unavailable:', err);
       })
       .finally(() => {
         setIsLoading(false);
