@@ -1,0 +1,33 @@
+{
+  "id": "market-insight",
+  "name": "市场洞察",
+  "description": "从行业趋势、市场规模、用户需求变化和机会空间提炼产品规划输入。",
+  "version": "1.0.0",
+  "author": "BattleFlow Team",
+  "tags": ["市场", "洞察", "趋势", "机会"],
+  "scope": "official",
+  "source_type": "registry",
+  "definition": {
+    "inputs": [
+      {
+        "name": "business_context",
+        "type": "markdown",
+        "required": true,
+        "description": "业务背景、目标用户、已知约束和已有材料。"
+      }
+    ],
+    "outputs": {
+      "format": "structured_markdown",
+      "sections": ["行业趋势", "市场规模", "用户需求变化", "机会点", "风险与假设"]
+    },
+    "methodology": "1. 明确业务边界与目标用户\n2. 扫描行业趋势和关键变量\n3. 估算市场规模和增长空间\n4. 归纳用户需求变化\n5. 提炼机会点、风险和待验证假设",
+    "tools": ["web_search", "knowledge_query", "data_query"],
+    "prompt_template": "你是资深产品战略分析师。请基于输入材料输出一份市场洞察报告，结论必须可追溯到证据或明确标注为假设。",
+    "checklist": [
+      "趋势判断有来源或依据",
+      "市场规模口径清晰",
+      "机会点能转化为后续需求拆解输入",
+      "风险和假设被单独列出"
+    ]
+  }
+}

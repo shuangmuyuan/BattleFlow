@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { execSync } from 'child_process';
+import dotenv from 'dotenv';
 import { getReportBuffer, createWrappedFetch } from 'coze-coding-dev-sdk';
 
 let envLoaded = false;
@@ -16,7 +17,7 @@ function loadEnv(): void {
 
   try {
     try {
-      require('dotenv').config();
+      dotenv.config();
       if (process.env.COZE_SUPABASE_URL && process.env.COZE_SUPABASE_ANON_KEY) {
         envLoaded = true;
         return;
@@ -100,14 +101,17 @@ function getSupabaseClient(token?: string): SupabaseClient {
     key = serviceRoleKey ?? anonKey;
   }
 
-  const globalOptions: Record<string, any> = {};
+  const globalOptions: {
+    headers?: Record<string, string>;
+    fetch?: typeof fetch;
+  } = {};
   if (token) {
     globalOptions.headers = { Authorization: `Bearer ${token}` };
   }
   try {
     const buffer = getReportBuffer();
     if (buffer) {
-      globalOptions.fetch = createWrappedFetch(buffer, 'supabase');
+      globalOptions.fetch = createWrappedFetch(buffer, 'supabase') as typeof fetch;
     }
   } catch {
     // Silent — reporting setup failure should not block client creation

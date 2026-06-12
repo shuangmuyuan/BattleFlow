@@ -115,6 +115,7 @@ pids
 *.pid
 *.seed
 *.pid.lock
+data/skill-registry/
 # Diagnostic reports
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 # Cache

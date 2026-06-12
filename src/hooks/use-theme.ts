@@ -8,7 +8,7 @@ export function useTheme() {
   const [theme, setThemeState] = useState<Theme>('dark');
 
   useEffect(() => {
-    const stored = localStorage.getItem('planflow-theme') as Theme | null;
+    const stored = (localStorage.getItem('battleflow-theme') || localStorage.getItem('planflow-theme')) as Theme | null;
     if (stored === 'light' || stored === 'dark') {
       setThemeState(stored);
       document.documentElement.classList.toggle('dark', stored === 'dark');
@@ -20,7 +20,7 @@ export function useTheme() {
 
   const setTheme = useCallback((newTheme: Theme) => {
     setThemeState(newTheme);
-    localStorage.setItem('planflow-theme', newTheme);
+    localStorage.setItem('battleflow-theme', newTheme);
     document.documentElement.classList.toggle('dark', newTheme === 'dark');
   }, []);
 

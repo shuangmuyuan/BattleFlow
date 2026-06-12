@@ -1,14 +1,16 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AlertCircle, Archive, CheckCircle2, Download, FileCode2, GitBranch, GitPullRequest, Globe, MoreVertical, RotateCcw, Search, Star, Tag, Upload, XCircle } from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -17,27 +19,48 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import {
-  Plus,
-  Search,
-  MoreVertical,
-  Download,
-  FileCode2,
-  GitBranch,
-  Globe,
-  Star,
-  Tag,
-  RotateCcw,
-} from 'lucide-react';
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from '@/components/ui/empty';
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Textarea } from '@/components/ui/textarea';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+
+type SkillScope = 'personal' | 'team' | 'official';
+type SkillSourceType = 'local' | 'registry' | 'git';
+type SkillStatus = 'imported' | 'pending_review' | 'published' | 'rejected' | 'archived';
 
 interface SkillVersion {
   version: string;
   updated_at: string;
   changelog: string;
+}
+
+interface SkillReview {
+  source_skill_id: string;
+  source_version: string;
+  submitted_at: string;
+  submitted_note?: string;
+  reviewed_at?: string;
+  review_note?: string;
+  decision?: 'approved' | 'rejected';
 }
 
 interface Skill {
@@ -47,120 +70,136 @@ interface Skill {
   version: string;
   author: string;
   tags: string[];
-  source_type: 'local' | 'registry' | 'git';
+  source_type: SkillSourceType;
+  source_uri?: string;
   methodology: string;
   tools: string[];
   outputs: Record<string, unknown>;
   checklist: string[];
-  scope: 'personal' | 'team' | 'official';
+  prompt_template?: string;
+  scope: SkillScope;
+  status: SkillStatus;
   updated_at: string;
-  versions?: SkillVersion[];
+  skill_md: string;
+  meta_json: Record<string, unknown>;
+  changelog: string;
+  attachments: string[];
+  versions: SkillVersion[];
+  review?: SkillReview;
+}
+
+interface ApiSkillResponse {
+  skill?: Skill;
+  skills?: Skill[];
+  error?: string;
+}
+
+const scopeLabels: Record<SkillScope, string> = {
+  personal: '个人私有',
+  team: '团队共享',
+  official: '官方模板',
+};
+
+const statusLabels: Record<SkillStatus, string> = {
+  imported: '已导入',
+  pending_review: '待审核',
+  published: '已发布',
+  rejected: '已拒绝',
+  archived: '已归档',
+};
+
+const sourceLabels: Record<SkillSourceType, string> = {
+  local: '本地导入',
+  registry: '注册中心',
+  git: 'Git 同步',
+};
+
+const codeBlockClassName = 'w-full max-w-full min-w-0 overflow-x-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/30 p-4 font-mono';
+
+function formatDate(value: string) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+}
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  return '操作失败';
+}
+
+function getSourceIcon(type: SkillSourceType) {
+  switch (type) {
+    case 'git':
+      return <GitBranch />;
+    case 'registry':
+      return <Globe />;
+    default:
+      return <FileCode2 />;
+  }
+}
+
+function ScopeBadge({ scope }: { scope: SkillScope }) {
+  if (scope === 'official') {
+    return (
+      <Badge>
+        <Star />
+        {scopeLabels[scope]}
+      </Badge>
+    );
+  }
+
+  return (
+    <Badge variant={scope === 'team' ? 'secondary' : 'outline'}>
+      {scopeLabels[scope]}
+    </Badge>
+  );
+}
+
+function StatusBadge({ status }: { status: SkillStatus }) {
+  const variant = status === 'published' ? 'default' : status === 'pending_review' ? 'secondary' : status === 'rejected' ? 'destructive' : 'outline';
+  return <Badge variant={variant}>{statusLabels[status]}</Badge>;
 }
 
 export default function SkillsPage() {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeTab, setActiveTab] = useState('all');
+  const [activeTab, setActiveTab] = useState<'all' | SkillScope>('all');
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [detailSkill, setDetailSkill] = useState<Skill | null>(null);
   const [versionSkill, setVersionSkill] = useState<Skill | null>(null);
+  const [downloadNotice, setDownloadNotice] = useState<{ fileName: string; previewUrl: string } | null>(null);
+  const [reviewRequestSkill, setReviewRequestSkill] = useState<Skill | null>(null);
+  const [reviewRequestNote, setReviewRequestNote] = useState('');
+  const [reviewDecisionSkill, setReviewDecisionSkill] = useState<Skill | null>(null);
+  const [reviewDecision, setReviewDecision] = useState<'approved' | 'rejected'>('approved');
+  const [reviewDecisionNote, setReviewDecisionNote] = useState('');
   const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
 
-  // Import form state
-  const [importSource, setImportSource] = useState<'local' | 'registry' | 'git'>('local');
-  const [importPath, setImportPath] = useState('');
+  const [importSource, setImportSource] = useState<SkillSourceType>('local');
+  const [importScope, setImportScope] = useState<'personal' | 'team'>('personal');
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [serverPath, setServerPath] = useState('');
   const [importUrl, setImportUrl] = useState('');
 
   const fetchSkills = useCallback(async () => {
+    setLoading(true);
+    setErrorMessage('');
     try {
-      setLoading(true);
-      const res = await fetch('/api/skills');
-      if (!res.ok) throw new Error('Failed to fetch skills');
-      const data = await res.json();
+      const res = await fetch('/api/skills', { cache: 'no-store' });
+      const data = (await res.json()) as ApiSkillResponse;
+      if (!res.ok) throw new Error(data.error || 'Failed to fetch skills');
       setSkills(data.skills || []);
     } catch (error) {
-      console.error('Error fetching skills:', error);
-      // Use demo data for preview
-      setSkills([
-        {
-          id: '1',
-          name: '竞品分析',
-          description: '系统性分析竞品产品功能、市场定位、用户评价和差异化策略',
-          version: '1.2.0',
-          author: 'Product Team',
-          tags: ['竞品', '分析', '市场'],
-          source_type: 'registry',
-          methodology: '1. 确定竞品范围\n2. 功能矩阵对比\n3. 用户体验评估\n4. 差异化策略制定',
-          tools: ['web_search', 'knowledge_query'],
-          outputs: { format: 'structured_report', sections: ['overview', 'feature_matrix', 'swot', 'strategy'] },
-          checklist: ['至少包含3个竞品', '功能对比完整', '有明确差异化结论'],
-          scope: 'official',
-          updated_at: '2025-01-15',
-          versions: [
-            { version: '1.2.0', updated_at: '2025-01-15', changelog: '补充差异化策略输出结构，优化竞品范围定义。' },
-            { version: '1.1.0', updated_at: '2024-12-18', changelog: '新增用户评价分析维度。' },
-            { version: '1.0.0', updated_at: '2024-11-20', changelog: '首个官方版本。' },
-          ],
-        },
-        {
-          id: '2',
-          name: '市场洞察',
-          description: '从行业趋势、市场规模、用户需求变化等维度洞察市场机会',
-          version: '1.0.0',
-          author: 'Strategy Team',
-          tags: ['市场', '洞察', '趋势'],
-          source_type: 'git',
-          methodology: '1. 行业趋势扫描\n2. 市场规模估算\n3. 用户需求变化分析\n4. 机会点提炼',
-          tools: ['web_search', 'knowledge_query', 'data_query'],
-          outputs: { format: 'structured_report', sections: ['trends', 'market_size', 'user_needs', 'opportunities'] },
-          checklist: ['引用数据来源', '趋势有量化支撑', '机会点可执行'],
-          scope: 'team',
-          updated_at: '2025-01-10',
-          versions: [
-            { version: '1.0.0', updated_at: '2025-01-10', changelog: '团队发布版本。' },
-            { version: '0.9.0', updated_at: '2024-12-26', changelog: '补充市场规模估算步骤。' },
-          ],
-        },
-        {
-          id: '3',
-          name: '用户需求拆解',
-          description: '将高层业务需求拆解为可执行的用户故事和验收标准',
-          version: '2.0.0',
-          author: 'PM Center',
-          tags: ['需求', '拆解', '用户故事'],
-          source_type: 'local',
-          methodology: '1. 业务目标确认\n2. 用户角色识别\n3. 核心场景梳理\n4. 用户故事编写\n5. 验收标准定义',
-          tools: ['knowledge_query'],
-          outputs: { format: 'user_stories', sections: ['personas', 'stories', 'acceptance_criteria'] },
-          checklist: ['每个故事有验收标准', '覆盖所有角色', '优先级已标注'],
-          scope: 'personal',
-          updated_at: '2025-01-12',
-          versions: [
-            { version: '2.0.0', updated_at: '2025-01-12', changelog: '升级用户故事与验收标准结构。' },
-            { version: '1.5.0', updated_at: '2024-12-30', changelog: '新增优先级标注建议。' },
-            { version: '1.0.0', updated_at: '2024-11-15', changelog: '个人空间初始版本。' },
-          ],
-        },
-        {
-          id: '4',
-          name: '技术可行性评估',
-          description: '评估需求的技术实现可行性，识别技术风险和约束',
-          version: '1.1.0',
-          author: 'Tech Lead',
-          tags: ['技术', '评估', '可行性'],
-          source_type: 'registry',
-          methodology: '1. 技术栈匹配分析\n2. 现有能力边界评估\n3. 技术风险识别\n4. 实现路径建议',
-          tools: ['data_query', 'knowledge_query', 'api_call'],
-          outputs: { format: 'assessment', sections: ['capability_analysis', 'risks', 'recommendations'] },
-          checklist: ['覆盖所有技术维度', '风险有缓解方案', '实现路径有工时估算'],
-          scope: 'team',
-          updated_at: '2025-01-08',
-          versions: [
-            { version: '1.1.0', updated_at: '2025-01-08', changelog: '新增工时估算和风险缓解建议。' },
-            { version: '1.0.0', updated_at: '2024-12-05', changelog: '团队发布版本。' },
-          ],
-        },
-      ]);
+      setErrorMessage(getErrorMessage(error));
+      setSkills([]);
     } finally {
       setLoading(false);
     }
@@ -170,284 +209,486 @@ export default function SkillsPage() {
     fetchSkills();
   }, [fetchSkills]);
 
-  const filteredSkills = skills.filter((skill) => {
-    const matchesSearch =
-      !searchQuery ||
-      skill.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      skill.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      skill.tags.some((t) => t.toLowerCase().includes(searchQuery.toLowerCase()));
+  const filteredSkills = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    return skills.filter((skill) => {
+      const matchesSearch =
+        !query ||
+        skill.name.toLowerCase().includes(query) ||
+        skill.description.toLowerCase().includes(query) ||
+        skill.tags.some((tag) => tag.toLowerCase().includes(query));
+      const matchesTab = activeTab === 'all' || skill.scope === activeTab;
+      return matchesSearch && matchesTab;
+    });
+  }, [activeTab, searchQuery, skills]);
 
-    const matchesTab =
-      activeTab === 'all' ||
-      (activeTab === 'personal' && skill.scope === 'personal') ||
-      (activeTab === 'team' && skill.scope === 'team') ||
-      (activeTab === 'official' && skill.scope === 'official');
+  const skillCounts = useMemo(() => {
+    return skills.reduce(
+      (counts, skill) => {
+        counts.all += 1;
+        counts[skill.scope] += 1;
+        return counts;
+      },
+      { all: 0, official: 0, team: 0, personal: 0 },
+    );
+  }, [skills]);
 
-    return matchesSearch && matchesTab;
-  });
+  const updateSkillInState = (skill: Skill) => {
+    setSkills((prev) => {
+      const exists = prev.some((item) => item.id === skill.id);
+      const next = exists
+        ? prev.map((item) => (item.id === skill.id ? skill : item))
+        : [skill, ...prev];
+      return next.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+    });
+    setDetailSkill((prev) => (prev?.id === skill.id ? skill : prev));
+    setVersionSkill((prev) => (prev?.id === skill.id ? skill : prev));
+    setReviewDecisionSkill((prev) => (prev?.id === skill.id ? skill : prev));
+  };
 
-  const handleImport = async () => {
+  const runSkillAction = async (body: Record<string, unknown>, success: string) => {
+    setActionLoading(true);
+    setErrorMessage('');
+    setSuccessMessage('');
     try {
-      const payload: Record<string, string> = { source_type: importSource };
-      if (importSource === 'local') payload.path = importPath;
-      if (importSource === 'registry') payload.url = importUrl;
-      if (importSource === 'git') payload.url = importUrl;
-
       const res = await fetch('/api/skills', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'import', ...payload }),
+        body: JSON.stringify(body),
       });
-
-      if (!res.ok) throw new Error('Import failed');
-      setImportDialogOpen(false);
-      setImportPath('');
-      setImportUrl('');
-      fetchSkills();
+      const data = (await res.json()) as ApiSkillResponse;
+      if (!res.ok) throw new Error(data.error || 'Skill operation failed');
+      if (data.skill) updateSkillInState(data.skill);
+      if (data.skills) await fetchSkills();
+      setSuccessMessage(success);
+      return true;
     } catch (error) {
-      console.error('Import error:', error);
+      setErrorMessage(getErrorMessage(error));
+      return false;
+    } finally {
+      setActionLoading(false);
     }
   };
 
-  const getSkillVersions = (skill: Skill) => (
-    skill.versions && skill.versions.length > 0
-      ? skill.versions
-      : [{ version: skill.version, updated_at: skill.updated_at, changelog: '当前版本' }]
-  );
-
-  const handleDownloadVersion = (skill: Skill, version: SkillVersion) => {
-    const content = [
-      `# ${skill.name}`,
-      '',
-      `版本：${version.version}`,
-      `更新时间：${version.updated_at}`,
-      `作者：${skill.author}`,
-      '',
-      '## 变更说明',
-      version.changelog,
-      '',
-      '## 描述',
-      skill.description,
-      '',
-      '## 方法论框架',
-      skill.methodology,
-      '',
-      '## Checklist',
-      ...skill.checklist.map((item) => `- ${item}`),
-      '',
-      '## 输出结构',
-      '```json',
-      JSON.stringify(skill.outputs, null, 2),
-      '```',
-    ].join('\n');
-    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${skill.name}-v${version.version}.md`.replace(/[\\/:*?"<>|]/g, '-');
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleRollbackVersion = (skill: Skill, version: SkillVersion) => {
-    setSkills((prev) => prev.map((item) => (
-      item.id === skill.id
-        ? { ...item, version: version.version, updated_at: version.updated_at }
-        : item
-    )));
-    setVersionSkill((prev) => (
-      prev && prev.id === skill.id
-        ? { ...prev, version: version.version, updated_at: version.updated_at }
-        : prev
-    ));
-    setDetailSkill((prev) => (
-      prev && prev.id === skill.id
-        ? { ...prev, version: version.version, updated_at: version.updated_at }
-        : prev
-    ));
-  };
-
-  const getSourceIcon = (type: string) => {
-    switch (type) {
-      case 'local':
-        return <FileCode2 className="h-4 w-4" />;
-      case 'registry':
-        return <Globe className="h-4 w-4" />;
-      case 'git':
-        return <GitBranch className="h-4 w-4" />;
-      default:
-        return <FileCode2 className="h-4 w-4" />;
+  const handleRequestReview = async () => {
+    if (!reviewRequestSkill) return;
+    const ok = await runSkillAction(
+      { action: 'publish_request', id: reviewRequestSkill.id, note: reviewRequestNote },
+      '已创建团队审核副本，个人 Skill 已保留',
+    );
+    if (ok) {
+      setReviewRequestSkill(null);
+      setReviewRequestNote('');
     }
   };
 
-  const getScopeBadge = (scope: string) => {
-    switch (scope) {
-      case 'official':
-        return <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100"><Star className="h-3 w-3 mr-1" />官方</Badge>;
-      case 'team':
-        return <Badge className="bg-blue-100 text-blue-800 hover:bg-blue-100">团队</Badge>;
-      case 'personal':
-        return <Badge className="bg-slate-100 text-slate-800 hover:bg-slate-100">个人</Badge>;
-      default:
-        return null;
+  const handleReviewDecision = async () => {
+    if (!reviewDecisionSkill) return;
+    const ok = await runSkillAction(
+      {
+        action: reviewDecision === 'approved' ? 'approve_publish' : 'reject_review',
+        id: reviewDecisionSkill.id,
+        note: reviewDecisionNote,
+      },
+      reviewDecision === 'approved' ? '已通过审核并发布到团队仓库' : '已拒绝该团队审核',
+    );
+    if (ok) {
+      setReviewDecisionSkill(null);
+      setReviewDecisionNote('');
+      setReviewDecision('approved');
     }
+  };
+
+  const handleImport = async () => {
+    setActionLoading(true);
+    setErrorMessage('');
+    setSuccessMessage('');
+
+    try {
+      let res: Response;
+      if (importSource === 'local' && selectedFile) {
+        const formData = new FormData();
+        formData.set('action', 'import_upload');
+        formData.set('scope', importScope);
+        formData.set('file', selectedFile);
+        res = await fetch('/api/skills', { method: 'POST', body: formData });
+      } else if (importSource === 'local') {
+        if (!serverPath.trim()) throw new Error('请选择 zip 包或填写远端 Skill 目录路径');
+        res = await fetch('/api/skills', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'import_path',
+            path: serverPath.trim(),
+            scope: importScope,
+          }),
+        });
+      } else if (importSource === 'git') {
+        if (!importUrl.trim()) throw new Error('请填写 Git 仓库地址');
+        res = await fetch('/api/skills', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'import_git',
+            url: importUrl.trim(),
+            scope: importScope,
+          }),
+        });
+      } else {
+        res = await fetch('/api/skills', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'import_registry',
+            url: importUrl.trim(),
+            scope: importScope,
+          }),
+        });
+      }
+
+      const data = (await res.json()) as ApiSkillResponse;
+      if (!res.ok) throw new Error(data.error || 'Import failed');
+
+      await fetchSkills();
+      setImportDialogOpen(false);
+      setSelectedFile(null);
+      setServerPath('');
+      setImportUrl('');
+      setSuccessMessage(`已导入 ${data.skills?.length || 0} 个 Skill`);
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDelete = async (skill: Skill) => {
+    setActionLoading(true);
+    setErrorMessage('');
+    setSuccessMessage('');
+    try {
+      const res = await fetch(`/api/skills?id=${encodeURIComponent(skill.id)}`, { method: 'DELETE' });
+      const data = (await res.json()) as ApiSkillResponse;
+      if (!res.ok) throw new Error(data.error || 'Delete failed');
+      setSkills((prev) => prev.filter((item) => item.id !== skill.id));
+      setDetailSkill((prev) => (prev?.id === skill.id ? null : prev));
+      setVersionSkill((prev) => (prev?.id === skill.id ? null : prev));
+      setSuccessMessage(`已移除 ${skill.name}`);
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const getDownloadUrl = (skill: Skill, version: SkillVersion) => {
+    return `/api/skills?id=${encodeURIComponent(skill.id)}&downloadVersion=${encodeURIComponent(version.version)}`;
+  };
+
+  const getPreviewUrl = (skill: Skill, version: SkillVersion) => {
+    return `${getDownloadUrl(skill, version)}&inline=1`;
+  };
+
+  const getDownloadFileName = (skill: Skill, version: SkillVersion) => {
+    return `${skill.name}-v${version.version}.md`.replace(/[\\/:*?"<>|]/g, '-');
+  };
+
+  const renderSourceMeta = (skill: Skill) => {
+    const source = skill.source_uri || sourceLabels[skill.source_type];
+    return source.length > 72 ? `${source.slice(0, 72)}...` : source;
   };
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between p-6 border-b border-border/40">
+    <div className="flex h-full flex-col">
+      <div className="flex items-center justify-between border-b border-border/40 p-6">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Skill 仓库</h1>
-          <p className="text-muted-foreground text-sm mt-1">管理和导入规划工作所需的 Skill 能力单元</p>
+          <p className="mt-1 text-sm text-muted-foreground">导入、审核、发布和追踪产品规划 Skill</p>
         </div>
         <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
           <DialogTrigger asChild>
-            <Button className="gap-2">
-              <Download className="h-4 w-4" />
+            <Button>
+              <Upload data-icon="inline-start" />
               导入 Skill
             </Button>
           </DialogTrigger>
-          <DialogContent>
+          <DialogContent className="max-w-2xl">
             <DialogHeader>
               <DialogTitle>导入 Skill</DialogTitle>
-              <DialogDescription>从不同来源导入已创建好的 Skill</DialogDescription>
+              <DialogDescription>
+                支持上传 zip 包、填写远端目录路径或同步 Git 仓库。远程注册中心 API 先保留入口。
+              </DialogDescription>
             </DialogHeader>
-            <div className="space-y-4 mt-4">
-              <Tabs value={importSource} onValueChange={(v) => setImportSource(v as 'local' | 'registry' | 'git')}>
-                <TabsList className="grid w-full grid-cols-3">
-                  <TabsTrigger value="local">本地文件</TabsTrigger>
-                  <TabsTrigger value="registry">远程注册中心</TabsTrigger>
-                  <TabsTrigger value="git">Git 仓库</TabsTrigger>
-                </TabsList>
-              </Tabs>
-              {importSource === 'local' && (
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Skill 文件路径</label>
-                  <Input
-                    placeholder="/path/to/skill/competitive-analysis"
-                    value={importPath}
-                    onChange={(e) => setImportPath(e.target.value)}
-                  />
-                </div>
+
+            <FieldGroup className="gap-5">
+              <Field>
+                <FieldLabel>导入目标</FieldLabel>
+                <ToggleGroup
+                  type="single"
+                  value={importScope}
+                  onValueChange={(value) => value && setImportScope(value as 'personal' | 'team')}
+                  className="justify-start"
+                >
+                  <ToggleGroupItem value="personal">个人私有</ToggleGroupItem>
+                  <ToggleGroupItem value="team">提交团队审核</ToggleGroupItem>
+                </ToggleGroup>
+                <FieldDescription>
+                  个人 Skill 导入后立即可用；团队 Skill 会进入待审核状态。
+                </FieldDescription>
+              </Field>
+
+              <Field>
+                <FieldLabel>来源</FieldLabel>
+                <Tabs value={importSource} onValueChange={(value) => setImportSource(value as SkillSourceType)}>
+                  <TabsList>
+                    <TabsTrigger value="local">本地 / 路径</TabsTrigger>
+                    <TabsTrigger value="git">Git 仓库</TabsTrigger>
+                    <TabsTrigger value="registry">注册中心</TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="local" className="mt-4">
+                    <FieldGroup className="gap-4">
+                      <Field>
+                        <FieldLabel htmlFor="skill-package">上传 zip 包</FieldLabel>
+                        <Input
+                          id="skill-package"
+                          type="file"
+                          accept=".zip"
+                          onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
+                        />
+                        <FieldDescription>
+                          zip 内应包含 skill.md、meta.json、CHANGELOG.md，或包含 registry.json 的批量包。
+                        </FieldDescription>
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor="server-path">远端目录路径</FieldLabel>
+                        <Input
+                          id="server-path"
+                          placeholder="/root/data/skill-packages/market-insight"
+                          value={serverPath}
+                          onChange={(event) => setServerPath(event.target.value)}
+                        />
+                        <FieldDescription>
+                          用于在服务器上调试导入目录或 registry.json，允许根目录限制在项目目录和 /root/data。
+                        </FieldDescription>
+                      </Field>
+                    </FieldGroup>
+                  </TabsContent>
+                  <TabsContent value="git" className="mt-4">
+                    <Field>
+                      <FieldLabel htmlFor="git-url">Git 仓库地址</FieldLabel>
+                      <Input
+                        id="git-url"
+                        placeholder="https://github.com/org/skill-library.git"
+                        value={importUrl}
+                        onChange={(event) => setImportUrl(event.target.value)}
+                      />
+                      <FieldDescription>
+                        仓库根目录可以是单个 Skill 包、registry.json、Claude plugin；也可以追加 #skills/path 导入子目录。
+                      </FieldDescription>
+                    </Field>
+                  </TabsContent>
+                  <TabsContent value="registry" className="mt-4">
+                    <Alert>
+                      <AlertCircle />
+                      <AlertTitle>接口预留</AlertTitle>
+                      <AlertDescription>
+                        远程注册中心 API 会保留入口，本阶段先落地本地包和 Git 仓库两种来源。
+                      </AlertDescription>
+                    </Alert>
+                  </TabsContent>
+                </Tabs>
+              </Field>
+
+              {errorMessage && (
+                <FieldError>{errorMessage}</FieldError>
               )}
-              {importSource === 'registry' && (
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">注册中心 URL</label>
-                  <Input
-                    placeholder="https://skill-registry.example.com/skills/market-insight"
-                    value={importUrl}
-                    onChange={(e) => setImportUrl(e.target.value)}
-                  />
-                </div>
-              )}
-              {importSource === 'git' && (
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Git 仓库地址</label>
-                  <Input
-                    placeholder="https://github.com/org/skill-library.git"
-                    value={importUrl}
-                    onChange={(e) => setImportUrl(e.target.value)}
-                  />
-                </div>
-              )}
-              <Button className="w-full" onClick={handleImport}>
-                确认导入
+
+              <Button onClick={handleImport} disabled={actionLoading}>
+                <Upload data-icon="inline-start" />
+                {actionLoading ? '导入中...' : '确认导入'}
               </Button>
-            </div>
+            </FieldGroup>
           </DialogContent>
         </Dialog>
       </div>
 
       <div className="flex-1 overflow-auto">
-        <div className="p-6 space-y-6">
-          {/* Search and Filter */}
-          <div className="flex items-center gap-4">
-            <div className="relative flex-1 max-w-md">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <div className="flex flex-col gap-6 p-6">
+          {successMessage && (
+            <Alert>
+              <CheckCircle2 />
+              <AlertTitle>操作完成</AlertTitle>
+              <AlertDescription>{successMessage}</AlertDescription>
+            </Alert>
+          )}
+
+          {errorMessage && !importDialogOpen && (
+            <Alert variant="destructive">
+              <AlertCircle />
+              <AlertTitle>操作失败</AlertTitle>
+              <AlertDescription>{errorMessage}</AlertDescription>
+            </Alert>
+          )}
+
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="relative min-w-72 flex-1 max-w-md">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <Input
                 placeholder="搜索 Skill 名称、描述或标签..."
                 className="pl-10"
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(event) => setSearchQuery(event.target.value)}
               />
             </div>
-            <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'all' | SkillScope)}>
               <TabsList>
-                <TabsTrigger value="all">全部</TabsTrigger>
-                <TabsTrigger value="official">官方</TabsTrigger>
-                <TabsTrigger value="team">团队</TabsTrigger>
-                <TabsTrigger value="personal">个人</TabsTrigger>
+                <TabsTrigger value="all">全部 {skillCounts.all}</TabsTrigger>
+                <TabsTrigger value="official">官方 {skillCounts.official}</TabsTrigger>
+                <TabsTrigger value="team">团队 {skillCounts.team}</TabsTrigger>
+                <TabsTrigger value="personal">个人 {skillCounts.personal}</TabsTrigger>
               </TabsList>
             </Tabs>
           </div>
 
-          {/* Skill Grid */}
           {loading ? (
-            <div className="flex items-center justify-center py-20 text-muted-foreground">加载中...</div>
+            <div className="py-20 text-center text-muted-foreground">加载中...</div>
           ) : filteredSkills.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
-              <FileCode2 className="h-12 w-12 mb-4 opacity-30" />
-              <p>暂无 Skill</p>
-              <p className="text-sm mt-1">点击上方"导入 Skill"添加你的第一个 Skill</p>
-            </div>
+            <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <FileCode2 />
+                </EmptyMedia>
+                <EmptyTitle>暂无匹配 Skill</EmptyTitle>
+                <EmptyDescription>可以上传 zip 包，或从 Git 仓库导入一批 Skill。</EmptyDescription>
+              </EmptyHeader>
+              <EmptyContent>
+                <Button onClick={() => setImportDialogOpen(true)}>
+                  <Upload data-icon="inline-start" />
+                  导入 Skill
+                </Button>
+              </EmptyContent>
+            </Empty>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
               {filteredSkills.map((skill) => (
                 <Card
                   key={skill.id}
-                  className="cursor-pointer hover:shadow-md transition-shadow border-border/60 group"
+                  className="cursor-pointer border-border/60 transition-shadow hover:shadow-md"
                   onClick={() => setDetailSkill(skill)}
                 >
                   <CardHeader className="pb-3">
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 items-center gap-2">
                         {getSourceIcon(skill.source_type)}
-                        <CardTitle className="text-base">{skill.name}</CardTitle>
+                        <CardTitle className="truncate text-base">{skill.name}</CardTitle>
                       </div>
-                      <div className="flex items-center gap-2">
-                        {getScopeBadge(skill.scope)}
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={(e) => e.stopPropagation()}>
-                              <MoreVertical className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={(e) => e.stopPropagation()}>更新到最新版本</DropdownMenuItem>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label={`${skill.name} 操作菜单`}
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            <MoreVertical />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setDownloadNotice(null);
+                              setVersionSkill(skill);
+                            }}
+                          >
+                            <GitBranch />
+                            版本管理
+                          </DropdownMenuItem>
+                          {skill.scope === 'personal' && (
                             <DropdownMenuItem
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setVersionSkill(skill);
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setReviewRequestSkill(skill);
+                                setReviewRequestNote('');
                               }}
                             >
-                              版本管理
+                              <GitPullRequest />
+                              提交团队审核
                             </DropdownMenuItem>
-                            <DropdownMenuItem onClick={(e) => e.stopPropagation()}>复制到个人空间</DropdownMenuItem>
-                            <DropdownMenuItem onClick={(e) => e.stopPropagation()} className="text-red-600">移除</DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
+                          )}
+                          {skill.status === 'pending_review' && (
+                            <>
+                              <DropdownMenuItem
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setReviewDecisionSkill(skill);
+                                  setReviewDecision('approved');
+                                  setReviewDecisionNote('');
+                                }}
+                              >
+                                <CheckCircle2 />
+                                审核通过
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setReviewDecisionSkill(skill);
+                                  setReviewDecision('rejected');
+                                  setReviewDecisionNote('');
+                                }}
+                              >
+                                <XCircle />
+                                审核拒绝
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                          {skill.scope !== 'official' && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                className="text-destructive"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleDelete(skill);
+                                }}
+                              >
+                                <Archive />
+                                移除
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                     <CardDescription className="line-clamp-2">{skill.description}</CardDescription>
                   </CardHeader>
-                  <CardContent>
-                    <div className="flex items-center justify-between text-xs text-muted-foreground">
-                      <span>v{skill.version}</span>
-                      <span>{skill.author}</span>
+                  <CardContent className="flex flex-col gap-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <ScopeBadge scope={skill.scope} />
+                      <StatusBadge status={skill.status} />
+                      <Badge variant="outline">v{skill.version}</Badge>
                     </div>
-                    <div className="flex flex-wrap gap-1 mt-3">
+                    <div className="text-xs text-muted-foreground">
+                      {sourceLabels[skill.source_type]} · {skill.author} · 更新于 {formatDate(skill.updated_at)}
+                    </div>
+                    {skill.review && (
+                      <div className="text-xs text-muted-foreground">
+                        来源 {skill.review.source_skill_id} v{skill.review.source_version} · 提交于 {formatDate(skill.review.submitted_at)}
+                      </div>
+                    )}
+                    <div className="flex flex-wrap gap-1">
                       {skill.tags.map((tag) => (
-                        <Badge key={tag} variant="outline" className="text-xs">
-                          <Tag className="h-2.5 w-2.5 mr-1" />
+                        <Badge key={tag} variant="outline">
+                          <Tag />
                           {tag}
                         </Badge>
                       ))}
                     </div>
                     {skill.tools.length > 0 && (
-                      <div className="flex items-center gap-1 mt-3 text-xs text-muted-foreground">
-                        <span>工具:</span>
+                      <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+                        <span>工具</span>
                         {skill.tools.map((tool) => (
-                          <Badge key={tool} variant="secondary" className="text-xs font-normal">
+                          <Badge key={tool} variant="secondary">
                             {tool}
                           </Badge>
                         ))}
@@ -461,120 +702,332 @@ export default function SkillsPage() {
         </div>
       </div>
 
-      {/* Skill Detail Dialog */}
       <Dialog open={!!detailSkill} onOpenChange={(open) => !open && setDetailSkill(null)}>
-        <DialogContent className="max-w-2xl max-h-[80vh]">
+        <DialogContent className="max-h-[85vh] w-[min(92vw,56rem)] max-w-[92vw] overflow-hidden">
           {detailSkill && (
             <>
               <DialogHeader>
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-2">
                   {getSourceIcon(detailSkill.source_type)}
                   <DialogTitle className="text-xl">{detailSkill.name}</DialogTitle>
                   <Badge variant="outline">v{detailSkill.version}</Badge>
-                  {getScopeBadge(detailSkill.scope)}
-                  <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setVersionSkill(detailSkill)}>
-                    <GitBranch className="h-3.5 w-3.5" />
-                    版本管理
-                  </Button>
+                  <ScopeBadge scope={detailSkill.scope} />
+                  <StatusBadge status={detailSkill.status} />
                 </div>
                 <DialogDescription>{detailSkill.description}</DialogDescription>
               </DialogHeader>
-              <ScrollArea className="max-h-[60vh] pr-4">
-                <div className="space-y-6 mt-4">
-                  <div>
-                    <h4 className="font-semibold text-sm mb-2">方法论框架</h4>
-                    <pre className="text-sm bg-muted/50 p-3 rounded-lg whitespace-pre-wrap font-sans">
-                      {detailSkill.methodology}
-                    </pre>
-                  </div>
-                  {detailSkill.tools.length > 0 && (
+
+              <Tabs defaultValue="overview" className="min-w-0">
+                <TabsList>
+                  <TabsTrigger value="overview">概要</TabsTrigger>
+                  <TabsTrigger value="skill-md">skill.md</TabsTrigger>
+                  <TabsTrigger value="meta">meta.json</TabsTrigger>
+                  <TabsTrigger value="changes">变更记录</TabsTrigger>
+                </TabsList>
+                <ScrollArea className="mt-4 max-h-[62vh] min-w-0 pr-4">
+                  <TabsContent value="overview" className="flex flex-col gap-5">
+                    <div className="grid gap-3 rounded-lg border p-4 text-sm md:grid-cols-2">
+                      <div>
+                        <div className="text-muted-foreground">来源</div>
+                        <div className="mt-1 break-all">{renderSourceMeta(detailSkill)}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground">更新时间</div>
+                        <div className="mt-1">{formatDate(detailSkill.updated_at)}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground">作者</div>
+                        <div className="mt-1">{detailSkill.author}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground">附件</div>
+                        <div className="mt-1">{detailSkill.attachments.length || 0} 个资源</div>
+                      </div>
+                      {detailSkill.review && (
+                        <>
+                          <div>
+                            <div className="text-muted-foreground">审核来源</div>
+                            <div className="mt-1 break-all">
+                              {detailSkill.review.source_skill_id} v{detailSkill.review.source_version}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-muted-foreground">提交时间</div>
+                            <div className="mt-1">{formatDate(detailSkill.review.submitted_at)}</div>
+                          </div>
+                          <div className="md:col-span-2">
+                            <div className="text-muted-foreground">提交说明</div>
+                            <div className="mt-1 whitespace-pre-wrap">
+                              {detailSkill.review.submitted_note || '未填写'}
+                            </div>
+                          </div>
+                          {detailSkill.review.reviewed_at && (
+                            <div>
+                              <div className="text-muted-foreground">审核时间</div>
+                              <div className="mt-1">{formatDate(detailSkill.review.reviewed_at)}</div>
+                            </div>
+                          )}
+                          {detailSkill.review.decision && (
+                            <div>
+                              <div className="text-muted-foreground">审核结论</div>
+                              <div className="mt-1">
+                                {detailSkill.review.decision === 'approved' ? '通过' : '拒绝'}
+                              </div>
+                            </div>
+                          )}
+                          {detailSkill.review.review_note && (
+                            <div className="md:col-span-2">
+                              <div className="text-muted-foreground">审核意见</div>
+                              <div className="mt-1 whitespace-pre-wrap">{detailSkill.review.review_note}</div>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+
                     <div>
-                      <h4 className="font-semibold text-sm mb-2">绑定工具</h4>
-                      <div className="flex flex-wrap gap-2">
-                        {detailSkill.tools.map((tool) => (
-                          <Badge key={tool} variant="secondary">{tool}</Badge>
+                      <h4 className="mb-2 text-sm font-semibold">方法论框架</h4>
+                      <Textarea readOnly value={detailSkill.methodology} className="min-h-36 resize-none font-mono text-sm" />
+                    </div>
+
+                    <div>
+                      <h4 className="mb-2 text-sm font-semibold">Prompt 模板</h4>
+                      <Textarea readOnly value={detailSkill.prompt_template || '未定义'} className="min-h-24 resize-none font-mono text-sm" />
+                    </div>
+
+                    <div>
+                      <h4 className="mb-2 text-sm font-semibold">质量 Checklist</h4>
+                      <div className="flex flex-col gap-2">
+                        {detailSkill.checklist.map((item) => (
+                          <div key={item} className="flex items-start gap-2 rounded-md border p-2 text-sm">
+                            <CheckCircle2 className="mt-0.5 text-muted-foreground" />
+                            <span>{item}</span>
+                          </div>
                         ))}
                       </div>
                     </div>
-                  )}
-                  {detailSkill.checklist.length > 0 && (
-                    <div>
-                      <h4 className="font-semibold text-sm mb-2">质量 Checklist</h4>
-                      <ul className="space-y-1">
-                        {detailSkill.checklist.map((item, idx) => (
-                          <li key={idx} className="text-sm flex items-start gap-2">
-                            <span className="text-muted-foreground mt-0.5">•</span>
-                            {item}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  {detailSkill.outputs && (
-                    <div>
-                      <h4 className="font-semibold text-sm mb-2">输出结构</h4>
-                      <pre className="text-xs bg-muted/50 p-3 rounded-lg overflow-auto">
-                        {JSON.stringify(detailSkill.outputs, null, 2)}
-                      </pre>
-                    </div>
-                  )}
-                  <div className="flex items-center justify-between text-xs text-muted-foreground pt-2 border-t">
-                    <span>作者: {detailSkill.author}</span>
-                    <span>更新于: {detailSkill.updated_at}</span>
-                  </div>
-                </div>
-              </ScrollArea>
+                  </TabsContent>
+
+                  <TabsContent value="skill-md" className="min-w-0">
+                    <pre className={`${codeBlockClassName} text-sm`}>
+                      {detailSkill.skill_md || '未提供 skill.md'}
+                    </pre>
+                  </TabsContent>
+
+                  <TabsContent value="meta" className="min-w-0">
+                    <pre className={`${codeBlockClassName} text-xs`}>
+                      {JSON.stringify(detailSkill.meta_json, null, 2)}
+                    </pre>
+                  </TabsContent>
+
+                  <TabsContent value="changes" className="min-w-0">
+                    <pre className={`${codeBlockClassName} text-sm`}>
+                      {detailSkill.changelog || '暂无 CHANGELOG.md'}
+                    </pre>
+                  </TabsContent>
+                </ScrollArea>
+              </Tabs>
             </>
           )}
         </DialogContent>
       </Dialog>
 
-      {/* Skill Version Dialog */}
-      <Dialog open={!!versionSkill} onOpenChange={(open) => !open && setVersionSkill(null)}>
+      <Dialog open={!!reviewRequestSkill} onOpenChange={(open) => {
+        if (!open) {
+          setReviewRequestSkill(null);
+          setReviewRequestNote('');
+        }
+      }}>
+        <DialogContent className="max-w-lg">
+          {reviewRequestSkill && (
+            <>
+              <DialogHeader>
+                <DialogTitle>提交团队审核</DialogTitle>
+                <DialogDescription>
+                  会创建一条团队待审核副本，个人 Skill 会继续保留在个人空间。
+                </DialogDescription>
+              </DialogHeader>
+              <FieldGroup>
+                <Field>
+                  <FieldLabel>Skill</FieldLabel>
+                  <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                    <div className="font-medium">{reviewRequestSkill.name}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {reviewRequestSkill.id} · v{reviewRequestSkill.version}
+                    </div>
+                  </div>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="review-request-note">提交说明</FieldLabel>
+                  <Textarea
+                    id="review-request-note"
+                    value={reviewRequestNote}
+                    onChange={(event) => setReviewRequestNote(event.target.value)}
+                    placeholder="说明这个 Skill 为什么适合进入团队仓库、适用场景或需要 reviewer 关注的点。"
+                    className="min-h-28 resize-none"
+                  />
+                </Field>
+              </FieldGroup>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setReviewRequestSkill(null)} disabled={actionLoading}>
+                  取消
+                </Button>
+                <Button onClick={handleRequestReview} disabled={actionLoading}>
+                  <GitPullRequest data-icon="inline-start" />
+                  {actionLoading ? '提交中...' : '提交审核'}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!reviewDecisionSkill} onOpenChange={(open) => {
+        if (!open) {
+          setReviewDecisionSkill(null);
+          setReviewDecisionNote('');
+          setReviewDecision('approved');
+        }
+      }}>
+        <DialogContent className="max-w-lg">
+          {reviewDecisionSkill && (
+            <>
+              <DialogHeader>
+                <DialogTitle>{reviewDecision === 'approved' ? '审核通过' : '审核拒绝'}</DialogTitle>
+                <DialogDescription>
+                  {reviewDecision === 'approved'
+                    ? '通过后这条团队审核副本会进入已发布状态。'
+                    : '拒绝后这条团队审核副本会保留为已拒绝，便于回看原因。'}
+                </DialogDescription>
+              </DialogHeader>
+              <FieldGroup>
+                <Field>
+                  <FieldLabel>Skill</FieldLabel>
+                  <div className="rounded-md border bg-muted/20 p-3 text-sm">
+                    <div className="font-medium">{reviewDecisionSkill.name}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      来源 {reviewDecisionSkill.review?.source_skill_id || reviewDecisionSkill.id} · v{reviewDecisionSkill.version}
+                    </div>
+                    {reviewDecisionSkill.review?.submitted_note && (
+                      <div className="mt-3 whitespace-pre-wrap text-xs text-muted-foreground">
+                        {reviewDecisionSkill.review.submitted_note}
+                      </div>
+                    )}
+                  </div>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="review-decision-note">审核意见</FieldLabel>
+                  <Textarea
+                    id="review-decision-note"
+                    value={reviewDecisionNote}
+                    onChange={(event) => setReviewDecisionNote(event.target.value)}
+                    placeholder={reviewDecision === 'approved' ? '可选：记录通过原因或后续使用建议。' : '建议填写拒绝原因，方便提交者修改后重新提交。'}
+                    className="min-h-28 resize-none"
+                  />
+                </Field>
+              </FieldGroup>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setReviewDecisionSkill(null)} disabled={actionLoading}>
+                  取消
+                </Button>
+                <Button
+                  variant={reviewDecision === 'approved' ? 'default' : 'destructive'}
+                  onClick={handleReviewDecision}
+                  disabled={actionLoading}
+                >
+                  {reviewDecision === 'approved' ? <CheckCircle2 data-icon="inline-start" /> : <XCircle data-icon="inline-start" />}
+                  {actionLoading ? '处理中...' : reviewDecision === 'approved' ? '确认通过' : '确认拒绝'}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!versionSkill} onOpenChange={(open) => {
+        if (!open) {
+          setVersionSkill(null);
+          setDownloadNotice(null);
+        }
+      }}>
         <DialogContent className="max-w-2xl">
           {versionSkill && (
             <>
               <DialogHeader>
                 <DialogTitle>{versionSkill.name} 版本管理</DialogTitle>
                 <DialogDescription>
-                  选择指定版本下载，或将当前 Skill 回滚到历史版本。
+                  历史版本不可覆盖。官方模板只允许下载，不允许在本地回滚。
                 </DialogDescription>
               </DialogHeader>
-              <div className="space-y-3 mt-4">
-                {getSkillVersions(versionSkill).map((version) => {
-                  const isCurrent = version.version === versionSkill.version;
-                  return (
-                    <div
-                      key={version.version}
-                      className="rounded-lg border border-border/60 bg-muted/20 p-4"
+              {downloadNotice && (
+                <Alert>
+                  <CheckCircle2 />
+                  <AlertTitle>下载已触发</AlertTitle>
+                  <AlertDescription>
+                    {downloadNotice.fileName}。如果当前浏览器没有弹出下载，可以{' '}
+                    <a
+                      className="underline underline-offset-4"
+                      href={downloadNotice.previewUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
                     >
+                      打开原始内容。
+                    </a>
+                  </AlertDescription>
+                </Alert>
+              )}
+              <div className="mt-4 flex flex-col gap-3">
+                {versionSkill.versions.map((version) => {
+                  const isCurrent = version.version === versionSkill.version;
+                  const rollbackDisabled = isCurrent || versionSkill.scope === 'official' || actionLoading;
+                  return (
+                    <div key={`${version.version}-${version.updated_at}`} className="rounded-lg border border-border/60 bg-muted/20 p-4">
                       <div className="flex items-start justify-between gap-4">
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
                             <p className="font-medium">v{version.version}</p>
-                            {isCurrent && <Badge variant="default" className="text-xs">当前版本</Badge>}
+                            {isCurrent && <Badge>当前版本</Badge>}
                           </div>
-                          <p className="text-xs text-muted-foreground mt-1">更新于 {version.updated_at}</p>
-                          <p className="text-sm text-muted-foreground mt-2">{version.changelog}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">更新于 {formatDate(version.updated_at)}</p>
+                          <p className="mt-2 text-sm text-muted-foreground">{version.changelog || '无变更说明'}</p>
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="gap-1.5"
-                            onClick={() => handleDownloadVersion(versionSkill, version)}
-                          >
-                            <Download className="h-3.5 w-3.5" />
-                            下载
+                          <Button variant="outline" size="sm" asChild>
+                            <a
+                              href={getDownloadUrl(versionSkill, version)}
+                              download={getDownloadFileName(versionSkill, version)}
+                              onClick={() => {
+                                setErrorMessage('');
+                                setDownloadNotice({
+                                  fileName: getDownloadFileName(versionSkill, version),
+                                  previewUrl: getPreviewUrl(versionSkill, version),
+                                });
+                              }}
+                            >
+                              <Download data-icon="inline-start" />
+                              下载
+                            </a>
+                          </Button>
+                          <Button variant="outline" size="sm" asChild>
+                            <a
+                              href={getPreviewUrl(versionSkill, version)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              <FileCode2 data-icon="inline-start" />
+                              打开
+                            </a>
                           </Button>
                           <Button
                             variant="outline"
                             size="sm"
-                            className="gap-1.5"
-                            disabled={isCurrent}
-                            onClick={() => handleRollbackVersion(versionSkill, version)}
+                            disabled={rollbackDisabled}
+                            onClick={() => runSkillAction(
+                              { action: 'rollback', id: versionSkill.id, version: version.version },
+                              `已回滚到 v${version.version}`,
+                            )}
                           >
-                            <RotateCcw className="h-3.5 w-3.5" />
+                            <RotateCcw data-icon="inline-start" />
                             回滚
                           </Button>
                         </div>

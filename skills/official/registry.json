@@ -1,0 +1,24 @@
+{
+  "name": "BattleFlow Official Skill Registry",
+  "version": "1.0.0",
+  "skills": [
+    {
+      "path": "market-insight",
+      "scope": "official",
+      "source_type": "registry",
+      "status": "published"
+    },
+    {
+      "path": "competitor-analysis",
+      "scope": "official",
+      "source_type": "registry",
+      "status": "published"
+    },
+    {
+      "path": "user-needs-breakdown",
+      "scope": "official",
+      "source_type": "registry",
+      "status": "published"
+    }
+  ]
+}

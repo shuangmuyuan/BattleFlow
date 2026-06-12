@@ -1,0 +1,33 @@
+{
+  "id": "competitor-analysis",
+  "name": "竞品分析",
+  "description": "系统分析竞品定位、功能矩阵、体验差异和可借鉴策略。",
+  "version": "1.0.0",
+  "author": "BattleFlow Team",
+  "tags": ["竞品", "分析", "功能矩阵", "差异化"],
+  "scope": "official",
+  "source_type": "registry",
+  "definition": {
+    "inputs": [
+      {
+        "name": "market_context",
+        "type": "markdown",
+        "required": true,
+        "description": "市场洞察、目标用户、候选竞品和分析范围。"
+      }
+    ],
+    "outputs": {
+      "format": "structured_markdown",
+      "sections": ["竞品范围", "定位对比", "功能矩阵", "体验差异", "机会与策略"]
+    },
+    "methodology": "1. 确定竞品范围和对比维度\n2. 建立定位和目标用户对比\n3. 梳理核心功能矩阵\n4. 识别体验差异与产品策略\n5. 输出可借鉴点和差异化机会",
+    "tools": ["web_search", "knowledge_query"],
+    "prompt_template": "你是资深产品竞品分析师。请基于输入材料输出竞品分析，避免只罗列信息，必须给出对本产品规划有用的策略结论。",
+    "checklist": [
+      "至少覆盖 3 个竞品或说明不足原因",
+      "功能矩阵维度明确",
+      "差异化结论与业务目标相关",
+      "输出可进入后续需求拆解"
+    ]
+  }
+}

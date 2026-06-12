@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import Image from 'next/image';
 
 const APP_ICON = 'https://coze-coding-project.tos.coze.site/gen_project_icon/2026-06-08/7648911020878053428_1780902092.png?sign=4902970176-a8669e5906-0-e35914f306ada1fa545af91a35054a974532e6c3f47b661a9307fabd4ed24e5d';
-const APP_NAME = 'PlanFlow AI';
+const APP_NAME = 'BattleFlow';
 
 export default function LoginPage() {
   const { isLoading, error: configError } = useSupabaseConfig();

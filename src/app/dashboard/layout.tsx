@@ -17,6 +17,7 @@ import {
   Rocket,
   Sun,
   Moon,
+  Swords,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useTheme } from '@/hooks/use-theme';
@@ -108,9 +109,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       >
         {/* Logo area */}
         <div className="h-14 flex items-center justify-between px-4 border-b border-border">
-          {!collapsed && (
-            <span className="text-lg font-semibold text-brand">PlanFlow AI</span>
-          )}
+          <div className={`flex items-center gap-2 ${collapsed ? 'hidden' : ''}`}>
+            <span className="flex h-8 w-8 items-center justify-center rounded-md bg-brand/15 text-brand">
+              <Swords className="h-4 w-4" />
+            </span>
+            <span className="text-lg font-semibold text-brand">BattleFlow</span>
+          </div>
           <Button
             variant="ghost"
             size="icon"
