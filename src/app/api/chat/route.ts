@@ -1,11 +1,18 @@
 import { NextRequest } from 'next/server';
 import { LLMClient, Config, HeaderUtils } from 'coze-coding-dev-sdk';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { messages, model_id, skill_definition, step_context } = body;
+    const {
+      messages,
+      model_id,
+      skill_definition,
+      step_context,
+      selected_knowledge_bases,
+      selected_review_materials,
+      uploaded_files,
+    } = body;
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return new Response(JSON.stringify({ error: 'Messages are required' }), {
@@ -44,6 +51,33 @@ export async function POST(request: NextRequest) {
       systemPrompt += '\n\n## Previous Steps Output (Context)\n';
       for (const ctx of step_context) {
         systemPrompt += `\n### ${ctx.step_name}\n${ctx.step_output}\n`;
+      }
+    }
+
+    if (Array.isArray(selected_knowledge_bases) && selected_knowledge_bases.length > 0) {
+      systemPrompt += '\n\n## Selected Knowledge Bases\n';
+      for (const knowledgeBase of selected_knowledge_bases) {
+        systemPrompt += `\n- ${knowledgeBase.name || '未知知识库'}：${knowledgeBase.description || '无描述'}`;
+      }
+      systemPrompt += '\n';
+    }
+
+    if (Array.isArray(selected_review_materials) && selected_review_materials.length > 0) {
+      systemPrompt += '\n\n## Selected Reviewed Materials\n';
+      for (const material of selected_review_materials) {
+        systemPrompt += `\n### ${material.name || '未命名材料'}\n来源：${material.source || 'unknown'}\n${material.summary || ''}\n`;
+      }
+    }
+
+    if (Array.isArray(uploaded_files) && uploaded_files.length > 0) {
+      systemPrompt += '\n\n## Uploaded Context Files\n';
+      for (const file of uploaded_files) {
+        systemPrompt += `\n### ${file.name || '未命名文件'}\n类型：${file.type || 'unknown'}；大小：${file.size || 0} bytes\n`;
+        if (file.contentKind === 'text' && file.content) {
+          systemPrompt += `${file.content}\n`;
+        } else if (file.note) {
+          systemPrompt += `${file.note}\n`;
+        }
       }
     }
 

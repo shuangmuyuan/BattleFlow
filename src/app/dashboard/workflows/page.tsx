@@ -37,6 +37,7 @@ import {
   RotateCcw,
   Copy,
   ChevronDown,
+  History,
 } from 'lucide-react';
 
 interface Skill {
@@ -48,6 +49,8 @@ interface Skill {
   outputs: Record<string, unknown>;
   checklist: string[];
   tags: string[];
+  scope?: 'personal' | 'team' | 'official';
+  status?: 'imported' | 'pending_review' | 'published' | 'rejected' | 'archived';
 }
 
 interface WorkflowStep {
@@ -62,6 +65,17 @@ interface WorkflowStep {
   removedAt?: string;
   status: 'pending' | 'in_progress' | 'completed';
   output: string | null;
+  created_at?: string;
+  updated_at?: string;
+  completed_at?: string;
+}
+
+type WorkflowFileContentKind = 'text' | 'image_data_url' | 'metadata';
+
+interface WorkflowContextSelection {
+  knowledgeBaseIds: string[];
+  reviewMaterialIds: string[];
+  updated_at?: string;
 }
 
 interface Workflow {
@@ -71,6 +85,14 @@ interface Workflow {
   description: string;
   status: 'draft' | 'in_progress' | 'completed';
   steps: WorkflowStep[];
+  contextFiles?: UploadedContextFile[];
+  reviewedOutputFiles?: ReviewedOutputFile[];
+  reviewComments?: Record<string, string>;
+  archivedReviewStepIds?: string[];
+  contextSelections?: Record<string, WorkflowContextSelection>;
+  stepSnapshots?: WorkflowStepSnapshot[];
+  created_at?: string;
+  updated_at?: string;
 }
 
 interface ChatMessage {
@@ -93,11 +115,16 @@ interface ReviewMaterial {
 
 interface UploadedContextFile {
   id: string;
+  stepId: string;
   name: string;
   type: string;
   size: number;
   isImage: boolean;
   previewUrl?: string;
+  contentKind: WorkflowFileContentKind;
+  content?: string;
+  note?: string;
+  created_at?: string;
 }
 
 interface ReviewedOutputFile {
@@ -106,12 +133,31 @@ interface ReviewedOutputFile {
   name: string;
   type: string;
   size: number;
+  contentKind: WorkflowFileContentKind;
+  content?: string;
+  note?: string;
+  created_at?: string;
+}
+
+interface WorkflowStepSnapshot {
+  id: string;
+  workflowId: string;
+  stepId: string;
+  stepName: string;
+  stepIndex: number;
+  output: string;
+  contextFiles: string[];
+  reviewedMaterials: string[];
+  reviewComment?: string;
+  created_at?: string;
 }
 
 interface Workspace {
   id: string;
   name: string;
   description: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 const knowledgeBaseOptions: KnowledgeBaseOption[] = [
@@ -120,16 +166,64 @@ const knowledgeBaseOptions: KnowledgeBaseOption[] = [
   { id: 'customer-feedback', name: '用户反馈库', description: '访谈纪要、工单反馈、调研问卷' },
 ];
 
-const initialWorkspaces: Workspace[] = [
-  { id: 'ecommerce-v3', name: '电商平台 v3.0', description: '下一版本核心能力规划' },
-  { id: 'member-growth', name: '会员增长项目', description: '会员体系与增长策略规划' },
-  { id: 'payment-refactor', name: '支付重构专项', description: '支付链路与风控体验优化' },
-];
+const defaultContextSelection: WorkflowContextSelection = {
+  knowledgeBaseIds: ['industry-research'],
+  reviewMaterialIds: [],
+};
+
+const maxTextContextChars = 120_000;
+const maxPreviewImageBytes = 800_000;
+
+function isReadableTextFile(file: File) {
+  return file.type.startsWith('text/') || /\.(txt|md|markdown)$/i.test(file.name);
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+    reader.onerror = () => reject(reader.error || new Error('File read failed'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function buildWorkflowFilePayload(file: File) {
+  if (isReadableTextFile(file)) {
+    const rawText = await file.text();
+    const truncated = rawText.length > maxTextContextChars;
+    const content = truncated ? rawText.slice(0, maxTextContextChars) : rawText;
+    return {
+      contentKind: 'text' as const,
+      content,
+      note: truncated ? `文件正文已截断到 ${maxTextContextChars} 字符。` : undefined,
+      previewUrl: undefined,
+    };
+  }
+
+  if (file.type.startsWith('image/') && file.size <= maxPreviewImageBytes) {
+    const dataUrl = await readFileAsDataUrl(file);
+    return {
+      contentKind: 'image_data_url' as const,
+      content: dataUrl,
+      note: '图片已保存为 data URL，可用于预览；当前对话以图片元信息引用。',
+      previewUrl: dataUrl,
+    };
+  }
+
+  return {
+    contentKind: 'metadata' as const,
+    content: undefined,
+    note: file.type.startsWith('image/')
+      ? `图片超过 ${Math.round(maxPreviewImageBytes / 1024)}KB，已保存元信息。`
+      : '该文件类型当前保存元信息，未读取正文。',
+    previewUrl: undefined,
+  };
+}
 
 export default function WorkflowsPage() {
-  const [workspaces, setWorkspaces] = useState<Workspace[]>(initialWorkspaces);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>(initialWorkspaces[0].id);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>('');
   const [skills, setSkills] = useState<Skill[]>([]);
   const [activeWorkflow, setActiveWorkflow] = useState<Workflow | null>(null);
   const [activeStepIndex, setActiveStepIndex] = useState<number>(-1);
@@ -152,7 +246,11 @@ export default function WorkflowsPage() {
   const [reviewedOutputFiles, setReviewedOutputFiles] = useState<ReviewedOutputFile[]>([]);
   const [reviewComments, setReviewComments] = useState<Record<string, string>>({});
   const [supplementalContextOpen, setSupplementalContextOpen] = useState(false);
+  const [snapshotDialogOpen, setSnapshotDialogOpen] = useState(false);
+  const [selectedSnapshot, setSelectedSnapshot] = useState<WorkflowStepSnapshot | null>(null);
   const [archivedReviewStepIds, setArchivedReviewStepIds] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState('');
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -160,80 +258,121 @@ export default function WorkflowsPage() {
 
   const getVisibleSteps = (workflow: Workflow) => workflow.steps.filter((step) => !step.isRemoved);
 
-  const updateWorkflowById = useCallback((workflowId: string, updater: (workflow: Workflow) => Workflow) => {
+  const getContextSelection = (workflow: Workflow, stepId?: string): WorkflowContextSelection => (
+    stepId && workflow.contextSelections?.[stepId]
+      ? workflow.contextSelections[stepId]
+      : defaultContextSelection
+  );
+
+  const syncWorkflowSupportingState = (workflow: Workflow, stepIndex: number) => {
+    const visibleSteps = getVisibleSteps(workflow);
+    const step = visibleSteps[stepIndex] || visibleSteps[0];
+    const selection = getContextSelection(workflow, step?.id);
+
+    setUploadedContextFiles(workflow.contextFiles || []);
+    setReviewedOutputFiles(workflow.reviewedOutputFiles || []);
+    setReviewComments(workflow.reviewComments || {});
+    setArchivedReviewStepIds(workflow.archivedReviewStepIds || []);
+    setSelectedKnowledgeBaseIds(selection.knowledgeBaseIds);
+    setSelectedReviewMaterialIds(selection.reviewMaterialIds);
+  };
+
+  const persistWorkflow = useCallback(async (workflow: Workflow) => {
+    try {
+      const response = await fetch('/api/workflows', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workflow }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '工作流保存失败');
+      const savedWorkflow = data.workflow as Workflow;
+      setWorkflows((prev) => prev.map((item) => (item.id === savedWorkflow.id ? savedWorkflow : item)));
+      setActiveWorkflow((prev) => (prev?.id === savedWorkflow.id ? savedWorkflow : prev));
+    } catch (error) {
+      console.error('Workflow save error:', error);
+      setErrorMessage(error instanceof Error ? error.message : '工作流保存失败');
+    }
+  }, []);
+
+  const updateActiveWorkflow = useCallback((updater: (workflow: Workflow) => Workflow) => {
+    if (!activeWorkflow) return;
+
+    const updatedWorkflow = updater(activeWorkflow);
+    setActiveWorkflow(updatedWorkflow);
     setWorkflows((prev) => prev.map((workflow) => (
-      workflow.id === workflowId ? updater(workflow) : workflow
+      workflow.id === updatedWorkflow.id ? updatedWorkflow : workflow
     )));
-    setActiveWorkflow((prev) => {
-      if (!prev || prev.id !== workflowId) return prev;
-      return updater(prev);
-    });
+    void persistWorkflow(updatedWorkflow);
+  }, [activeWorkflow, persistWorkflow]);
+
+  const updateWorkflowById = useCallback((workflowId: string, updater: (workflow: Workflow) => Workflow) => {
+    const sourceWorkflow = workflows.find((workflow) => workflow.id === workflowId)
+      || (activeWorkflow?.id === workflowId ? activeWorkflow : null);
+    if (!sourceWorkflow) return;
+
+    const updatedWorkflow = updater(sourceWorkflow);
+    setWorkflows((prev) => prev.map((workflow) => (
+      workflow.id === workflowId ? updatedWorkflow : workflow
+    )));
+    setActiveWorkflow((prev) => (prev?.id === workflowId ? updatedWorkflow : prev));
+    void persistWorkflow(updatedWorkflow);
+  }, [activeWorkflow, persistWorkflow, workflows]);
+
+  const openWorkflow = (workflow: Workflow) => {
+    setActiveWorkflow(workflow);
+    const visibleSteps = getVisibleSteps(workflow);
+    const firstInProgress = visibleSteps.findIndex((step) => step.status === 'in_progress');
+    const nextStepIndex = firstInProgress >= 0 ? firstInProgress : 0;
+    setActiveStepIndex(nextStepIndex);
+    syncWorkflowSupportingState(workflow, nextStepIndex);
+    setChatMessages([]);
+  };
+
+  const loadWorkflowState = useCallback(async () => {
+    setLoading(true);
+    setErrorMessage('');
+
+    try {
+      const [skillsResponse, workflowsResponse] = await Promise.all([
+        fetch('/api/skills', { cache: 'no-store' }),
+        fetch('/api/workflows', { cache: 'no-store' }),
+      ]);
+
+      const skillsData = await skillsResponse.json();
+      const workflowsData = await workflowsResponse.json();
+
+      if (!skillsResponse.ok) throw new Error(skillsData.error || 'Skill 加载失败');
+      if (!workflowsResponse.ok) throw new Error(workflowsData.error || '工作流加载失败');
+
+      const availableSkills = ((skillsData.skills || []) as Skill[])
+        .filter((skill) => skill.status !== 'pending_review' && skill.status !== 'rejected' && skill.status !== 'archived');
+      const nextWorkspaces = (workflowsData.workspaces || []) as Workspace[];
+      const nextWorkflows = (workflowsData.workflows || []) as Workflow[];
+
+      setSkills(availableSkills);
+      setWorkspaces(nextWorkspaces);
+      setWorkflows(nextWorkflows);
+      setActiveWorkspaceId((current) => (
+        nextWorkspaces.some((workspace) => workspace.id === current)
+          ? current
+          : nextWorkspaces[0]?.id || ''
+      ));
+      setActiveWorkflow((current) => {
+        if (!current) return current;
+        return nextWorkflows.find((workflow) => workflow.id === current.id) || null;
+      });
+    } catch (error) {
+      console.error('Workflow state load error:', error);
+      setErrorMessage(error instanceof Error ? error.message : '工作流数据加载失败');
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  // Load demo data
   useEffect(() => {
-    const demoSkills: Skill[] = [
-      {
-        id: '1',
-        name: '市场洞察',
-        description: '从行业趋势、市场规模、用户需求变化等维度洞察市场机会',
-        methodology: '1. 行业趋势扫描\n2. 市场规模估算\n3. 用户需求变化分析\n4. 机会点提炼',
-        tools: ['web_search', 'knowledge_query', 'data_query'],
-        outputs: { format: 'structured_report', sections: ['trends', 'market_size', 'user_needs', 'opportunities'] },
-        checklist: ['引用数据来源', '趋势有量化支撑', '机会点可执行'],
-        tags: ['市场', '洞察'],
-      },
-      {
-        id: '2',
-        name: '竞品分析',
-        description: '系统性分析竞品产品功能、市场定位和差异化策略',
-        methodology: '1. 确定竞品范围\n2. 功能矩阵对比\n3. 用户体验评估\n4. 差异化策略制定',
-        tools: ['web_search', 'knowledge_query'],
-        outputs: { format: 'structured_report', sections: ['overview', 'feature_matrix', 'swot', 'strategy'] },
-        checklist: ['至少包含3个竞品', '功能对比完整', '有明确差异化结论'],
-        tags: ['竞品', '分析'],
-      },
-      {
-        id: '3',
-        name: '用户需求拆解',
-        description: '将高层业务需求拆解为可执行的用户故事和验收标准',
-        methodology: '1. 业务目标确认\n2. 用户角色识别\n3. 核心场景梳理\n4. 用户故事编写\n5. 验收标准定义',
-        tools: ['knowledge_query'],
-        outputs: { format: 'user_stories', sections: ['personas', 'stories', 'acceptance_criteria'] },
-        checklist: ['每个故事有验收标准', '覆盖所有角色', '优先级已标注'],
-        tags: ['需求', '拆解'],
-      },
-      {
-        id: '4',
-        name: '技术可行性评估',
-        description: '评估需求的技术实现可行性，识别技术风险和约束',
-        methodology: '1. 技术栈匹配分析\n2. 现有能力边界评估\n3. 技术风险识别\n4. 实现路径建议',
-        tools: ['data_query', 'knowledge_query', 'api_call'],
-        outputs: { format: 'assessment', sections: ['capability_analysis', 'risks', 'recommendations'] },
-        checklist: ['覆盖所有技术维度', '风险有缓解方案', '实现路径有工时估算'],
-        tags: ['技术', '评估'],
-      },
-    ];
-
-    setSkills(demoSkills);
-
-    // Demo workflows
-    setWorkflows([
-      {
-        id: 'demo-1',
-        workspaceId: 'ecommerce-v3',
-        name: '电商平台 v3.0 规划',
-        description: '电商平台下一版本的核心功能规划',
-        status: 'in_progress',
-        steps: [
-          { id: 's1', name: '市场洞察', skill_id: '1', step_index: 0, runMode: 'serial', status: 'completed', output: '## 市场洞察报告\n\n### 行业趋势\n- 社交电商增长迅猛，年增长率达35%\n- 直播带货成为主流消费场景\n- 用户对个性化推荐期望持续提升\n\n### 市场规模\n- 中国电商市场预计2025年达到18万亿\n- 社交电商细分市场约2.5万亿\n\n### 机会点\n1. 社交分享裂变体系\n2. AI驱动的个性化推荐\n3. 短视频/直播内容整合' },
-          { id: 's2', name: '竞品分析', skill_id: '2', step_index: 1, runMode: 'parallel', parallelGroupId: 'analysis', parallelGroupName: '方案分析并行组', status: 'in_progress', output: null },
-          { id: 's3', name: '用户需求拆解', skill_id: '3', step_index: 1, runMode: 'parallel', parallelGroupId: 'analysis', parallelGroupName: '方案分析并行组', status: 'in_progress', output: null },
-          { id: 's4', name: '技术可行性评估', skill_id: '4', step_index: 1, runMode: 'parallel', parallelGroupId: 'analysis', parallelGroupName: '方案分析并行组', status: 'in_progress', output: null },
-        ],
-      },
-    ]);
-  }, []);
+    loadWorkflowState();
+  }, [loadWorkflowState]);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -251,50 +390,65 @@ export default function WorkflowsPage() {
     }
   };
 
-  const toggleSelection = (id: string, selectedIds: string[], setSelectedIds: (ids: string[]) => void) => {
-    setSelectedIds(
-      selectedIds.includes(id)
-        ? selectedIds.filter((selectedId) => selectedId !== id)
-        : [...selectedIds, id]
-    );
-  };
+  const addUploadedContextFiles = useCallback(async (files: File[]) => {
+    if (!activeWorkflow || activeStepIndex < 0 || files.length === 0) return;
 
-  const addUploadedContextFiles = useCallback((files: File[]) => {
-    if (files.length === 0) return;
+    const currentStepForFiles = getVisibleSteps(activeWorkflow)[activeStepIndex];
+    if (!currentStepForFiles) return;
 
-    setUploadedContextFiles((prev) => [
-      ...prev,
-      ...files.map((file) => ({
+    const createdAt = new Date().toISOString();
+    const nextFiles = await Promise.all(files.map(async (file) => {
+      const payload = await buildWorkflowFilePayload(file);
+      return {
         id: `file-${Date.now()}-${file.name}-${Math.random().toString(16).slice(2)}`,
+        stepId: currentStepForFiles.id,
         name: file.name || '粘贴图片',
         type: file.type || 'unknown',
         size: file.size,
         isImage: file.type.startsWith('image/'),
-        previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
-      })),
-    ]);
-  }, []);
+        created_at: createdAt,
+        ...payload,
+      };
+    }));
 
-  const addReviewedOutputFiles = useCallback((files: File[], stepId?: string) => {
+    setUploadedContextFiles((prev) => [...prev, ...nextFiles]);
+    updateActiveWorkflow((workflow) => ({
+      ...workflow,
+      contextFiles: [...(workflow.contextFiles || []), ...nextFiles],
+      updated_at: createdAt,
+    }));
+  }, [activeStepIndex, activeWorkflow, updateActiveWorkflow]);
+
+  const addReviewedOutputFiles = useCallback(async (files: File[], stepId?: string) => {
     if (!stepId || files.length === 0) return;
 
-    setReviewedOutputFiles((prev) => [
-      ...prev,
-      ...files.map((file) => ({
+    const createdAt = new Date().toISOString();
+    const nextFiles = await Promise.all(files.map(async (file) => {
+      const payload = await buildWorkflowFilePayload(file);
+      return {
         id: `reviewed-${Date.now()}-${file.name}-${Math.random().toString(16).slice(2)}`,
         stepId,
         name: file.name,
         type: file.type || 'unknown',
         size: file.size,
-      })),
-    ]);
-  }, []);
+        created_at: createdAt,
+        ...payload,
+      };
+    }));
+
+    setReviewedOutputFiles((prev) => [...prev, ...nextFiles]);
+    updateActiveWorkflow((workflow) => ({
+      ...workflow,
+      reviewedOutputFiles: [...(workflow.reviewedOutputFiles || []), ...nextFiles],
+      updated_at: createdAt,
+    }));
+  }, [updateActiveWorkflow]);
 
 
   const handlePasteContextFiles = useCallback((event: ClipboardEvent<HTMLInputElement>) => {
     const files = Array.from(event.clipboardData.files);
     if (files.length > 0) {
-      addUploadedContextFiles(files);
+      void addUploadedContextFiles(files);
     }
   }, [addUploadedContextFiles]);
 
@@ -302,6 +456,14 @@ export default function WorkflowsPage() {
     if (size < 1024) return `${size}B`;
     if (size < 1024 * 1024) return `${Math.ceil(size / 1024)}KB`;
     return `${(size / 1024 / 1024).toFixed(1)}MB`;
+  };
+
+  const summarizeWorkflowFile = (file: UploadedContextFile | ReviewedOutputFile, maxChars = 1200) => {
+    const metadata = `${file.name}（${file.type || 'unknown'}，${formatFileSize(file.size)}）`;
+    if (file.contentKind === 'text' && file.content) {
+      return `${metadata}\n${file.content.slice(0, maxChars)}${file.content.length > maxChars ? '\n...（已截断）' : ''}`;
+    }
+    return file.note ? `${metadata}\n${file.note}` : metadata;
   };
 
   const downloadStepOutput = (stepName: string, output: string) => {
@@ -316,10 +478,67 @@ export default function WorkflowsPage() {
     URL.revokeObjectURL(url);
   };
 
+  const formatSnapshotTime = (value?: string) => {
+    if (!value) return '未记录时间';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleString('zh-CN', { hour12: false });
+  };
+
+  const buildStepSnapshot = (
+    workflow: Workflow,
+    step: WorkflowStep,
+    output: string,
+    createdAt: string,
+  ): WorkflowStepSnapshot => {
+    const selection = getContextSelection(workflow, step.id);
+    const knowledgeBaseIds = selectedKnowledgeBaseIds.length > 0
+      ? selectedKnowledgeBaseIds
+      : selection.knowledgeBaseIds;
+    const reviewMaterialIds = selectedReviewMaterialIds.length > 0
+      ? selectedReviewMaterialIds
+      : selection.reviewMaterialIds;
+    const selectedReviewIds = new Set(reviewMaterialIds);
+
+    const selectedKnowledgeBases = knowledgeBaseOptions
+      .filter((kb) => knowledgeBaseIds.includes(kb.id))
+      .map((kb) => `知识库：${kb.name}（${kb.description}）`);
+    const stepContextFiles = (workflow.contextFiles || [])
+      .filter((file) => file.stepId === step.id)
+      .map((file) => summarizeWorkflowFile(file, 800));
+    const selectedStepMaterials = workflow.steps
+      .filter((item) => !item.isRemoved && selectedReviewIds.has(item.id) && item.output)
+      .map((item) => `${item.name}产物\n${item.output?.slice(0, 1200)}${(item.output?.length || 0) > 1200 ? '\n...（已截断）' : ''}`);
+    const selectedUploadedMaterials = (workflow.reviewedOutputFiles || [])
+      .filter((file) => selectedReviewIds.has(file.id))
+      .map((file) => summarizeWorkflowFile(file, 800));
+    const currentStepReviewedFiles = (workflow.reviewedOutputFiles || [])
+      .filter((file) => file.stepId === step.id && !selectedReviewIds.has(file.id))
+      .map((file) => summarizeWorkflowFile(file, 800));
+    const reviewComment = workflow.reviewComments?.[step.id]?.trim() || reviewComments[step.id]?.trim() || '';
+
+    return {
+      id: `snapshot-${Date.now()}-${step.id}`,
+      workflowId: workflow.id,
+      stepId: step.id,
+      stepName: step.name,
+      stepIndex: step.step_index,
+      output,
+      contextFiles: [...selectedKnowledgeBases, ...stepContextFiles],
+      reviewedMaterials: [...selectedStepMaterials, ...selectedUploadedMaterials, ...currentStepReviewedFiles],
+      reviewComment: reviewComment || undefined,
+      created_at: createdAt,
+    };
+  };
+
   const handleSendMessage = useCallback(async () => {
     if (!chatInput.trim() || isStreaming) return;
 
     const userMessage = chatInput.trim();
+    const currentStepForContext = activeWorkflow ? getVisibleSteps(activeWorkflow)[activeStepIndex] : undefined;
+    const currentStepContextFiles = currentStepForContext
+      ? uploadedContextFiles.filter((file) => file.stepId === currentStepForContext.id)
+      : [];
     const selectedKnowledgeBases = knowledgeBaseOptions.filter((kb) => selectedKnowledgeBaseIds.includes(kb.id));
     const selectedReviewMaterials = activeWorkflow?.steps
       .filter((step) => !step.isRemoved && selectedReviewMaterialIds.includes(step.id) && step.output)
@@ -333,7 +552,7 @@ export default function WorkflowsPage() {
       .map((file) => ({
         name: file.name,
         source: '本地上传审核产物',
-        summary: `${file.name}，${file.type || 'unknown'}，${Math.ceil(file.size / 1024)}KB`,
+        summary: summarizeWorkflowFile(file, 1200),
       }));
     const contextSummary = [
       selectedKnowledgeBases.length > 0
@@ -345,8 +564,8 @@ export default function WorkflowsPage() {
       selectedUploadedReviewMaterials.length > 0
         ? `选中的本地审核材料：${selectedUploadedReviewMaterials.map((material) => `${material.name}：${material.summary}`).join('；')}`
         : '',
-      uploadedContextFiles.length > 0
-        ? `用户上传/粘贴的文件：${uploadedContextFiles.map((file) => `${file.name}（${file.type || 'unknown'}，${Math.ceil(file.size / 1024)}KB）`).join('；')}`
+      currentStepContextFiles.length > 0
+        ? `用户上传/粘贴的文件：\n${currentStepContextFiles.map((file) => summarizeWorkflowFile(file, 1200)).join('\n\n')}`
         : '',
     ].filter(Boolean).join('\n');
     const messageWithContext = contextSummary
@@ -384,7 +603,7 @@ export default function WorkflowsPage() {
           step_context: stepContext,
           selected_knowledge_bases: selectedKnowledgeBases,
           selected_review_materials: [...selectedReviewMaterials, ...selectedUploadedReviewMaterials],
-          uploaded_files: uploadedContextFiles.map(({ previewUrl, ...file }) => file),
+          uploaded_files: currentStepContextFiles.map(({ previewUrl, ...file }) => file),
         }),
       });
 
@@ -448,104 +667,126 @@ export default function WorkflowsPage() {
     reviewedOutputFiles,
   ]);
 
-  const handleConfirmStep = () => {
+  const deriveWorkflowStatus = (steps: WorkflowStep[]): Workflow['status'] => {
+    const activeSteps = steps.filter((step) => !step.isRemoved);
+    if (activeSteps.length === 0) return 'draft';
+    if (activeSteps.every((step) => step.status === 'completed')) return 'completed';
+    return 'in_progress';
+  };
+
+  const completeWorkflowStep = (workflow: Workflow, stepId: string, output: string) => {
+    const currentStep = workflow.steps.find((step) => step.id === stepId);
+    if (!currentStep) return { workflow, nextActiveStepIndex: activeStepIndex };
+
+    const completedAt = new Date().toISOString();
+    let nextSteps = workflow.steps.map((step) => (
+      step.id === stepId
+        ? { ...step, status: 'completed' as const, output, completed_at: completedAt, updated_at: completedAt }
+        : step
+    ));
+
+    const unlockNextStepIndex = () => {
+      const laterStepIndex = Math.min(
+        ...nextSteps
+          .filter((step) => !step.isRemoved && step.step_index > currentStep.step_index)
+          .map((step) => step.step_index)
+      );
+
+      if (!Number.isFinite(laterStepIndex)) return;
+
+      nextSteps = nextSteps.map((step) => (
+        step.step_index === laterStepIndex && step.status === 'pending'
+          ? { ...step, status: 'in_progress' as const, updated_at: completedAt }
+          : step
+      ));
+    };
+
+    if (currentStep.runMode === 'parallel' && currentStep.parallelGroupId) {
+      const groupSteps = nextSteps.filter((step) => !step.isRemoved && step.parallelGroupId === currentStep.parallelGroupId);
+      if (groupSteps.every((step) => step.status === 'completed')) {
+        unlockNextStepIndex();
+      }
+    } else {
+      unlockNextStepIndex();
+    }
+
+    const nextWorkflow: Workflow = {
+      ...workflow,
+      status: deriveWorkflowStatus(nextSteps),
+      steps: nextSteps,
+      updated_at: completedAt,
+    };
+    const visibleSteps = getVisibleSteps(nextWorkflow);
+    const nextInProgressIndex = visibleSteps.findIndex((step) => step.status === 'in_progress');
+    const completedStepIndex = visibleSteps.findIndex((step) => step.id === stepId);
+
+    return {
+      workflow: nextWorkflow,
+      nextActiveStepIndex: nextInProgressIndex >= 0 ? nextInProgressIndex : Math.max(completedStepIndex, 0),
+    };
+  };
+
+  const handleConfirmStep = async () => {
     if (!activeWorkflow || activeStepIndex < 0) return;
 
     const lastAssistantMsg = [...chatMessages].reverse().find((m) => m.role === 'assistant');
     if (!lastAssistantMsg) return;
 
     const currentStep = getVisibleSteps(activeWorkflow)[activeStepIndex];
-    const currentStepId = currentStep.id;
-    let nextActiveStepIndex = activeStepIndex;
+    if (!currentStep) return;
 
-    setActiveWorkflow((prev) => {
-      if (!prev) return prev;
-      const newSteps = [...prev.steps];
-      const currentStepActualIndex = newSteps.findIndex((step) => step.id === currentStepId);
-      if (currentStepActualIndex < 0) return prev;
+    const { workflow: nextWorkflow, nextActiveStepIndex } = completeWorkflowStep(
+      activeWorkflow,
+      currentStep.id,
+      lastAssistantMsg.content,
+    );
+    const snapshotCreatedAt = new Date().toISOString();
+    const stepSnapshot = buildStepSnapshot(activeWorkflow, currentStep, lastAssistantMsg.content, snapshotCreatedAt);
+    const workflowWithSnapshot = {
+      ...nextWorkflow,
+      stepSnapshots: [stepSnapshot, ...(nextWorkflow.stepSnapshots || [])],
+      updated_at: snapshotCreatedAt,
+    };
 
-      newSteps[currentStepActualIndex] = {
-        ...newSteps[currentStepActualIndex],
-        status: 'completed',
-        output: lastAssistantMsg.content,
-      };
-
-      if (currentStep.runMode === 'parallel' && currentStep.parallelGroupId) {
-        const groupSteps = newSteps.filter((step) => !step.isRemoved && step.parallelGroupId === currentStep.parallelGroupId);
-        const groupCompleted = groupSteps.every((step) => step.status === 'completed');
-        if (groupCompleted) {
-          const nextStepIndex = Math.min(
-            ...newSteps
-              .filter((step) => !step.isRemoved && step.step_index > currentStep.step_index)
-              .map((step) => step.step_index)
-          );
-          if (Number.isFinite(nextStepIndex)) {
-            newSteps.forEach((step, index) => {
-              if (step.step_index === nextStepIndex && step.status === 'pending') {
-                newSteps[index] = { ...step, status: 'in_progress' };
-                nextActiveStepIndex = index;
-              }
-            });
-          }
-        } else {
-          const visibleNewSteps = newSteps.filter((step) => !step.isRemoved);
-          const nextParallelStep = visibleNewSteps.findIndex(
-            (step) => step.parallelGroupId === currentStep.parallelGroupId && step.status === 'in_progress'
-          );
-          nextActiveStepIndex = nextParallelStep >= 0 ? nextParallelStep : activeStepIndex;
-        }
-      } else {
-        const nextStepIndex = Math.min(
-          ...newSteps
-            .filter((step) => !step.isRemoved && step.step_index > currentStep.step_index)
-            .map((step) => step.step_index)
-        );
-        if (Number.isFinite(nextStepIndex)) {
-          newSteps.forEach((step, index) => {
-            if (step.step_index === nextStepIndex && step.status === 'pending') {
-              newSteps[index] = { ...step, status: 'in_progress' };
-              if (nextActiveStepIndex === activeStepIndex) nextActiveStepIndex = index;
-            }
-          });
-        }
-      }
-      return { ...prev, steps: newSteps };
-    });
-
+    setWorkflows((prev) => prev.map((workflow) => (workflow.id === workflowWithSnapshot.id ? workflowWithSnapshot : workflow)));
+    setActiveWorkflow(workflowWithSnapshot);
     setActiveStepIndex(nextActiveStepIndex);
+    syncWorkflowSupportingState(workflowWithSnapshot, nextActiveStepIndex);
     setChatMessages([]);
+    await persistWorkflow(workflowWithSnapshot);
   };
 
-  const handleCreateWorkflow = () => {
-    if (!activeWorkspaceId || !newWorkflowName || selectedSkills.length === 0) return;
+  const handleCreateWorkflow = async () => {
+    if (!activeWorkspaceId || !newWorkflowName.trim() || selectedSkills.length < 3) return;
 
     let stepIndex = 0;
     let parallelGroupCounter = 0;
-    const steps: WorkflowStep[] = selectedSkills.map((skill, idx) => {
+    let activeParallelGroupId = '';
+    let activeParallelGroupName = '';
+    const steps = selectedSkills.map((skill, idx) => {
       const mode = selectedSkillModes[skill.id] || 'serial';
       const previousMode = idx > 0 ? selectedSkillModes[selectedSkills[idx - 1].id] || 'serial' : 'serial';
       const nextMode = idx < selectedSkills.length - 1 ? selectedSkillModes[selectedSkills[idx + 1].id] || 'serial' : 'serial';
 
       if (mode === 'serial') {
         if (idx > 0) stepIndex += 1;
+        activeParallelGroupId = '';
+        activeParallelGroupName = '';
         return {
-          id: `step-${Date.now()}-${idx}`,
           name: skill.name,
           skill_id: skill.id,
           step_index: stepIndex,
           runMode: 'serial' as const,
-          status: stepIndex === 0 ? 'in_progress' as const : 'pending' as const,
-          output: null,
         };
       }
 
       if (previousMode !== 'parallel') {
         if (idx > 0) stepIndex += 1;
         parallelGroupCounter += 1;
+        activeParallelGroupId = `parallel-${Date.now()}-${parallelGroupCounter}`;
+        activeParallelGroupName = `并行任务组 ${parallelGroupCounter}`;
       }
 
-      const groupId = `parallel-${Date.now()}-${parallelGroupCounter}`;
-      const groupName = `并行任务组 ${parallelGroupCounter}`;
       const currentStepIndex = stepIndex;
       if (nextMode !== 'parallel') {
         // The next serial step should depend on this parallel group.
@@ -553,65 +794,101 @@ export default function WorkflowsPage() {
       }
 
       return {
-        id: `step-${Date.now()}-${idx}`,
         name: skill.name,
         skill_id: skill.id,
         step_index: currentStepIndex,
         runMode: 'parallel' as const,
-        parallelGroupId: groupId,
-        parallelGroupName: groupName,
-        status: currentStepIndex === 0 ? 'in_progress' as const : 'pending' as const,
-        output: null,
+        parallelGroupId: activeParallelGroupId,
+        parallelGroupName: activeParallelGroupName,
       };
     });
 
-    const newWorkflow: Workflow = {
-      id: `wf-${Date.now()}`,
-      workspaceId: activeWorkspaceId,
-      name: newWorkflowName,
-      description: newWorkflowDesc,
-      status: 'in_progress',
-      steps,
-    };
+    try {
+      setErrorMessage('');
+      const response = await fetch('/api/workflows', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create_workflow',
+          workspaceId: activeWorkspaceId,
+          name: newWorkflowName.trim(),
+          description: newWorkflowDesc.trim(),
+          steps,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '创建工作流失败');
 
-    setWorkflows((prev) => [newWorkflow, ...prev]);
-    setActiveWorkflow(newWorkflow);
-    setActiveStepIndex(0);
-    setChatMessages([]);
-    setCreateDialogOpen(false);
-    setNewWorkflowName('');
-    setNewWorkflowDesc('');
-    setSelectedSkills([]);
-    setSelectedSkillModes({});
+      const createdWorkflow = data.workflow as Workflow;
+      setWorkflows((prev) => [createdWorkflow, ...prev]);
+      setActiveWorkflow(createdWorkflow);
+      setActiveStepIndex(0);
+      setChatMessages([]);
+      setCreateDialogOpen(false);
+      setNewWorkflowName('');
+      setNewWorkflowDesc('');
+      setSelectedSkills([]);
+      setSelectedSkillModes({});
+    } catch (error) {
+      console.error('Create workflow error:', error);
+      setErrorMessage(error instanceof Error ? error.message : '创建工作流失败');
+    }
   };
 
-  const handleCreateWorkspace = () => {
+  const handleCreateWorkspace = async () => {
     if (!newWorkspaceName.trim()) return;
 
-    const workspace: Workspace = {
-      id: `workspace-${Date.now()}`,
-      name: newWorkspaceName.trim(),
-      description: newWorkspaceDesc.trim() || '未填写目录说明',
-    };
+    try {
+      setErrorMessage('');
+      const response = await fetch('/api/workflows', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create_workspace',
+          name: newWorkspaceName.trim(),
+          description: newWorkspaceDesc.trim(),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '创建工作目录失败');
 
-    setWorkspaces((prev) => [...prev, workspace]);
-    setActiveWorkspaceId(workspace.id);
-    setWorkspaceDialogOpen(false);
-    setNewWorkspaceName('');
-    setNewWorkspaceDesc('');
+      const workspace = data.workspace as Workspace;
+      setWorkspaces((prev) => [workspace, ...prev]);
+      setActiveWorkspaceId(workspace.id);
+      setWorkspaceDialogOpen(false);
+      setNewWorkspaceName('');
+      setNewWorkspaceDesc('');
+    } catch (error) {
+      console.error('Create workspace error:', error);
+      setErrorMessage(error instanceof Error ? error.message : '创建工作目录失败');
+    }
   };
 
-  const handleDeleteWorkspace = (workspaceId: string) => {
+  const handleDeleteWorkspace = async (workspaceId: string) => {
     const workflowCount = workflows.filter((workflow) => workflow.workspaceId === workspaceId).length;
     if (workflowCount > 0 || workspaces.length <= 1) return;
 
-    setWorkspaces((prev) => {
-      const next = prev.filter((workspace) => workspace.id !== workspaceId);
-      if (activeWorkspaceId === workspaceId) {
-        setActiveWorkspaceId(next[0]?.id || '');
-      }
-      return next;
-    });
+    try {
+      setErrorMessage('');
+      const response = await fetch('/api/workflows', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete_workspace', id: workspaceId }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '删除工作目录失败');
+
+      setWorkspaces((prev) => {
+        const next = prev.filter((workspace) => workspace.id !== workspaceId);
+        if (activeWorkspaceId === workspaceId) {
+          setActiveWorkspaceId(next[0]?.id || '');
+        }
+        return next;
+      });
+    } catch (error) {
+      console.error('Delete workspace error:', error);
+      setErrorMessage(error instanceof Error ? error.message : '删除工作目录失败');
+    }
   };
 
   const handleOpenEditWorkflow = (workflow: Workflow) => {
@@ -629,16 +906,21 @@ export default function WorkflowsPage() {
       id: `wf-clone-${timestamp}`,
       name: `${workflow.name} 副本`,
       status: 'draft',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
       steps: workflow.steps.map((step, index) => ({
         ...step,
         id: `step-clone-${timestamp}-${index}`,
         status: step.id === firstVisibleStepId ? 'in_progress' : 'pending',
         output: null,
+        completed_at: undefined,
         removedAt: step.isRemoved ? new Date().toISOString() : undefined,
       })),
+      stepSnapshots: [],
     };
 
     setWorkflows((prev) => [clonedWorkflow, ...prev]);
+    void persistWorkflow(clonedWorkflow);
   };
 
   const handleSoftRemoveStep = (workflowId: string, stepId: string) => {
@@ -725,6 +1007,14 @@ export default function WorkflowsPage() {
     });
   };
 
+  if (loading) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+        正在加载工作流数据...
+      </div>
+    );
+  }
+
   // If no active workflow, show workflow list
   if (!activeWorkflow) {
     const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId) || null;
@@ -741,6 +1031,12 @@ export default function WorkflowsPage() {
             <p className="text-muted-foreground text-sm mt-1">先建立工作目录，再在目录内创建规划工作流</p>
           </div>
         </div>
+
+        {errorMessage && (
+          <div className="mx-6 mt-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            {errorMessage}
+          </div>
+        )}
 
         <div className="border-b border-border/40 px-6 py-4">
           <div className="mb-3 flex items-center justify-between">
@@ -855,13 +1151,7 @@ export default function WorkflowsPage() {
                 <Card
                   key={wf.id}
                   className="cursor-pointer hover:shadow-md transition-shadow"
-                  onClick={() => {
-                    setActiveWorkflow(wf);
-                    const visibleSteps = getVisibleSteps(wf);
-                    const firstInProgress = visibleSteps.findIndex((s) => s.status === 'in_progress');
-                    setActiveStepIndex(firstInProgress >= 0 ? firstInProgress : 0);
-                    setChatMessages([]);
-                  }}
+                  onClick={() => openWorkflow(wf)}
                 >
                   <CardHeader className="pb-3">
                     <div className="flex items-center justify-between">
@@ -872,6 +1162,18 @@ export default function WorkflowsPage() {
                         >
                           {wf.status === 'completed' ? '已完成' : wf.status === 'in_progress' ? '进行中' : '草稿'}
                         </Badge>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 gap-1 px-2 text-xs"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openWorkflow(wf);
+                          }}
+                        >
+                          <Play className="h-3.5 w-3.5" />
+                          进入
+                        </Button>
                         <Button
                           variant="ghost"
                           size="sm"
@@ -924,122 +1226,133 @@ export default function WorkflowsPage() {
 
         {/* Create Workflow Dialog */}
         <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-          <DialogContent className="max-w-2xl">
-            <DialogHeader>
+          <DialogContent className="flex max-h-[calc(100dvh-2rem)] max-w-2xl flex-col gap-0 overflow-hidden p-0">
+            <DialogHeader className="border-b border-border/40 px-6 py-5 pr-12">
               <DialogTitle>新建工作流</DialogTitle>
               <DialogDescription>选择 Skill 并配置串行或并行执行方式</DialogDescription>
             </DialogHeader>
-            <div className="space-y-4 mt-4">
-              <div className="rounded-lg border border-border/50 bg-muted/20 p-3">
-                <p className="text-xs text-muted-foreground">创建位置</p>
-                <p className="text-sm font-medium mt-1">{activeWorkspace?.name}</p>
-                <p className="text-xs text-muted-foreground mt-1">{activeWorkspace?.description}</p>
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">工作流名称</label>
-                <Input
-                  placeholder="如：电商平台 v3.0 规划"
-                  value={newWorkflowName}
-                  onChange={(e) => setNewWorkflowName(e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">描述</label>
-                <Input
-                  placeholder="简要描述本次规划的目标"
-                  value={newWorkflowDesc}
-                  onChange={(e) => setNewWorkflowDesc(e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium">选择 Skill（按顺序点击添加）</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {skills.map((skill) => {
-                    const isSelected = selectedSkills.find((s) => s.id === skill.id);
-                    const orderIndex = isSelected ? selectedSkills.findIndex((s) => s.id === skill.id) : -1;
-                    return (
-                      <div
-                        key={skill.id}
-                        className={`p-3 rounded-lg border cursor-pointer transition-colors ${
-                          isSelected ? 'border-primary bg-primary/5' : 'border-border/60 hover:border-primary/50'
-                        }`}
-                        onClick={() => {
-                          if (isSelected) {
-                            setSelectedSkills((prev) => prev.filter((s) => s.id !== skill.id));
-                            setSelectedSkillModes((prev) => {
-                              const next = { ...prev };
-                              delete next[skill.id];
-                              return next;
-                            });
-                          } else {
-                            setSelectedSkills((prev) => [...prev, skill]);
-                            setSelectedSkillModes((prev) => ({ ...prev, [skill.id]: 'serial' }));
-                          }
-                        }}
-                      >
-                        <div className="flex items-center gap-2">
-                          {isSelected && (
-                            <Badge variant="default" className="h-5 w-5 rounded-full p-0 flex items-center justify-center text-xs">
-                              {orderIndex + 1}
-                            </Badge>
-                          )}
-                          <span className="text-sm font-medium">{skill.name}</span>
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-1 line-clamp-1">{skill.description}</p>
-                      </div>
-                    );
-                  })}
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+              <div className="space-y-4">
+                <div className="rounded-lg border border-border/50 bg-muted/20 p-3">
+                  <p className="text-xs text-muted-foreground">创建位置</p>
+                  <p className="text-sm font-medium mt-1">{activeWorkspace?.name}</p>
+                  <p className="text-xs text-muted-foreground mt-1">{activeWorkspace?.description}</p>
                 </div>
-              </div>
-              {selectedSkills.length > 0 && (
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">编排方式</label>
-                  <div className="space-y-2">
-                    {selectedSkills.map((skill, idx) => (
-                      <div
-                        key={skill.id}
-                        className="flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 p-2"
-                      >
-                        <div className="flex min-w-0 items-center gap-2">
-                          <Badge variant="secondary" className="h-6 w-6 rounded-full p-0 flex items-center justify-center text-xs">
-                            {idx + 1}
-                          </Badge>
-                          <span className="truncate text-sm font-medium">{skill.name}</span>
-                        </div>
-                        <div className="flex items-center rounded-md border border-border/50 p-0.5">
-                          <Button
-                            type="button"
-                            variant={(selectedSkillModes[skill.id] || 'serial') === 'serial' ? 'default' : 'ghost'}
-                            size="sm"
-                            className="h-7 px-2 text-xs"
-                            onClick={() => setSelectedSkillModes((prev) => ({ ...prev, [skill.id]: 'serial' }))}
-                          >
-                            串行
-                          </Button>
-                          <Button
-                            type="button"
-                            variant={(selectedSkillModes[skill.id] || 'serial') === 'parallel' ? 'default' : 'ghost'}
-                            size="sm"
-                            className="h-7 px-2 text-xs"
-                            onClick={() => setSelectedSkillModes((prev) => ({ ...prev, [skill.id]: 'parallel' }))}
-                          >
-                            并行
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    连续标记为并行的 Skill 会组成同一个并行任务组，可分别推进；后续串行步骤会等待该并行组汇聚后继续。
-                  </p>
+                  <label className="text-sm font-medium">工作流名称</label>
+                  <Input
+                    placeholder="如：电商平台 v3.0 规划"
+                    value={newWorkflowName}
+                    onChange={(e) => setNewWorkflowName(e.target.value)}
+                  />
                 </div>
-              )}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">描述</label>
+                  <Input
+                    placeholder="简要描述本次规划的目标"
+                    value={newWorkflowDesc}
+                    onChange={(e) => setNewWorkflowDesc(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">选择 Skill（按顺序点击添加）</label>
+                  {skills.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-border/60 p-4 text-center text-sm text-muted-foreground">
+                      暂无可用 Skill，请先到 Skill 仓库导入或发布 Skill。
+                    </div>
+                  ) : (
+                  <div className="grid grid-cols-2 gap-2">
+                    {skills.map((skill) => {
+                      const isSelected = selectedSkills.find((s) => s.id === skill.id);
+                      const orderIndex = isSelected ? selectedSkills.findIndex((s) => s.id === skill.id) : -1;
+                      return (
+                        <button
+                          key={skill.id}
+                          type="button"
+                          className={`p-3 rounded-lg border text-left transition-colors ${
+                            isSelected ? 'border-primary bg-primary/5' : 'border-border/60 hover:border-primary/50'
+                          }`}
+                          onClick={() => {
+                            if (isSelected) {
+                              setSelectedSkills((prev) => prev.filter((s) => s.id !== skill.id));
+                              setSelectedSkillModes((prev) => {
+                                const next = { ...prev };
+                                delete next[skill.id];
+                                return next;
+                              });
+                            } else {
+                              setSelectedSkills((prev) => [...prev, skill]);
+                              setSelectedSkillModes((prev) => ({ ...prev, [skill.id]: 'serial' }));
+                            }
+                          }}
+                        >
+                          <div className="flex items-center gap-2">
+                            {isSelected && (
+                              <Badge variant="default" className="h-5 w-5 rounded-full p-0 flex items-center justify-center text-xs">
+                                {orderIndex + 1}
+                              </Badge>
+                            )}
+                            <span className="text-sm font-medium">{skill.name}</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1 line-clamp-1">{skill.description}</p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  )}
+                </div>
+                {selectedSkills.length > 0 && (
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">编排方式</label>
+                    <div className="space-y-2">
+                      {selectedSkills.map((skill, idx) => (
+                        <div
+                          key={skill.id}
+                          className="flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 p-2"
+                        >
+                          <div className="flex min-w-0 items-center gap-2">
+                            <Badge variant="secondary" className="h-6 w-6 rounded-full p-0 flex items-center justify-center text-xs">
+                              {idx + 1}
+                            </Badge>
+                            <span className="truncate text-sm font-medium">{skill.name}</span>
+                          </div>
+                          <div className="flex items-center rounded-md border border-border/50 p-0.5">
+                            <Button
+                              type="button"
+                              variant={(selectedSkillModes[skill.id] || 'serial') === 'serial' ? 'default' : 'ghost'}
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              onClick={() => setSelectedSkillModes((prev) => ({ ...prev, [skill.id]: 'serial' }))}
+                            >
+                              串行
+                            </Button>
+                            <Button
+                              type="button"
+                              variant={(selectedSkillModes[skill.id] || 'serial') === 'parallel' ? 'default' : 'ghost'}
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              onClick={() => setSelectedSkillModes((prev) => ({ ...prev, [skill.id]: 'parallel' }))}
+                            >
+                              并行
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      连续标记为并行的 Skill 会组成同一个并行任务组，可分别推进；后续串行步骤会等待该并行组汇聚后继续。M2 验收要求至少选择 3 个 Skill。
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="border-t border-border/40 bg-background px-6 py-4">
               <Button
                 className="w-full"
-                disabled={!activeWorkspace || !newWorkflowName || selectedSkills.length === 0}
+                disabled={!activeWorkspace || !newWorkflowName.trim() || selectedSkills.length < 3}
                 onClick={handleCreateWorkflow}
               >
-                创建工作流
+                {selectedSkills.length < 3 ? `还需选择 ${3 - selectedSkills.length} 个 Skill` : '创建工作流'}
               </Button>
             </div>
           </DialogContent>
@@ -1261,9 +1574,93 @@ export default function WorkflowsPage() {
   const currentReviewedOutputFiles = currentStep
     ? reviewedOutputFiles.filter((file) => file.stepId === currentStep.id)
     : [];
+  const currentContextFiles = currentStep
+    ? uploadedContextFiles.filter((file) => file.stepId === currentStep.id)
+    : [];
+  const currentStepSnapshots = currentStep
+    ? (activeWorkflow.stepSnapshots || [])
+      .filter((snapshot) => snapshot.stepId === currentStep.id)
+      .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+    : [];
   const currentReviewComment = currentStep ? reviewComments[currentStep.id]?.trim() || '' : '';
   const canArchiveReviewedOutput = currentReviewedOutputFiles.length > 0 || currentReviewComment.length > 0;
   const isReviewedOutputArchived = currentStep ? archivedReviewStepIds.includes(currentStep.id) : false;
+  const updateCurrentContextSelection = (
+    nextSelection: Partial<WorkflowContextSelection>,
+    localStateUpdate?: () => void,
+  ) => {
+    if (!currentStep) return;
+
+    localStateUpdate?.();
+    const updatedAt = new Date().toISOString();
+    updateActiveWorkflow((workflow) => {
+      const currentSelection = getContextSelection(workflow, currentStep.id);
+      return {
+        ...workflow,
+        contextSelections: {
+          ...(workflow.contextSelections || {}),
+          [currentStep.id]: {
+            ...currentSelection,
+            ...nextSelection,
+            updated_at: updatedAt,
+          },
+        },
+        updated_at: updatedAt,
+      };
+    });
+  };
+  const removeContextFile = (fileId: string) => {
+    const updatedAt = new Date().toISOString();
+    setUploadedContextFiles((prev) => prev.filter((item) => item.id !== fileId));
+    updateActiveWorkflow((workflow) => ({
+      ...workflow,
+      contextFiles: (workflow.contextFiles || []).filter((file) => file.id !== fileId),
+      updated_at: updatedAt,
+    }));
+  };
+  const removeReviewedOutputFile = (fileId: string) => {
+    const updatedAt = new Date().toISOString();
+    setReviewedOutputFiles((prev) => prev.filter((item) => item.id !== fileId));
+    updateActiveWorkflow((workflow) => ({
+      ...workflow,
+      reviewedOutputFiles: (workflow.reviewedOutputFiles || []).filter((file) => file.id !== fileId),
+      contextSelections: Object.fromEntries(
+        Object.entries(workflow.contextSelections || {}).map(([stepId, selection]) => [
+          stepId,
+          {
+            ...selection,
+            reviewMaterialIds: selection.reviewMaterialIds.filter((id) => id !== fileId),
+            updated_at: updatedAt,
+          },
+        ]),
+      ),
+      updated_at: updatedAt,
+    }));
+    setSelectedReviewMaterialIds((prev) => prev.filter((id) => id !== fileId));
+  };
+  const updateReviewComment = (stepId: string, comment: string) => {
+    const updatedAt = new Date().toISOString();
+    setReviewComments((prev) => ({ ...prev, [stepId]: comment }));
+    updateActiveWorkflow((workflow) => ({
+      ...workflow,
+      reviewComments: {
+        ...(workflow.reviewComments || {}),
+        [stepId]: comment,
+      },
+      updated_at: updatedAt,
+    }));
+  };
+  const archiveReviewedOutput = (stepId: string) => {
+    const updatedAt = new Date().toISOString();
+    setArchivedReviewStepIds((prev) => (prev.includes(stepId) ? prev : [...prev, stepId]));
+    updateActiveWorkflow((workflow) => ({
+      ...workflow,
+      archivedReviewStepIds: (workflow.archivedReviewStepIds || []).includes(stepId)
+        ? workflow.archivedReviewStepIds || []
+        : [...(workflow.archivedReviewStepIds || []), stepId],
+      updated_at: updatedAt,
+    }));
+  };
   const workflowStepGroups = Object.values(
     visibleWorkflowSteps.reduce<Record<string, WorkflowStep[]>>((groups, step) => {
       const key = step.runMode === 'parallel' && step.parallelGroupId
@@ -1324,6 +1721,7 @@ export default function WorkflowsPage() {
                           onClick={() => {
                             if (!isDisabled) {
                               setActiveStepIndex(idx);
+                              syncWorkflowSupportingState(activeWorkflow, idx);
                               setChatMessages([]);
                             }
                           }}
@@ -1541,7 +1939,7 @@ export default function WorkflowsPage() {
                 <div className="min-w-0">
                   <p className="text-sm font-medium">补充上下文</p>
                   <p className="truncate text-xs text-muted-foreground">
-                    {selectedKnowledgeBaseIds.length} 个知识库 · {selectedReviewMaterialIds.length} 个评审材料 · {uploadedContextFiles.length} 个本地文件
+                    {selectedKnowledgeBaseIds.length} 个知识库 · {selectedReviewMaterialIds.length} 个评审材料 · {currentContextFiles.length} 个本地文件
                   </p>
                 </div>
               </div>
@@ -1557,7 +1955,7 @@ export default function WorkflowsPage() {
               accept=".txt,.md,image/*"
               className="hidden"
               onChange={(event) => {
-                addUploadedContextFiles(Array.from(event.target.files || []));
+                void addUploadedContextFiles(Array.from(event.target.files || []));
                 event.target.value = '';
               }}
             />
@@ -1592,7 +1990,15 @@ export default function WorkflowsPage() {
                           variant={selected ? 'default' : 'outline'}
                           size="sm"
                           className="h-7 text-xs"
-                          onClick={() => toggleSelection(kb.id, selectedKnowledgeBaseIds, setSelectedKnowledgeBaseIds)}
+                          onClick={() => {
+                            const nextIds = selected
+                              ? selectedKnowledgeBaseIds.filter((id) => id !== kb.id)
+                              : [...selectedKnowledgeBaseIds, kb.id];
+                            updateCurrentContextSelection(
+                              { knowledgeBaseIds: nextIds },
+                              () => setSelectedKnowledgeBaseIds(nextIds),
+                            );
+                          }}
                         >
                           {kb.name}
                         </Button>
@@ -1617,7 +2023,15 @@ export default function WorkflowsPage() {
                             variant={selected ? 'default' : 'outline'}
                             size="sm"
                             className="h-7 max-w-full text-xs"
-                            onClick={() => toggleSelection(material.id, selectedReviewMaterialIds, setSelectedReviewMaterialIds)}
+                            onClick={() => {
+                              const nextIds = selected
+                                ? selectedReviewMaterialIds.filter((id) => id !== material.id)
+                                : [...selectedReviewMaterialIds, material.id];
+                              updateCurrentContextSelection(
+                                { reviewMaterialIds: nextIds },
+                                () => setSelectedReviewMaterialIds(nextIds),
+                              );
+                            }}
                           >
                             {material.name}
                           </Button>
@@ -1635,9 +2049,9 @@ export default function WorkflowsPage() {
                     <span>本地文件</span>
                     <span className="text-muted-foreground/70">支持 .txt、.md、图片，可直接复制粘贴图片到输入框</span>
                   </div>
-                  {uploadedContextFiles.length > 0 ? (
+                  {currentContextFiles.length > 0 ? (
                     <div className="flex flex-wrap gap-2">
-                      {uploadedContextFiles.map((file) => (
+                      {currentContextFiles.map((file) => (
                         <div
                           key={file.id}
                           className="inline-flex max-w-full items-center gap-2 rounded-md border border-border/50 bg-background/60 px-2 py-1 text-xs"
@@ -1652,7 +2066,7 @@ export default function WorkflowsPage() {
                           <button
                             type="button"
                             className="text-muted-foreground hover:text-foreground"
-                            onClick={() => setUploadedContextFiles((prev) => prev.filter((item) => item.id !== file.id))}
+                            onClick={() => removeContextFile(file.id)}
                             aria-label={`移除 ${file.name}`}
                           >
                             <X className="h-3.5 w-3.5" />
@@ -1766,6 +2180,53 @@ export default function WorkflowsPage() {
               </div>
             )}
 
+            {/* Step Snapshots */}
+            {currentStep && (
+              <div className="min-w-0">
+                <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
+                  <h4 className="min-w-0 truncate text-xs font-medium text-muted-foreground">历史快照</h4>
+                  <Badge variant="outline" className="shrink-0 text-[11px]">
+                    {currentStepSnapshots.length} 条
+                  </Badge>
+                </div>
+                <Card className="border-border/40">
+                  <CardContent className="space-y-2 p-3">
+                    {currentStepSnapshots.length > 0 ? (
+                      currentStepSnapshots.map((snapshot) => (
+                        <button
+                          key={snapshot.id}
+                          type="button"
+                          className="w-full rounded-md border border-border/50 bg-background/60 p-2 text-left transition-colors hover:border-primary/50 hover:bg-muted/40"
+                          onClick={() => {
+                            setSelectedSnapshot(snapshot);
+                            setSnapshotDialogOpen(true);
+                          }}
+                        >
+                          <div className="flex min-w-0 items-center justify-between gap-2">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <History className="h-3.5 w-3.5 shrink-0 text-primary" />
+                              <span className="truncate text-xs font-medium">{formatSnapshotTime(snapshot.created_at)}</span>
+                            </div>
+                            <span className="shrink-0 text-[11px] text-muted-foreground">查看</span>
+                          </div>
+                          <p className="mt-1 line-clamp-2 break-words text-xs text-muted-foreground">
+                            {snapshot.output.replace(/[#*\n]/g, ' ').slice(0, 120)}
+                          </p>
+                          <p className="mt-1 text-[11px] text-muted-foreground/80">
+                            上下文 {snapshot.contextFiles.length} · 审核材料 {snapshot.reviewedMaterials.length}
+                          </p>
+                        </button>
+                      ))
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        确认完成当前步骤后，会自动保存产出、上下文和审核反馈快照。
+                      </p>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+
             {/* Reviewed Output Upload */}
             {currentStep && (
               <div className="min-w-0">
@@ -1787,7 +2248,7 @@ export default function WorkflowsPage() {
                     accept=".txt,.md,.doc,.docx,.pdf,image/*"
                     className="hidden"
                     onChange={(event) => {
-                      addReviewedOutputFiles(Array.from(event.target.files || []), currentStep.id);
+                      void addReviewedOutputFiles(Array.from(event.target.files || []), currentStep.id);
                       event.target.value = '';
                     }}
                   />
@@ -1813,7 +2274,7 @@ export default function WorkflowsPage() {
                             <button
                               type="button"
                               className="text-muted-foreground hover:text-foreground"
-                              onClick={() => setReviewedOutputFiles((prev) => prev.filter((item) => item.id !== file.id))}
+                              onClick={() => removeReviewedOutputFile(file.id)}
                               aria-label={`移除 ${file.name}`}
                             >
                               <X className="h-3.5 w-3.5" />
@@ -1829,10 +2290,7 @@ export default function WorkflowsPage() {
                       className="min-h-20 w-full rounded-md border border-border/60 bg-background/60 px-3 py-2 text-xs outline-none placeholder:text-muted-foreground focus:border-primary/50"
                       placeholder="填写审核评论，例如：结论是否充分、哪些地方需要补充、Skill 输出模板是否需要调整..."
                       value={reviewComments[currentStep.id] || ''}
-                      onChange={(event) => setReviewComments((prev) => ({
-                        ...prev,
-                        [currentStep.id]: event.target.value,
-                      }))}
+                      onChange={(event) => updateReviewComment(currentStep.id, event.target.value)}
                     />
 
                     <div className="flex min-w-0 items-center justify-between gap-2 border-t border-border/40 pt-3">
@@ -1849,9 +2307,7 @@ export default function WorkflowsPage() {
                         size="sm"
                         className="h-7 shrink-0 gap-1.5 text-xs"
                         disabled={!canArchiveReviewedOutput || isReviewedOutputArchived}
-                        onClick={() => setArchivedReviewStepIds((prev) => (
-                          prev.includes(currentStep.id) ? prev : [...prev, currentStep.id]
-                        ))}
+                        onClick={() => archiveReviewedOutput(currentStep.id)}
                       >
                         <Save className="h-3.5 w-3.5" />
                         {isReviewedOutputArchived ? '已归档' : '归档'}
@@ -1876,6 +2332,99 @@ export default function WorkflowsPage() {
         </ScrollArea>
       </div>
 
+      <Dialog
+        open={snapshotDialogOpen}
+        onOpenChange={(open) => {
+          setSnapshotDialogOpen(open);
+          if (!open) setSelectedSnapshot(null);
+        }}
+      >
+        <DialogContent className="flex max-h-[calc(100dvh-2rem)] max-w-3xl flex-col gap-0 overflow-hidden p-0">
+          <DialogHeader className="border-b border-border/40 px-6 py-5 pr-12">
+            <DialogTitle>{selectedSnapshot?.stepName || '步骤快照'}</DialogTitle>
+            <DialogDescription>
+              {selectedSnapshot
+                ? `${formatSnapshotTime(selectedSnapshot.created_at)} 确认时保存的产出、上下文和审核反馈。`
+                : '查看步骤确认时保存的历史记录。'}
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedSnapshot && (
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
+              <section className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-semibold">步骤产出</h3>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1.5 text-xs"
+                    onClick={() => downloadStepOutput(selectedSnapshot.stepName, selectedSnapshot.output)}
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    下载
+                  </Button>
+                </div>
+                <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-lg border border-border/50 bg-muted/30 p-3 font-sans text-xs leading-relaxed">
+                  {selectedSnapshot.output}
+                </pre>
+              </section>
+
+              <section className="space-y-2">
+                <h3 className="text-sm font-semibold">确认时上下文</h3>
+                {selectedSnapshot.contextFiles.length > 0 ? (
+                  <div className="space-y-2">
+                    {selectedSnapshot.contextFiles.map((item, index) => (
+                      <pre
+                        key={`${selectedSnapshot.id}-context-${index}`}
+                        className="whitespace-pre-wrap rounded-md border border-border/40 bg-background/60 p-2 font-sans text-xs leading-relaxed text-muted-foreground"
+                      >
+                        {item}
+                      </pre>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="rounded-md border border-dashed border-border/50 p-3 text-xs text-muted-foreground">
+                    该快照未记录补充上下文。
+                  </p>
+                )}
+              </section>
+
+              <section className="space-y-2">
+                <h3 className="text-sm font-semibold">审核材料</h3>
+                {selectedSnapshot.reviewedMaterials.length > 0 ? (
+                  <div className="space-y-2">
+                    {selectedSnapshot.reviewedMaterials.map((item, index) => (
+                      <pre
+                        key={`${selectedSnapshot.id}-review-${index}`}
+                        className="whitespace-pre-wrap rounded-md border border-border/40 bg-background/60 p-2 font-sans text-xs leading-relaxed text-muted-foreground"
+                      >
+                        {item}
+                      </pre>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="rounded-md border border-dashed border-border/50 p-3 text-xs text-muted-foreground">
+                    该快照未关联审核材料。
+                  </p>
+                )}
+              </section>
+
+              <section className="space-y-2">
+                <h3 className="text-sm font-semibold">审核评论</h3>
+                {selectedSnapshot.reviewComment ? (
+                  <p className="whitespace-pre-wrap rounded-md border border-border/40 bg-background/60 p-3 text-xs leading-relaxed text-muted-foreground">
+                    {selectedSnapshot.reviewComment}
+                  </p>
+                ) : (
+                  <p className="rounded-md border border-dashed border-border/50 p-3 text-xs text-muted-foreground">
+                    该快照未填写审核评论。
+                  </p>
+                )}
+              </section>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
