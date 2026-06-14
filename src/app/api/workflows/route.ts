@@ -1,162 +1,135 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import {
+  createWorkflow,
+  createWorkspace,
+  deleteWorkflow,
+  deleteWorkspace,
+  getWorkflow,
+  getWorkflowState,
+  upsertWorkflow,
+} from '@/lib/workflow-registry';
 
-// GET /api/workflows - List workflows or get a specific one
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
+function jsonError(message: string, status = 500) {
+  return NextResponse.json(
+    { error: message },
+    {
+      status,
+      headers: { 'Cache-Control': 'no-store' },
+    },
+  );
+}
+
+function jsonOk(data: unknown, status = 200) {
+  return NextResponse.json(data, {
+    status,
+    headers: { 'Cache-Control': 'no-store' },
+  });
+}
+
+function errorStatus(error: unknown) {
+  if (!(error instanceof Error)) return 500;
+  if (error.message.includes('not found')) return 404;
+  if (
+    error.message.includes('required')
+    || error.message.startsWith('At least')
+    || error.message.includes('cannot be deleted')
+  ) {
+    return 400;
+  }
+  return 500;
+}
+
+// GET /api/workflows - List workspaces and workflows, or get one workflow
 export async function GET(request: NextRequest) {
   try {
-    const token = request.headers.get('x-session') || undefined;
-    const client = getSupabaseClient(token);
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
 
     if (id) {
-      // Get specific workflow with steps
-      const { data: workflow, error: wfError } = await client
-        .from('workflows')
-        .select('*')
-        .eq('id', id)
-        .maybeSingle();
-
-      if (wfError) throw new Error(`Failed to fetch workflow: ${wfError.message}`);
-      if (!workflow) return NextResponse.json({ error: 'Workflow not found' }, { status: 404 });
-
-      const { data: steps, error: stepsError } = await client
-        .from('workflow_steps')
-        .select('*')
-        .eq('workflow_id', id)
-        .order('step_index', { ascending: true });
-
-      if (stepsError) throw new Error(`Failed to fetch steps: ${stepsError.message}`);
-
-      return NextResponse.json({ workflow, steps: steps || [] });
+      const workflow = await getWorkflow(id);
+      if (!workflow) return jsonError('Workflow not found', 404);
+      return jsonOk({ workflow, steps: workflow.steps });
     }
 
-    // List all workflows
-    const { data, error } = await client
-      .from('workflows')
-      .select('id, name, description, status, current_step_index, model_id, created_at, updated_at')
-      .order('updated_at', { ascending: false });
-
-    if (error) throw new Error(`Failed to fetch workflows: ${error.message}`);
-
-    return NextResponse.json({ workflows: data });
+    const state = await getWorkflowState();
+    return jsonOk(state);
   } catch (error) {
     console.error('Workflows GET error:', error);
-    return NextResponse.json({ error: 'Failed to fetch workflows' }, { status: 500 });
+    return jsonError(error instanceof Error ? error.message : 'Failed to fetch workflows', errorStatus(error));
   }
 }
 
-// POST /api/workflows - Create a new workflow
 export async function POST(request: NextRequest) {
   try {
-    const token = request.headers.get('x-session') || undefined;
-    const client = getSupabaseClient(token);
     const body = await request.json();
+    const action = String(body.action || 'create_workflow');
 
-    const { name, description, organization_id, steps, model_id } = body;
-
-    if (!name) {
-      return NextResponse.json({ error: 'Name is required' }, { status: 400 });
+    if (action === 'create_workspace') {
+      const workspace = await createWorkspace({
+        name: String(body.name || ''),
+        description: typeof body.description === 'string' ? body.description : '',
+      });
+      return jsonOk({ workspace }, 201);
     }
 
-    // Create workflow
-    const { data: workflow, error: wfError } = await client
-      .from('workflows')
-      .insert({
-        name,
-        description,
-        organization_id,
-        model_id: model_id || 'doubao-seed-2-0-pro-260215',
-        status: 'draft',
-        created_by: 'current_user',
-      })
-      .select()
-      .single();
-
-    if (wfError) throw new Error(`Failed to create workflow: ${wfError.message}`);
-
-    // Create steps if provided
-    if (steps && steps.length > 0) {
-      const stepInserts = steps.map((step: { name: string; description?: string; skill_id?: string }, index: number) => ({
-        workflow_id: workflow.id,
-        skill_id: step.skill_id || null,
-        step_index: index,
-        name: step.name,
-        description: step.description || null,
-        status: 'pending',
-      }));
-
-      const { error: stepsError } = await client
-        .from('workflow_steps')
-        .insert(stepInserts);
-
-      if (stepsError) throw new Error(`Failed to create steps: ${stepsError.message}`);
+    if (action === 'delete_workspace') {
+      const id = String(body.id || '');
+      if (!id) return jsonError('Workspace ID is required', 400);
+      await deleteWorkspace(id);
+      return jsonOk({ success: true });
     }
 
-    // Re-fetch with steps
-    const { data: fullSteps } = await client
-      .from('workflow_steps')
-      .select('*')
-      .eq('workflow_id', workflow.id)
-      .order('step_index', { ascending: true });
+    if (action === 'create_workflow') {
+      const workflow = await createWorkflow({
+        workspaceId: String(body.workspaceId || body.workspace_id || ''),
+        name: String(body.name || ''),
+        description: typeof body.description === 'string' ? body.description : '',
+        steps: Array.isArray(body.steps) ? body.steps : [],
+      });
+      return jsonOk({ workflow, steps: workflow.steps }, 201);
+    }
 
-    return NextResponse.json({ workflow, steps: fullSteps || [] });
+    return jsonError(`Unsupported action: ${action}`, 400);
   } catch (error) {
     console.error('Workflows POST error:', error);
-    return NextResponse.json({ error: 'Failed to create workflow' }, { status: 500 });
+    return jsonError(error instanceof Error ? error.message : 'Failed to create workflow', errorStatus(error));
   }
 }
 
-// PUT /api/workflows - Update a workflow
 export async function PUT(request: NextRequest) {
   try {
-    const token = request.headers.get('x-session') || undefined;
-    const client = getSupabaseClient(token);
     const body = await request.json();
-    const { id, ...updates } = body;
+    const workflow = body.workflow || body;
 
-    if (!id) {
-      return NextResponse.json({ error: 'Workflow ID is required' }, { status: 400 });
+    if (!workflow?.id) {
+      return jsonError('Workflow ID is required', 400);
     }
 
-    const { data, error } = await client
-      .from('workflows')
-      .update({ ...updates, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select()
-      .single();
-
-    if (error) throw new Error(`Failed to update workflow: ${error.message}`);
-
-    return NextResponse.json({ workflow: data });
+    const updated = await upsertWorkflow(workflow);
+    return jsonOk({ workflow: updated, steps: updated.steps });
   } catch (error) {
     console.error('Workflows PUT error:', error);
-    return NextResponse.json({ error: 'Failed to update workflow' }, { status: 500 });
+    return jsonError(error instanceof Error ? error.message : 'Failed to update workflow', errorStatus(error));
   }
 }
 
-// DELETE /api/workflows?id=xxx
 export async function DELETE(request: NextRequest) {
   try {
-    const token = request.headers.get('x-session') || undefined;
-    const client = getSupabaseClient(token);
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
 
     if (!id) {
-      return NextResponse.json({ error: 'Workflow ID is required' }, { status: 400 });
+      return jsonError('Workflow ID is required', 400);
     }
 
-    const { error } = await client
-      .from('workflows')
-      .delete()
-      .eq('id', id);
-
-    if (error) throw new Error(`Failed to delete workflow: ${error.message}`);
-
-    return NextResponse.json({ success: true });
+    await deleteWorkflow(id);
+    return jsonOk({ success: true });
   } catch (error) {
     console.error('Workflows DELETE error:', error);
-    return NextResponse.json({ error: 'Failed to delete workflow' }, { status: 500 });
+    return jsonError(error instanceof Error ? error.message : 'Failed to delete workflow', errorStatus(error));
   }
 }
