@@ -50,6 +50,7 @@ interface Skill {
   checklist: string[];
   tags: string[];
   prompt_template?: string;
+  skill_md?: string;
   scope?: 'personal' | 'team' | 'official';
   status?: 'imported' | 'pending_review' | 'published' | 'rejected' | 'archived';
 }
@@ -597,11 +598,13 @@ export default function WorkflowsPage() {
           model_id: 'doubao-seed-2-0-pro-260215',
           skill_definition: skillDef ? {
             name: skillDef.name,
+            description: skillDef.description,
             methodology: skillDef.methodology,
             outputs: skillDef.outputs,
             checklist: skillDef.checklist,
             tools: skillDef.tools,
             prompt_template: skillDef.prompt_template,
+            skill_md: skillDef.skill_md,
           } : undefined,
           step_context: stepContext,
           selected_knowledge_bases: selectedKnowledgeBases,

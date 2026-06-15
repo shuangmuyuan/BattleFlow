@@ -13,11 +13,13 @@ interface ChatMessage {
 
 interface SkillDefinition {
   name?: string;
+  description?: string;
   methodology?: string;
   outputs?: Record<string, unknown>;
   checklist?: string[];
   tools?: string[];
   prompt_template?: string;
+  skill_md?: string;
 }
 
 interface StepContext {
@@ -73,6 +75,9 @@ function buildSystemPrompt(body: Record<string, unknown>) {
 
   if (skillDefinition) {
     systemPrompt += `\n\n## Current Skill: ${skillDefinition.name || 'Unknown'}\n`;
+    if (skillDefinition.description) {
+      systemPrompt += `\n### Skill Description\n${skillDefinition.description}\n`;
+    }
     if (skillDefinition.methodology) {
       systemPrompt += `\n### Methodology\n${skillDefinition.methodology}\n`;
     }
@@ -88,6 +93,9 @@ function buildSystemPrompt(body: Record<string, unknown>) {
     }
     if (skillDefinition.prompt_template) {
       systemPrompt += `\n### Prompt Template\n${skillDefinition.prompt_template}\n`;
+    }
+    if (skillDefinition.skill_md) {
+      systemPrompt += `\n### Full Skill Instructions\n${skillDefinition.skill_md}\n`;
     }
   }
 
