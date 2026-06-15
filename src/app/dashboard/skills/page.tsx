@@ -46,6 +46,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 type SkillScope = 'personal' | 'team' | 'official';
 type SkillSourceType = 'local' | 'registry' | 'git';
 type SkillStatus = 'imported' | 'pending_review' | 'published' | 'rejected' | 'archived';
+type VersionBump = 'patch' | 'minor' | 'major';
 
 interface SkillVersion {
   version: string;
@@ -112,6 +113,18 @@ const sourceLabels: Record<SkillSourceType, string> = {
   local: '本地导入',
   registry: '注册中心',
   git: 'Git 同步',
+};
+
+const versionBumpLabels: Record<VersionBump, string> = {
+  patch: '小修订',
+  minor: '能力增强',
+  major: '不兼容变更',
+};
+
+const versionBumpDescriptions: Record<VersionBump, string> = {
+  patch: '修正文案、提示词、模板细节或小问题，例如 1.0.0 → 1.0.1。',
+  minor: '新增能力、模板章节、工具或适用场景，例如 1.0.0 → 1.1.0。',
+  major: '改变输入输出契约、执行方式或不兼容旧用法，例如 1.0.0 → 2.0.0。',
 };
 
 const codeBlockClassName = 'w-full max-w-full min-w-0 overflow-x-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/30 p-4 font-mono';
@@ -188,6 +201,8 @@ export default function SkillsPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [serverPath, setServerPath] = useState('');
   const [importUrl, setImportUrl] = useState('');
+  const [versionBump, setVersionBump] = useState<VersionBump>('patch');
+  const [importChangelogNote, setImportChangelogNote] = useState('');
 
   const fetchSkills = useCallback(async () => {
     setLoading(true);
@@ -310,6 +325,8 @@ export default function SkillsPage() {
         const formData = new FormData();
         formData.set('action', 'import_upload');
         formData.set('scope', importScope);
+        formData.set('version_bump', versionBump);
+        formData.set('changelog_note', importChangelogNote.trim());
         formData.set('file', selectedFile);
         res = await fetch('/api/skills', { method: 'POST', body: formData });
       } else if (importSource === 'local') {
@@ -321,6 +338,8 @@ export default function SkillsPage() {
             action: 'import_path',
             path: serverPath.trim(),
             scope: importScope,
+            version_bump: versionBump,
+            changelog_note: importChangelogNote.trim(),
           }),
         });
       } else if (importSource === 'git') {
@@ -332,6 +351,8 @@ export default function SkillsPage() {
             action: 'import_git',
             url: importUrl.trim(),
             scope: importScope,
+            version_bump: versionBump,
+            changelog_note: importChangelogNote.trim(),
           }),
         });
       } else {
@@ -342,6 +363,8 @@ export default function SkillsPage() {
             action: 'import_registry',
             url: importUrl.trim(),
             scope: importScope,
+            version_bump: versionBump,
+            changelog_note: importChangelogNote.trim(),
           }),
         });
       }
@@ -354,7 +377,9 @@ export default function SkillsPage() {
       setSelectedFile(null);
       setServerPath('');
       setImportUrl('');
-      setSuccessMessage(`已导入 ${data.skills?.length || 0} 个 Skill`);
+      setImportChangelogNote('');
+      const importedSummary = (data.skills || []).map((skill) => `${skill.name} v${skill.version}`).join('、');
+      setSuccessMessage(importedSummary ? `已导入/更新 ${importedSummary}` : '未导入 Skill');
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     } finally {
@@ -412,15 +437,15 @@ export default function SkillsPage() {
               导入 Skill
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-w-2xl">
-            <DialogHeader>
+          <DialogContent className="flex max-h-[calc(100dvh-2rem)] max-w-2xl flex-col gap-0 overflow-hidden p-0">
+            <DialogHeader className="border-b border-border/40 px-6 py-5 pr-12">
               <DialogTitle>导入 Skill</DialogTitle>
               <DialogDescription>
                 支持上传 zip 包、填写远端目录路径或同步 Git 仓库。远程注册中心 API 先保留入口。
               </DialogDescription>
             </DialogHeader>
 
-            <FieldGroup className="gap-5">
+            <FieldGroup className="min-h-0 flex-1 gap-5 overflow-y-auto px-6 py-4">
               <Field>
                 <FieldLabel>导入目标</FieldLabel>
                 <ToggleGroup
@@ -497,6 +522,36 @@ export default function SkillsPage() {
                     </Alert>
                   </TabsContent>
                 </Tabs>
+              </Field>
+
+              <Field>
+                <FieldLabel>版本更新方式</FieldLabel>
+                <ToggleGroup
+                  type="single"
+                  value={versionBump}
+                  onValueChange={(value) => value && setVersionBump(value as VersionBump)}
+                  className="flex-wrap justify-start"
+                >
+                  <ToggleGroupItem value="patch">小修订</ToggleGroupItem>
+                  <ToggleGroupItem value="minor">能力增强</ToggleGroupItem>
+                  <ToggleGroupItem value="major">不兼容变更</ToggleGroupItem>
+                </ToggleGroup>
+                <FieldDescription>
+                  新 Skill 首次导入保留包内版本；如果导入包与已有 Skill ID 相同，平台会自动按“{versionBumpLabels[versionBump]}”递增版本号，{versionBumpDescriptions[versionBump]}
+                </FieldDescription>
+              </Field>
+
+              <Field>
+                <FieldLabel htmlFor="skill-changelog">变更说明</FieldLabel>
+                <Textarea
+                  id="skill-changelog"
+                  placeholder="例如：补充 TR1 AI 上下文输出规则，优化 Story 验收标准模板。"
+                  value={importChangelogNote}
+                  onChange={(event) => setImportChangelogNote(event.target.value)}
+                />
+                <FieldDescription>
+                  当本次导入更新已有 Skill 时，会写入版本历史；留空时平台自动生成一条升级说明。
+                </FieldDescription>
               </Field>
 
               {errorMessage && (

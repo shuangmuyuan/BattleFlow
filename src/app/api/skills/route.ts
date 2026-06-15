@@ -12,6 +12,7 @@ import {
   requestSkillReview,
   rollbackSkill,
   type SkillScope,
+  type SkillVersionBump,
 } from '@/lib/skill-registry';
 
 export const runtime = 'nodejs';
@@ -41,6 +42,14 @@ function getScope(value: unknown): SkillScope {
 
 function importStatusForScope(scope: SkillScope) {
   return scope === 'team' ? 'pending_review' : 'imported';
+}
+
+function getVersionBump(value: unknown): SkillVersionBump {
+  return value === 'minor' || value === 'major' || value === 'patch' ? value : 'patch';
+}
+
+function getChangelogNote(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 // GET /api/skills - list, detail, or markdown download
@@ -92,10 +101,14 @@ export async function POST(request: NextRequest) {
       if (!(file instanceof File)) return jsonError('A zip file is required', 400);
 
       const scope = getScope(formData.get('scope'));
+      const versionBump = getVersionBump(formData.get('version_bump'));
+      const changelogNote = getChangelogNote(formData.get('changelog_note'));
       const skills = await importSkillFromUpload(file, {
         scope,
         sourceType: 'local',
         status: importStatusForScope(scope),
+        versionBump,
+        changelogNote,
       });
       return jsonOk({ skills });
     }
@@ -107,11 +120,15 @@ export async function POST(request: NextRequest) {
       const inputPath = String(body.path || '').trim();
       if (!inputPath) return jsonError('path is required', 400);
       const scope = getScope(body.scope);
+      const versionBump = getVersionBump(body.version_bump);
+      const changelogNote = getChangelogNote(body.changelog_note);
       const skills = await importSkillFromPath(inputPath, {
         scope,
         sourceType: 'local',
         sourceUri: inputPath,
         status: importStatusForScope(scope),
+        versionBump,
+        changelogNote,
       });
       return jsonOk({ skills });
     }
@@ -120,11 +137,15 @@ export async function POST(request: NextRequest) {
       const url = String(body.url || '').trim();
       if (!url) return jsonError('url is required', 400);
       const scope = getScope(body.scope);
+      const versionBump = getVersionBump(body.version_bump);
+      const changelogNote = getChangelogNote(body.changelog_note);
       const skills = await importSkillFromGit(url, {
         scope,
         sourceType: 'git',
         sourceUri: url,
         status: importStatusForScope(scope),
+        versionBump,
+        changelogNote,
       });
       return jsonOk({ skills });
     }

@@ -9,6 +9,7 @@ const execFile = promisify(execFileCallback);
 export type SkillScope = 'personal' | 'team' | 'official';
 export type SkillSourceType = 'local' | 'registry' | 'git';
 export type SkillStatus = 'imported' | 'pending_review' | 'published' | 'rejected' | 'archived';
+export type SkillVersionBump = 'patch' | 'minor' | 'major';
 
 export interface SkillVersion {
   version: string;
@@ -65,6 +66,8 @@ interface ImportOptions {
   sourceType?: SkillSourceType;
   sourceUri?: string;
   status?: SkillStatus;
+  versionBump?: SkillVersionBump;
+  changelogNote?: string;
 }
 
 const cwd = process.cwd();
@@ -120,6 +123,29 @@ function getStatus(value: unknown, fallback: SkillStatus): SkillStatus {
   return value === 'imported' || value === 'pending_review' || value === 'published' || value === 'rejected' || value === 'archived'
     ? value
     : fallback;
+}
+
+function getVersionBump(value: unknown, fallback: SkillVersionBump = 'patch'): SkillVersionBump {
+  return value === 'major' || value === 'minor' || value === 'patch' ? value : fallback;
+}
+
+function bumpSemver(version: string, bump: SkillVersionBump) {
+  const match = version.match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return '1.0.0';
+
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  const patch = Number(match[3]);
+
+  if (bump === 'major') return `${major + 1}.0.0`;
+  if (bump === 'minor') return `${major}.${minor + 1}.0`;
+  return `${major}.${minor}.${patch + 1}`;
+}
+
+function versionBumpLabel(bump: SkillVersionBump) {
+  if (bump === 'major') return '不兼容变更';
+  if (bump === 'minor') return '能力增强';
+  return '小修订';
 }
 
 function parseFrontmatter(markdown: string): { metadata: Record<string, unknown>; body: string } {
@@ -492,40 +518,63 @@ async function resolveImportRecordId(skill: SkillRecord, index: SkillIndex) {
   };
 }
 
-async function upsertSkill(skill: SkillRecord, packagePath?: string) {
+async function upsertSkill(skill: SkillRecord, packagePath?: string, options: ImportOptions = {}) {
   const index = await readIndex();
   const nextRecord = await resolveImportRecordId(skill, index);
   const existing = index.skills.find((item) => item.id === nextRecord.id);
-  let storedPackagePath = packagePath || nextRecord.versions[0]?.package_path;
+  const shouldBumpVersion = Boolean(existing && options.versionBump);
+  const versionBump = getVersionBump(options.versionBump);
+  const changelogNote = getString(options.changelogNote);
+  const updatedAt = nowIso();
+  const nextVersion = shouldBumpVersion && existing ? bumpSemver(existing.version, versionBump) : nextRecord.version;
+  const effectiveRecord: SkillRecord = existing
+    ? {
+        ...nextRecord,
+        version: nextVersion,
+        meta_json: {
+          ...nextRecord.meta_json,
+          version: nextVersion,
+        },
+        changelog: nextRecord.changelog,
+        created_at: existing.created_at,
+        updated_at: updatedAt,
+      }
+    : nextRecord;
+  let storedPackagePath = packagePath || effectiveRecord.versions[0]?.package_path;
 
   if (packagePath) {
-    storedPackagePath = await copyPackage(packagePath, nextRecord);
+    storedPackagePath = await copyPackage(packagePath, effectiveRecord);
   }
 
+  const versionChangelog = existing
+    ? shouldBumpVersion
+      ? changelogNote || `${versionBumpLabel(versionBump)}：平台自动从 v${existing.version} 升级到 v${effectiveRecord.version}。`
+      : effectiveRecord.versions[0]?.changelog || existing.versions[0]?.changelog || '更新当前记录。'
+    : effectiveRecord.versions[0]?.changelog || '导入当前版本。';
   const versionPayload = {
-    version: nextRecord.version,
-    updated_at: nextRecord.updated_at,
-    changelog: nextRecord.versions[0]?.changelog || '导入当前版本。',
+    version: effectiveRecord.version,
+    updated_at: effectiveRecord.updated_at,
+    changelog: versionChangelog,
     package_path: storedPackagePath,
-    skill_md: nextRecord.skill_md,
-    meta_json: nextRecord.meta_json,
+    skill_md: effectiveRecord.skill_md,
+    meta_json: effectiveRecord.meta_json,
   };
 
   const nextSkill: SkillRecord = {
-    ...nextRecord,
+    ...effectiveRecord,
     versions: existing
       ? [
           versionPayload,
-          ...existing.versions.filter((item) => item.version !== nextRecord.version),
+          ...existing.versions.filter((item) => item.version !== effectiveRecord.version),
         ]
       : [
           versionPayload,
-          ...nextRecord.versions.filter((item) => item.version !== nextRecord.version),
+          ...effectiveRecord.versions.filter((item) => item.version !== effectiveRecord.version),
         ],
   };
 
   const nextSkills = existing
-    ? index.skills.map((item) => (item.id === nextRecord.id ? nextSkill : item))
+    ? index.skills.map((item) => (item.id === effectiveRecord.id ? nextSkill : item))
     : [...index.skills, nextSkill];
 
   await writeIndex({ skills: nextSkills });
@@ -553,14 +602,15 @@ async function importRegistryDirectory(registryPath: string, options: ImportOpti
     const entryScope = options.scope || getScope(item.scope, 'personal');
     const entrySourceType = options.sourceType || getSourceType(item.source_type, 'local');
     const entryStatus = options.status || getStatus(item.status, entryScope === 'team' ? 'pending_review' : 'imported');
-    const skill = await loadSkillFromPackage(packagePath, {
+    const entryOptions = {
       ...options,
       scope: entryScope,
       sourceType: entrySourceType,
       sourceUri: options.sourceUri || getString(item.source_uri, packagePath),
       status: entryStatus,
-    });
-    imported.push(await upsertSkill(skill, packagePath));
+    };
+    const skill = await loadSkillFromPackage(packagePath, entryOptions);
+    imported.push(await upsertSkill(skill, packagePath, entryOptions));
   }
 
   return imported;
@@ -597,7 +647,7 @@ async function importClaudePluginDirectory(root: string, options: ImportOptions)
       ...options,
       sourceUri: sourceUriForPackage(root, packagePath, options),
     });
-    imported.push(await upsertSkill(skill, packagePath));
+    imported.push(await upsertSkill(skill, packagePath, options));
   }
 
   return imported;
@@ -615,7 +665,7 @@ async function importSkillDirectory(inputPath: string, options: ImportOptions = 
 
   if (await hasSkillPackageFiles(packagePath)) {
     const skill = await loadSkillFromPackage(packagePath, options);
-    return [await upsertSkill(skill, packagePath)];
+    return [await upsertSkill(skill, packagePath, options)];
   }
 
   const packageDirs = await findSkillPackageDirectories(packagePath);
@@ -626,7 +676,7 @@ async function importSkillDirectory(inputPath: string, options: ImportOptions = 
         ...options,
         sourceUri: sourceUriForPackage(packagePath, packageDir, options),
       });
-      imported.push(await upsertSkill(skill, packageDir));
+      imported.push(await upsertSkill(skill, packageDir, options));
     }
     return imported;
   }
