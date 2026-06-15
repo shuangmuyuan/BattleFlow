@@ -1391,8 +1391,8 @@ export default function WorkflowsPage() {
 
         {/* Edit Workflow Dialog */}
         <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-          <DialogContent className="max-w-3xl">
-            <DialogHeader>
+          <DialogContent className="flex max-w-3xl flex-col gap-0 overflow-hidden p-0">
+            <DialogHeader className="border-b border-border/40 px-6 py-5 pr-12">
               <DialogTitle>编辑工作流</DialogTitle>
               <DialogDescription>
                 已有人执行过的步骤会软删除保留，可随时原样恢复，不破坏历史产物。
@@ -1400,7 +1400,7 @@ export default function WorkflowsPage() {
             </DialogHeader>
 
             {editingWorkflow && (
-              <div className="space-y-5 mt-4">
+              <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-4">
                 <div>
                   <h3 className="text-sm font-medium">{editingWorkflow.name}</h3>
                   <p className="text-xs text-muted-foreground mt-1">{editingWorkflow.description}</p>
