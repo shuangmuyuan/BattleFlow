@@ -49,6 +49,7 @@ interface Skill {
   outputs: Record<string, unknown>;
   checklist: string[];
   tags: string[];
+  prompt_template?: string;
   scope?: 'personal' | 'team' | 'official';
   status?: 'imported' | 'pending_review' | 'published' | 'rejected' | 'archived';
 }
@@ -592,6 +593,7 @@ export default function WorkflowsPage() {
             role: m.role,
             content: m.content,
           })),
+          agent_provider: 'claude-cli',
           model_id: 'doubao-seed-2-0-pro-260215',
           skill_definition: skillDef ? {
             name: skillDef.name,
@@ -599,6 +601,7 @@ export default function WorkflowsPage() {
             outputs: skillDef.outputs,
             checklist: skillDef.checklist,
             tools: skillDef.tools,
+            prompt_template: skillDef.prompt_template,
           } : undefined,
           step_context: stepContext,
           selected_knowledge_bases: selectedKnowledgeBases,
@@ -624,24 +627,26 @@ export default function WorkflowsPage() {
 
         for (const line of lines) {
           if (line.startsWith('data: ')) {
+            let data: { content?: string; done?: boolean; error?: string };
             try {
-              const data = JSON.parse(line.slice(6));
-              if (data.content) {
-                assistantContent += data.content;
-                setChatMessages((prev) => {
-                  const newMessages = [...prev];
-                  newMessages[newMessages.length - 1] = {
-                    role: 'assistant',
-                    content: assistantContent,
-                  };
-                  return newMessages;
-                });
-              }
-              if (data.done) break;
-              if (data.error) throw new Error(data.error);
+              data = JSON.parse(line.slice(6));
             } catch {
               // Skip non-JSON lines
+              continue;
             }
+            if (data.error) throw new Error(data.error);
+            if (data.content) {
+              assistantContent += data.content;
+              setChatMessages((prev) => {
+                const newMessages = [...prev];
+                newMessages[newMessages.length - 1] = {
+                  role: 'assistant',
+                  content: assistantContent,
+                };
+                return newMessages;
+              });
+            }
+            if (data.done) break;
           }
         }
       }
