@@ -8,11 +8,12 @@ const layoutContracts = [
     name: 'Dashboard shell mobile containment',
     file: 'src/app/dashboard/layout.tsx',
     requiredTokens: [
-      'overflow-x-hidden',
+      'h-screen min-w-0 overflow-hidden',
       'md:hidden',
       'md:flex',
       'overflow-x-auto',
-      'min-w-0 flex-1 overflow-hidden',
+      'h-screen min-h-0 min-w-0 flex-1 flex-col overflow-hidden',
+      'min-h-0 min-w-0 flex-1 overflow-hidden',
     ],
   },
   {
@@ -25,6 +26,49 @@ const layoutContracts = [
       'lg:w-80',
       'min-h-[70vh]',
       'sm:flex-row',
+    ],
+  },
+  {
+    name: 'Dashboard overview internal scroll',
+    file: 'src/app/dashboard/page.tsx',
+    requiredTokens: [
+      'h-full min-h-0',
+      'overflow-auto',
+    ],
+  },
+  {
+    name: 'Skill registry internal scroll',
+    file: 'src/app/dashboard/skills/page.tsx',
+    requiredTokens: [
+      'flex h-full min-h-0 flex-col',
+      'shrink-0 border-b',
+      'min-h-0 flex-1 overflow-auto',
+    ],
+  },
+  {
+    name: 'Workflow list internal scroll',
+    file: 'src/app/dashboard/workflows/page.tsx',
+    requiredTokens: [
+      'flex h-full min-h-0 flex-col',
+      'shrink-0 border-b',
+      'min-h-0 flex-1 overflow-auto',
+    ],
+  },
+  {
+    name: 'Knowledge base internal scroll',
+    file: 'src/app/dashboard/knowledge/page.tsx',
+    requiredTokens: [
+      'flex h-full min-h-0 flex-col',
+      'shrink-0 border-b',
+      'min-h-0 flex-1 overflow-auto',
+    ],
+  },
+  {
+    name: 'Demo generator internal scroll',
+    file: 'src/app/dashboard/demos/page.tsx',
+    requiredTokens: [
+      'h-full min-h-0',
+      'overflow-auto',
     ],
   },
 ];

@@ -47,7 +47,7 @@ export default function DashboardPage() {
   ];
 
   return (
-    <div className="p-6 space-y-8">
+    <div className="h-full min-h-0 space-y-8 overflow-auto p-6">
       {/* Welcome */}
       <div>
         <h1 className="text-2xl font-bold tracking-tight">欢迎回来</h1>

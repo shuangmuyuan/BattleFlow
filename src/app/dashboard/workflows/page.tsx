@@ -1032,8 +1032,8 @@ export default function WorkflowsPage() {
       : null;
 
     return (
-      <div className="flex flex-col h-full">
-        <div className="flex items-center justify-between p-6 border-b border-border/40">
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="shrink-0 border-b border-border/40 p-6">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">工作流</h1>
             <p className="text-muted-foreground text-sm mt-1">先建立工作目录，再在目录内创建规划工作流</p>
@@ -1046,7 +1046,7 @@ export default function WorkflowsPage() {
           </div>
         )}
 
-        <div className="border-b border-border/40 px-6 py-4">
+        <div className="shrink-0 border-b border-border/40 px-6 py-4">
           <div className="mb-3 flex items-center justify-between">
             <div>
               <h2 className="text-sm font-semibold">1. 工作目录</h2>
@@ -1140,7 +1140,7 @@ export default function WorkflowsPage() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-auto p-6">
+        <div className="min-h-0 flex-1 overflow-auto p-6">
           {!activeWorkspace ? (
             <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
               <Plus className="mb-4 h-12 w-12 opacity-30" />

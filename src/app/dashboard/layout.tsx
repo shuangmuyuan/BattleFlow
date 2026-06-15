@@ -100,12 +100,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <div className="flex min-h-screen min-w-0 overflow-x-hidden bg-background">
+    <div className="flex h-screen min-w-0 overflow-hidden bg-background">
       {/* Sidebar */}
       <aside
         className={`${
           collapsed ? 'w-16' : 'w-60'
-        } sticky top-0 hidden h-screen shrink-0 flex-col border-r border-border bg-sidebar transition-all duration-200 md:flex`}
+        } hidden h-screen shrink-0 flex-col border-r border-border bg-sidebar transition-all duration-200 md:flex`}
       >
         {/* Logo area */}
         <div className="h-14 flex items-center justify-between px-4 border-b border-border">
@@ -219,7 +219,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </aside>
 
       {/* Main content */}
-      <main className="flex min-h-screen min-w-0 flex-1 flex-col">
+      <main className="flex h-screen min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-card/50 px-4 md:px-6">
           <div className="flex min-w-0 items-center gap-2">
             <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-brand/15 text-brand md:hidden">
@@ -256,7 +256,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
         </div>
 
-        <div className="min-w-0 flex-1 overflow-hidden p-3 md:p-6">
+        <div className="min-h-0 min-w-0 flex-1 overflow-hidden p-3 md:p-6">
           {children}
         </div>
       </main>

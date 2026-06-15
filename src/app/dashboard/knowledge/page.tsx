@@ -161,8 +161,8 @@ export default function KnowledgePage() {
   };
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between p-6 border-b border-border/40">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0 border-b border-border/40 p-6">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">知识库</h1>
           <p className="text-muted-foreground text-sm mt-1">管理和检索规划过程中的知识资产</p>
@@ -179,7 +179,7 @@ export default function KnowledgePage() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="min-h-0 flex-1 overflow-auto p-6">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="mb-6">
             <TabsTrigger value="bases">知识库列表</TabsTrigger>
