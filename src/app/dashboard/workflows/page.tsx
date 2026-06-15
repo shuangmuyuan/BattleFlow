@@ -383,11 +383,11 @@ export default function WorkflowsPage() {
   const getStepIcon = (status: string) => {
     switch (status) {
       case 'completed':
-        return <CheckCircle2 className="h-5 w-5 text-emerald-500" />;
+        return <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500" />;
       case 'in_progress':
-        return <Clock className="h-5 w-5 text-blue-500 animate-pulse" />;
+        return <Clock className="h-5 w-5 shrink-0 animate-pulse text-blue-500" />;
       default:
-        return <Circle className="h-5 w-5 text-muted-foreground" />;
+        return <Circle className="h-5 w-5 shrink-0 text-muted-foreground" />;
     }
   };
 
@@ -1152,79 +1152,101 @@ export default function WorkflowsPage() {
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {workspaceWorkflows.map((wf) => (
-                <Card
-                  key={wf.id}
-                  className="cursor-pointer hover:shadow-md transition-shadow"
-                  onClick={() => openWorkflow(wf)}
-                >
-                  <CardHeader className="pb-3">
-                    <div className="flex items-center justify-between">
-                      <CardTitle className="text-base">{wf.name}</CardTitle>
-                      <div className="flex items-center gap-2">
-                        <Badge
-                          variant={wf.status === 'completed' ? 'default' : wf.status === 'in_progress' ? 'secondary' : 'outline'}
-                        >
-                          {wf.status === 'completed' ? '已完成' : wf.status === 'in_progress' ? '进行中' : '草稿'}
-                        </Badge>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-7 gap-1 px-2 text-xs"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            openWorkflow(wf);
-                          }}
-                        >
-                          <Play className="h-3.5 w-3.5" />
-                          进入
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 gap-1 px-2 text-xs"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            handleOpenEditWorkflow(wf);
-                          }}
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                          编辑
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 gap-1 px-2 text-xs"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            handleCloneWorkflow(wf);
-                          }}
-                        >
-                          <Copy className="h-3.5 w-3.5" />
-                          克隆
-                        </Button>
-                      </div>
-                    </div>
-                    <p className="text-sm text-muted-foreground">{wf.description}</p>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="flex items-center gap-1">
-                      {getVisibleSteps(wf).map((step, idx, steps) => (
-                        <div key={step.id} className="flex items-center">
-                          {getStepIcon(step.status)}
-                          {idx < steps.length - 1 && <ArrowRight className="h-3 w-3 mx-1 text-muted-foreground" />}
+              {workspaceWorkflows.map((wf) => {
+                const visibleSteps = getVisibleSteps(wf);
+                const removedStepCount = wf.steps.filter((step) => step.isRemoved).length;
+                const completedStepCount = visibleSteps.filter((step) => step.status === 'completed').length;
+                const compactSteps = visibleSteps.length > 6
+                  ? visibleSteps.slice(0, 5)
+                  : visibleSteps;
+                const trailingStep = visibleSteps.length > 6 ? visibleSteps[visibleSteps.length - 1] : null;
+                const hiddenStepCount = visibleSteps.length - compactSteps.length - (trailingStep ? 1 : 0);
+                const progressItems = trailingStep ? [...compactSteps, trailingStep] : compactSteps;
+
+                return (
+                  <Card
+                    key={wf.id}
+                    className="min-w-0 cursor-pointer overflow-hidden transition-shadow hover:shadow-md"
+                    onClick={() => openWorkflow(wf)}
+                  >
+                    <CardHeader className="pb-3">
+                      <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+                        <CardTitle className="min-w-24 flex-1 truncate text-base">{wf.name}</CardTitle>
+                        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                          <Badge
+                            variant={wf.status === 'completed' ? 'default' : wf.status === 'in_progress' ? 'secondary' : 'outline'}
+                          >
+                            {wf.status === 'completed' ? '已完成' : wf.status === 'in_progress' ? '进行中' : '草稿'}
+                          </Badge>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 gap-1 px-2 text-xs"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openWorkflow(wf);
+                            }}
+                          >
+                            <Play className="h-3.5 w-3.5" />
+                            进入
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 gap-1 px-2 text-xs"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleOpenEditWorkflow(wf);
+                            }}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                            编辑
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 gap-1 px-2 text-xs"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleCloneWorkflow(wf);
+                            }}
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                            克隆
+                          </Button>
                         </div>
-                      ))}
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-2">
-                      {getVisibleSteps(wf).filter((s) => s.status === 'completed').length}/{getVisibleSteps(wf).length} 步骤已完成
-                      {wf.steps.some((step) => step.isRemoved) && (
-                        <span className="ml-2">已移除 {wf.steps.filter((step) => step.isRemoved).length} 个</span>
-                      )}
-                    </p>
-                  </CardContent>
-                </Card>
-              ))}
+                      </div>
+                      <p className="truncate text-sm text-muted-foreground">{wf.description}</p>
+                    </CardHeader>
+                    <CardContent className="min-w-0 overflow-hidden">
+                      <div className="flex max-w-full flex-wrap items-center gap-x-1 gap-y-1">
+                        {progressItems.map((step, idx) => (
+                          <div key={step.id} className="flex shrink-0 items-center">
+                            {idx === compactSteps.length && hiddenStepCount > 0 && (
+                              <>
+                                <ArrowRight className="mx-1 h-3 w-3 shrink-0 text-muted-foreground" />
+                                <Badge variant="outline" className="h-5 px-1.5 text-[11px]">
+                                  +{hiddenStepCount}
+                                </Badge>
+                              </>
+                            )}
+                            {(idx > 0 || (idx === compactSteps.length && hiddenStepCount > 0)) && (
+                              <ArrowRight className="mx-1 h-3 w-3 shrink-0 text-muted-foreground" />
+                            )}
+                            {getStepIcon(step.status)}
+                          </div>
+                        ))}
+                      </div>
+                      <p className="mt-2 truncate text-xs text-muted-foreground">
+                        {completedStepCount}/{visibleSteps.length} 步骤已完成
+                        {removedStepCount > 0 && (
+                          <span className="ml-2">已移除 {removedStepCount} 个</span>
+                        )}
+                      </p>
+                    </CardContent>
+                  </Card>
+                );
+              })}
             </div>
           )}
         </div>
