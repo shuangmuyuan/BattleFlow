@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -47,7 +47,7 @@ export default function DashboardPage() {
   ];
 
   return (
-    <div className="h-full min-h-0 space-y-8 overflow-auto p-6">
+    <div className="flex h-full min-h-0 flex-col gap-8 overflow-auto p-4 md:p-6">
       {/* Welcome */}
       <div>
         <h1 className="text-2xl font-bold tracking-tight">欢迎回来</h1>
@@ -55,7 +55,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <Card className="border-border/60">
           <CardContent className="p-4 flex items-center gap-3">
             <div className="p-2 rounded-lg bg-primary/10">
@@ -114,15 +114,15 @@ export default function DashboardPage() {
       </div>
 
       {/* Quick Actions */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <Link href="/dashboard/workflows">
           <Card className="border-border/60 hover:shadow-md transition-shadow cursor-pointer group">
-            <CardContent className="p-6 flex items-center justify-between">
-              <div className="flex items-center gap-3">
+            <CardContent className="flex min-w-0 items-center justify-between gap-4 p-6">
+              <div className="flex min-w-0 items-center gap-3">
                 <div className="p-3 rounded-lg bg-primary/10">
                   <Play className="h-6 w-6 text-primary" />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <p className="font-semibold">新建工作流</p>
                   <p className="text-sm text-muted-foreground">编排 Skill 产出 PRD</p>
                 </div>
@@ -133,12 +133,12 @@ export default function DashboardPage() {
         </Link>
         <Link href="/dashboard/skills">
           <Card className="border-border/60 hover:shadow-md transition-shadow cursor-pointer group">
-            <CardContent className="p-6 flex items-center justify-between">
-              <div className="flex items-center gap-3">
+            <CardContent className="flex min-w-0 items-center justify-between gap-4 p-6">
+              <div className="flex min-w-0 items-center gap-3">
                 <div className="p-3 rounded-lg bg-blue-500/10">
                   <FileCode2 className="h-6 w-6 text-blue-500" />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <p className="font-semibold">管理 Skills</p>
                   <p className="text-sm text-muted-foreground">导入和更新 Skill</p>
                 </div>
@@ -149,12 +149,12 @@ export default function DashboardPage() {
         </Link>
         <Link href="/dashboard/knowledge">
           <Card className="border-border/60 hover:shadow-md transition-shadow cursor-pointer group">
-            <CardContent className="p-6 flex items-center justify-between">
-              <div className="flex items-center gap-3">
+            <CardContent className="flex min-w-0 items-center justify-between gap-4 p-6">
+              <div className="flex min-w-0 items-center gap-3">
                 <div className="p-3 rounded-lg bg-emerald-500/10">
                   <BookOpen className="h-6 w-6 text-emerald-500" />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <p className="font-semibold">知识库</p>
                   <p className="text-sm text-muted-foreground">管理和检索知识</p>
                 </div>
@@ -166,21 +166,21 @@ export default function DashboardPage() {
       </div>
 
       {/* Recent Workflows & Skills */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card className="border-border/60">
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">最近工作流</CardTitle>
-              <Link href="/dashboard/workflows">
-                <Button variant="ghost" size="sm">查看全部</Button>
-              </Link>
+              <Button variant="ghost" size="sm" asChild>
+                <Link href="/dashboard/workflows">查看全部</Link>
+              </Button>
             </div>
           </CardHeader>
           <CardContent>
-            <div className="space-y-3">
+            <div className="flex flex-col gap-3">
               {recentWorkflows.map((wf) => (
-                <div key={wf.id} className="flex items-center justify-between p-3 rounded-lg hover:bg-muted/50 transition-colors">
-                  <div className="flex items-center gap-3">
+                <div key={wf.id} className="flex min-w-0 flex-col gap-3 rounded-lg p-3 transition-colors hover:bg-muted/50 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex min-w-0 items-center gap-3">
                     {wf.status === 'completed' ? (
                       <CheckCircle2 className="h-4 w-4 text-emerald-500" />
                     ) : wf.status === 'in_progress' ? (
@@ -188,8 +188,8 @@ export default function DashboardPage() {
                     ) : (
                       <Play className="h-4 w-4 text-muted-foreground" />
                     )}
-                    <div>
-                      <p className="text-sm font-medium">{wf.name}</p>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{wf.name}</p>
                       <p className="text-xs text-muted-foreground">
                         {wf.completedSteps}/{wf.steps} 步骤完成 · {wf.updatedAt}
                       </p>
@@ -208,19 +208,19 @@ export default function DashboardPage() {
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">最近使用的 Skills</CardTitle>
-              <Link href="/dashboard/skills">
-                <Button variant="ghost" size="sm">查看全部</Button>
-              </Link>
+              <Button variant="ghost" size="sm" asChild>
+                <Link href="/dashboard/skills">查看全部</Link>
+              </Button>
             </div>
           </CardHeader>
           <CardContent>
-            <div className="space-y-3">
+            <div className="flex flex-col gap-3">
               {recentSkills.map((skill) => (
-                <div key={skill.id} className="flex items-center justify-between p-3 rounded-lg hover:bg-muted/50 transition-colors">
-                  <div className="flex items-center gap-3">
+                <div key={skill.id} className="flex min-w-0 items-center justify-between gap-3 rounded-lg p-3 transition-colors hover:bg-muted/50">
+                  <div className="flex min-w-0 items-center gap-3">
                     <FileCode2 className="h-4 w-4 text-muted-foreground" />
-                    <div>
-                      <p className="text-sm font-medium">{skill.name}</p>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{skill.name}</p>
                       <p className="text-xs text-muted-foreground">v{skill.version}</p>
                     </div>
                   </div>

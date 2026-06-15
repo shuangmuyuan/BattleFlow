@@ -10,6 +10,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
@@ -21,9 +22,10 @@ import {
   ExternalLink,
   Database,
   Clock,
-  Trash2,
 } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Textarea } from '@/components/ui/textarea';
+import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
 
 interface KnowledgeBase {
   id: string;
@@ -162,12 +164,12 @@ export default function KnowledgePage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 border-b border-border/40 p-6">
-        <div>
+      <div className="flex shrink-0 flex-col gap-4 border-b border-border/40 p-4 sm:flex-row sm:items-center sm:justify-between md:p-6">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold tracking-tight">知识库</h1>
           <p className="text-muted-foreground text-sm mt-1">管理和检索规划过程中的知识资产</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row">
           <Button variant="outline" className="gap-2" onClick={() => setActiveTab('search')}>
             <Search className="h-4 w-4" />
             语义检索
@@ -179,7 +181,7 @@ export default function KnowledgePage() {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto p-6">
+      <div className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="mb-6">
             <TabsTrigger value="bases">知识库列表</TabsTrigger>
@@ -191,16 +193,16 @@ export default function KnowledgePage() {
               {knowledgeBases.map((kb) => (
                 <Card key={kb.id} className="border-border/60 hover:shadow-md transition-shadow">
                   <CardHeader className="pb-3">
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-2">
+                    <div className="flex min-w-0 items-start justify-between gap-3">
+                      <div className="flex min-w-0 items-center gap-2">
                         {kb.source_type === 'builtin' ? (
                           <Database className="h-4 w-4 text-primary" />
                         ) : (
                           <ExternalLink className="h-4 w-4 text-blue-500" />
                         )}
-                        <CardTitle className="text-base">{kb.name}</CardTitle>
+                        <CardTitle className="truncate text-base">{kb.name}</CardTitle>
                       </div>
-                      <Badge variant={kb.source_type === 'builtin' ? 'secondary' : 'outline'}>
+                      <Badge className="shrink-0" variant={kb.source_type === 'builtin' ? 'secondary' : 'outline'}>
                         {kb.source_type === 'builtin' ? '内置' : '外部'}
                       </Badge>
                     </div>
@@ -244,9 +246,9 @@ export default function KnowledgePage() {
           </TabsContent>
 
           <TabsContent value="search">
-            <div className="max-w-2xl mx-auto space-y-6">
-              <div className="flex gap-2">
-                <div className="relative flex-1">
+            <div className="mx-auto flex max-w-2xl flex-col gap-6">
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <div className="relative min-w-0 flex-1">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
                     placeholder="输入关键词或自然语言描述来检索知识库..."
@@ -256,7 +258,7 @@ export default function KnowledgePage() {
                     onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
                   />
                 </div>
-                <Button onClick={handleSearch} disabled={isSearching}>
+                <Button className="sm:w-auto" onClick={handleSearch} disabled={isSearching}>
                   {isSearching ? '检索中...' : '检索'}
                 </Button>
               </div>
@@ -291,28 +293,30 @@ export default function KnowledgePage() {
 
       {/* Create Knowledge Base Dialog */}
       <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-        <DialogContent>
+        <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>新建知识库</DialogTitle>
             <DialogDescription>创建内置知识库或对接外部知识库服务</DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 mt-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">名称</label>
+          <FieldGroup className="min-h-0 flex-1 gap-4 overflow-y-auto pr-1">
+            <Field>
+              <FieldLabel htmlFor="knowledge-name">名称</FieldLabel>
               <Input
+                id="knowledge-name"
                 placeholder="如：产品历史文档"
                 value={newKbName}
                 onChange={(e) => setNewKbName(e.target.value)}
               />
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">描述</label>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="knowledge-description">描述</FieldLabel>
               <Input
+                id="knowledge-description"
                 placeholder="简要描述知识库内容"
                 value={newKbDesc}
                 onChange={(e) => setNewKbDesc(e.target.value)}
               />
-            </div>
+            </Field>
             <Tabs value={newKbSource} onValueChange={(v) => setNewKbSource(v as 'builtin' | 'external')}>
               <TabsList className="grid w-full grid-cols-2">
                 <TabsTrigger value="builtin">内置知识库</TabsTrigger>
@@ -320,43 +324,49 @@ export default function KnowledgePage() {
               </TabsList>
             </Tabs>
             {newKbSource === 'external' && (
-              <div className="space-y-2">
-                <label className="text-sm font-medium">外部服务 URL</label>
+              <Field>
+                <FieldLabel htmlFor="knowledge-url">外部服务 URL</FieldLabel>
                 <Input
+                  id="knowledge-url"
                   placeholder="https://your-knowledge-base.example.com/api"
                   value={newKbUrl}
                   onChange={(e) => setNewKbUrl(e.target.value)}
                 />
-              </div>
+              </Field>
             )}
-            <Button className="w-full" onClick={handleCreateKb} disabled={!newKbName}>
+          </FieldGroup>
+          <DialogFooter>
+            <Button className="w-full sm:w-auto" onClick={handleCreateKb} disabled={!newKbName}>
               创建知识库
             </Button>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
       {/* Upload Document Dialog */}
       <Dialog open={uploadDialogOpen} onOpenChange={setUploadDialogOpen}>
-        <DialogContent>
+        <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>上传文档到「{selectedKb?.name}」</DialogTitle>
             <DialogDescription>将文档内容添加到知识库中</DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 mt-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">文档内容</label>
-              <textarea
-                className="w-full min-h-[200px] p-3 text-sm border rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+          <FieldGroup className="min-h-0 flex-1 gap-4 overflow-y-auto pr-1">
+            <Field>
+              <FieldLabel htmlFor="knowledge-upload-content">文档内容</FieldLabel>
+              <Textarea
+                id="knowledge-upload-content"
+                className="min-h-[200px] resize-none"
                 placeholder="粘贴文档内容..."
                 value={uploadContent}
                 onChange={(e) => setUploadContent(e.target.value)}
               />
-            </div>
-            <Button className="w-full" onClick={handleUpload} disabled={!uploadContent}>
+            </Field>
+          </FieldGroup>
+          <DialogFooter>
+            <Button className="w-full sm:w-auto" onClick={handleUpload} disabled={!uploadContent}>
               上传文档
             </Button>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

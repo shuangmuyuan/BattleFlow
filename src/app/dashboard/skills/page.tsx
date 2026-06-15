@@ -425,14 +425,14 @@ export default function SkillsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 border-b border-border/40 p-6">
-        <div>
+      <div className="flex shrink-0 flex-col gap-4 border-b border-border/40 p-4 sm:flex-row sm:items-center sm:justify-between md:p-6">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold tracking-tight">Skill 仓库</h1>
           <p className="mt-1 text-sm text-muted-foreground">导入、审核、发布和追踪产品规划 Skill</p>
         </div>
         <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
           <DialogTrigger asChild>
-            <Button>
+            <Button className="w-full sm:w-auto">
               <Upload data-icon="inline-start" />
               导入 Skill
             </Button>
@@ -568,7 +568,7 @@ export default function SkillsPage() {
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
-        <div className="flex flex-col gap-6 p-6">
+        <div className="flex flex-col gap-6 p-4 md:p-6">
           {successMessage && (
             <Alert>
               <CheckCircle2 />
@@ -585,8 +585,8 @@ export default function SkillsPage() {
             </Alert>
           )}
 
-          <div className="flex flex-wrap items-center gap-4">
-            <div className="relative min-w-72 flex-1 max-w-md">
+          <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center">
+            <div className="relative min-w-0 max-w-md flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <Input
                 placeholder="搜索 Skill 名称、描述或标签..."
@@ -595,13 +595,15 @@ export default function SkillsPage() {
                 onChange={(event) => setSearchQuery(event.target.value)}
               />
             </div>
-            <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'all' | SkillScope)}>
-              <TabsList>
+            <Tabs className="min-w-0" value={activeTab} onValueChange={(value) => setActiveTab(value as 'all' | SkillScope)}>
+              <div className="max-w-full overflow-x-auto">
+                <TabsList className="w-max">
                 <TabsTrigger value="all">全部 {skillCounts.all}</TabsTrigger>
                 <TabsTrigger value="official">官方 {skillCounts.official}</TabsTrigger>
                 <TabsTrigger value="team">团队 {skillCounts.team}</TabsTrigger>
                 <TabsTrigger value="personal">个人 {skillCounts.personal}</TabsTrigger>
-              </TabsList>
+                </TabsList>
+              </div>
             </Tabs>
           </div>
 
@@ -628,14 +630,13 @@ export default function SkillsPage() {
               {filteredSkills.map((skill) => (
                 <Card
                   key={skill.id}
-                  className="cursor-pointer border-border/60 transition-shadow hover:shadow-md"
-                  onClick={() => setDetailSkill(skill)}
+                  className="min-w-0 border-border/60 transition-shadow hover:shadow-md"
                 >
                   <CardHeader className="pb-3">
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex min-w-0 items-center gap-2">
                         {getSourceIcon(skill.source_type)}
-                        <CardTitle className="truncate text-base">{skill.name}</CardTitle>
+                        <CardTitle className="min-w-0 truncate text-base">{skill.name}</CardTitle>
                       </div>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
@@ -723,7 +724,7 @@ export default function SkillsPage() {
                       <StatusBadge status={skill.status} />
                       <Badge variant="outline">v{skill.version}</Badge>
                     </div>
-                    <div className="text-xs text-muted-foreground">
+                    <div className="truncate text-xs text-muted-foreground">
                       {sourceLabels[skill.source_type]} · {skill.author} · 更新于 {formatDate(skill.updated_at)}
                     </div>
                     {skill.review && (
@@ -749,6 +750,14 @@ export default function SkillsPage() {
                         ))}
                       </div>
                     )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-1 w-full"
+                      onClick={() => setDetailSkill(skill)}
+                    >
+                      查看详情
+                    </Button>
                   </CardContent>
                 </Card>
               ))}
@@ -773,12 +782,14 @@ export default function SkillsPage() {
               </DialogHeader>
 
               <Tabs defaultValue="overview" className="min-w-0">
-                <TabsList>
-                  <TabsTrigger value="overview">概要</TabsTrigger>
-                  <TabsTrigger value="skill-md">skill.md</TabsTrigger>
-                  <TabsTrigger value="meta">meta.json</TabsTrigger>
-                  <TabsTrigger value="changes">变更记录</TabsTrigger>
-                </TabsList>
+                <div className="max-w-full overflow-x-auto">
+                  <TabsList className="w-max">
+                    <TabsTrigger value="overview">概要</TabsTrigger>
+                    <TabsTrigger value="skill-md">skill.md</TabsTrigger>
+                    <TabsTrigger value="meta">meta.json</TabsTrigger>
+                    <TabsTrigger value="changes">变更记录</TabsTrigger>
+                  </TabsList>
+                </div>
                 <ScrollArea className="mt-4 max-h-[62vh] min-w-0 pr-4">
                   <TabsContent value="overview" className="flex flex-col gap-5">
                     <div className="grid gap-3 rounded-lg border p-4 text-sm md:grid-cols-2">
@@ -1005,7 +1016,7 @@ export default function SkillsPage() {
           setDownloadNotice(null);
         }
       }}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="flex max-h-[calc(100dvh-2rem)] max-w-2xl flex-col overflow-hidden">
           {versionSkill && (
             <>
               <DialogHeader>
@@ -1031,7 +1042,7 @@ export default function SkillsPage() {
                   </AlertDescription>
                 </Alert>
               )}
-              <div className="mt-4 flex flex-col gap-3">
+              <div className="mt-4 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
                 {versionSkill.versions.map((version) => {
                   const isCurrent = version.version === versionSkill.version;
                   const rollbackDisabled = isCurrent || versionSkill.scope === 'official' || actionLoading;

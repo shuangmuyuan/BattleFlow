@@ -1033,8 +1033,8 @@ export default function WorkflowsPage() {
 
     return (
       <div className="flex h-full min-h-0 flex-col">
-        <div className="shrink-0 border-b border-border/40 p-6">
-          <div>
+        <div className="shrink-0 border-b border-border/40 p-4 md:p-6">
+          <div className="min-w-0">
             <h1 className="text-2xl font-bold tracking-tight">工作流</h1>
             <p className="text-muted-foreground text-sm mt-1">先建立工作目录，再在目录内创建规划工作流</p>
           </div>
@@ -1046,13 +1046,13 @@ export default function WorkflowsPage() {
           </div>
         )}
 
-        <div className="shrink-0 border-b border-border/40 px-6 py-4">
-          <div className="mb-3 flex items-center justify-between">
-            <div>
+        <div className="max-h-[45dvh] shrink-0 overflow-y-auto border-b border-border/40 px-4 py-4 md:px-6">
+          <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
               <h2 className="text-sm font-semibold">1. 工作目录</h2>
               <p className="text-xs text-muted-foreground mt-1">先新建或选择工作目录，工作流只能在目录内创建和查看。</p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {activeWorkspace && (
                 <Badge variant="secondary" className="text-xs">
                   当前目录：{activeWorkspace.name}
@@ -1080,67 +1080,59 @@ export default function WorkflowsPage() {
                 const count = workflows.filter((workflow) => workflow.workspaceId === workspace.id).length;
 
                 return (
-                  <button
+                  <div
                     key={workspace.id}
-                    type="button"
-                    className={`rounded-lg border p-3 text-left transition-colors ${
+                    className={`flex items-start gap-2 rounded-lg border p-3 transition-colors ${
                       selected ? 'border-primary bg-primary/10' : 'border-border/60 hover:border-primary/50 hover:bg-muted/40'
                     }`}
-                    onClick={() => {
-                      setActiveWorkspaceId(workspace.id);
-                      setEditingWorkflowId(null);
-                    }}
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="truncate text-sm font-medium">{workspace.name}</p>
-                      <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      className="min-w-0 flex-1 text-left"
+                      onClick={() => {
+                        setActiveWorkspaceId(workspace.id);
+                        setEditingWorkflowId(null);
+                      }}
+                    >
+                      <div className="flex min-w-0 items-center justify-between gap-2">
+                        <p className="truncate text-sm font-medium">{workspace.name}</p>
                         <Badge variant={selected ? 'default' : 'outline'} className="text-[10px]">
                           {count} 个流程
                         </Badge>
-                        {count === 0 && workspaces.length > 1 && (
-                          <span
-                            role="button"
-                            tabIndex={0}
-                            className="rounded-md p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              handleDeleteWorkspace(workspace.id);
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                handleDeleteWorkspace(workspace.id);
-                              }
-                            }}
-                            aria-label={`删除目录 ${workspace.name}`}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </span>
-                        )}
                       </div>
-                    </div>
-                    <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{workspace.description}</p>
-                  </button>
+                      <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{workspace.description}</p>
+                    </button>
+                    {count === 0 && workspaces.length > 1 && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-7 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                        aria-label={`删除目录 ${workspace.name}`}
+                        onClick={() => handleDeleteWorkspace(workspace.id)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                  </div>
                 );
               })}
             </div>
           )}
-          <div className="mt-4 flex items-center justify-between rounded-lg border border-border/60 bg-muted/20 p-3">
-            <div>
+          <div className="mt-4 flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
               <h2 className="text-sm font-semibold">2. 当前目录内创建工作流</h2>
               <p className="mt-1 text-xs text-muted-foreground">
                 {activeWorkspace ? `创建位置：${activeWorkspace.name}` : '请先创建或选择工作目录'}
               </p>
             </div>
-            <Button className="gap-2" disabled={!activeWorkspace} onClick={() => setCreateDialogOpen(true)}>
+            <Button className="w-full gap-2 sm:w-auto" disabled={!activeWorkspace} onClick={() => setCreateDialogOpen(true)}>
               <Plus className="h-4 w-4" />
               新建工作流
             </Button>
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto p-6">
+        <div className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
           {!activeWorkspace ? (
             <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
               <Plus className="mb-4 h-12 w-12 opacity-30" />
@@ -1159,32 +1151,36 @@ export default function WorkflowsPage() {
                 const visibleSteps = getVisibleSteps(wf);
                 const removedStepCount = wf.steps.filter((step) => step.isRemoved).length;
                 const completedStepCount = visibleSteps.filter((step) => step.status === 'completed').length;
-                const compactSteps = visibleSteps.length > 6
-                  ? visibleSteps.slice(0, 5)
+                const compactSteps = visibleSteps.length > 5
+                  ? visibleSteps.slice(0, 3)
                   : visibleSteps;
-                const trailingStep = visibleSteps.length > 6 ? visibleSteps[visibleSteps.length - 1] : null;
+                const trailingStep = visibleSteps.length > 5 ? visibleSteps[visibleSteps.length - 1] : null;
                 const hiddenStepCount = visibleSteps.length - compactSteps.length - (trailingStep ? 1 : 0);
                 const progressItems = trailingStep ? [...compactSteps, trailingStep] : compactSteps;
 
                 return (
                   <Card
                     key={wf.id}
-                    className="min-w-0 cursor-pointer overflow-hidden transition-shadow hover:shadow-md"
-                    onClick={() => openWorkflow(wf)}
+                    className="flex min-h-56 min-w-0 flex-col overflow-hidden transition-shadow hover:shadow-md"
                   >
-                    <CardHeader className="pb-3">
-                      <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
-                        <CardTitle className="min-w-24 flex-1 truncate text-base">{wf.name}</CardTitle>
-                        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                          <Badge
-                            variant={wf.status === 'completed' ? 'default' : wf.status === 'in_progress' ? 'secondary' : 'outline'}
-                          >
-                            {wf.status === 'completed' ? '已完成' : wf.status === 'in_progress' ? '进行中' : '草稿'}
-                          </Badge>
+                    <CardHeader className="flex min-w-0 flex-col gap-3 pb-3">
+                      <div className="flex min-w-0 items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <CardTitle className="line-clamp-2 text-base leading-snug">{wf.name}</CardTitle>
+                          <p className="mt-2 line-clamp-2 min-h-10 text-sm text-muted-foreground">{wf.description || '未填写工作流说明'}</p>
+                        </div>
+                        <Badge
+                          className="shrink-0"
+                          variant={wf.status === 'completed' ? 'default' : wf.status === 'in_progress' ? 'secondary' : 'outline'}
+                        >
+                          {wf.status === 'completed' ? '已完成' : wf.status === 'in_progress' ? '进行中' : '草稿'}
+                        </Badge>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
                           <Button
                             variant="outline"
                             size="sm"
-                            className="h-7 gap-1 px-2 text-xs"
+                            className="h-8 min-w-0 gap-1 px-2 text-xs"
                             onClick={(event) => {
                               event.stopPropagation();
                               openWorkflow(wf);
@@ -1196,7 +1192,7 @@ export default function WorkflowsPage() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="h-7 gap-1 px-2 text-xs"
+                            className="h-8 min-w-0 gap-1 px-2 text-xs"
                             onClick={(event) => {
                               event.stopPropagation();
                               handleOpenEditWorkflow(wf);
@@ -1208,7 +1204,7 @@ export default function WorkflowsPage() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="h-7 gap-1 px-2 text-xs"
+                            className="h-8 min-w-0 gap-1 px-2 text-xs"
                             onClick={(event) => {
                               event.stopPropagation();
                               handleCloneWorkflow(wf);
@@ -1217,12 +1213,10 @@ export default function WorkflowsPage() {
                             <Copy className="h-3.5 w-3.5" />
                             克隆
                           </Button>
-                        </div>
                       </div>
-                      <p className="truncate text-sm text-muted-foreground">{wf.description}</p>
                     </CardHeader>
-                    <CardContent className="min-w-0 overflow-hidden">
-                      <div className="flex max-w-full flex-wrap items-center gap-x-1 gap-y-1">
+                    <CardContent className="mt-auto min-w-0 overflow-hidden">
+                      <div className="flex max-w-full flex-nowrap items-center overflow-hidden">
                         {progressItems.map((step, idx) => (
                           <div key={step.id} className="flex shrink-0 items-center">
                             {idx === compactSteps.length && hiddenStepCount > 0 && (
@@ -1291,7 +1285,7 @@ export default function WorkflowsPage() {
                       暂无可用 Skill，请先到 Skill 仓库导入或发布 Skill。
                     </div>
                   ) : (
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     {skills.map((skill) => {
                       const isSelected = selectedSkills.find((s) => s.id === skill.id);
                       const orderIndex = isSelected ? selectedSkills.findIndex((s) => s.id === skill.id) : -1;
@@ -1421,7 +1415,7 @@ export default function WorkflowsPage() {
 
         {/* Edit Workflow Dialog */}
         <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-          <DialogContent className="flex max-w-3xl flex-col gap-0 overflow-hidden p-0">
+          <DialogContent className="flex max-h-[calc(100dvh-2rem)] max-w-3xl flex-col gap-0 overflow-hidden p-0">
             <DialogHeader className="border-b border-border/40 px-6 py-5 pr-12">
               <DialogTitle>编辑工作流</DialogTitle>
               <DialogDescription>
@@ -1542,7 +1536,7 @@ export default function WorkflowsPage() {
 
                 <div className="space-y-2">
                   <label className="text-sm font-medium">追加 Skill</label>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     {skills.map((skill) => (
                       <div
                         key={skill.id}

@@ -16,11 +16,12 @@ import {
   FileText,
   Monitor,
   Download,
-  ExternalLink,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { Progress } from '@/components/ui/progress';
 import {
   Dialog,
   DialogContent,
@@ -119,17 +120,17 @@ export default function DemosPage() {
   };
 
   return (
-    <div className="h-full min-h-0 space-y-6 overflow-auto">
+    <div className="flex h-full min-h-0 flex-col gap-6 overflow-auto">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <h1 className="text-2xl font-semibold">Demo 生成</h1>
           <p className="text-sm text-muted-foreground mt-1">
             基于 PRD 文档自动生成交互式原型，快速验证产品方案
           </p>
         </div>
         <Button
-          className="gap-2"
+          className="w-full gap-2 sm:w-auto"
           onClick={() => {
             resetDialog();
             setCreateDialogOpen(true);
@@ -141,7 +142,7 @@ export default function DemosPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <div className="rounded-xl bg-card border border-border/50 p-4">
           <div className="text-2xl font-bold">{demos.length}</div>
           <div className="text-xs text-muted-foreground mt-1">Demo 总数</div>
@@ -161,7 +162,7 @@ export default function DemosPage() {
       </div>
 
       {/* Demo List */}
-      <div className="space-y-3">
+      <div className="flex flex-col gap-3">
         {demos.map((demo) => {
           const tConfig = typeConfig[demo.type];
           const fConfig = fidelityConfig[demo.fidelity];
@@ -174,7 +175,7 @@ export default function DemosPage() {
               key={demo.id}
               className="rounded-xl bg-card border border-border/50 p-5 hover:border-primary/30 transition-colors"
             >
-              <div className="flex items-start justify-between">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div className="flex items-start gap-4 flex-1 min-w-0">
                   {/* Icon */}
                   <div className={`rounded-lg bg-muted/50 p-2.5 ${tConfig.color}`}>
@@ -183,16 +184,16 @@ export default function DemosPage() {
 
                   {/* Content */}
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
                       <h3 className="font-medium truncate">{demo.name}</h3>
                       <Badge variant="secondary" className={fConfig.color}>
                         {fConfig.label}
                       </Badge>
                     </div>
-                    <div className="flex items-center gap-3 mt-1.5 text-xs text-muted-foreground">
-                      <span className="flex items-center gap-1">
+                    <div className="mt-1.5 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                      <span className="flex min-w-0 items-center gap-1">
                         <FileText className="h-3 w-3" />
-                        来自：{demo.sourceWorkflow}
+                        <span className="truncate">来自：{demo.sourceWorkflow}</span>
                       </span>
                       <span>{demo.createdAt}</span>
                     </div>
@@ -200,13 +201,13 @@ export default function DemosPage() {
                 </div>
 
                 {/* Status & Actions */}
-                <div className="flex items-center gap-3 ml-4">
+                <div className="flex flex-wrap items-center gap-3 lg:ml-4 lg:justify-end">
                   <div className={`flex items-center gap-1.5 text-sm ${sConfig.color}`}>
                     <StatusIcon className={`h-4 w-4 ${sConfig.animate ? 'animate-spin' : ''}`} />
                     {sConfig.label}
                   </div>
                   {demo.status === 'completed' && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <Button variant="ghost" size="sm" className="gap-1.5 text-xs" disabled>
                         <Eye className="h-3.5 w-3.5" />
                         预览
@@ -222,10 +223,8 @@ export default function DemosPage() {
 
               {/* Progress bar for generating */}
               {demo.status === 'generating' && (
-                <div className="mt-3">
-                  <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                    <div className="h-full bg-primary rounded-full animate-pulse" style={{ width: '45%' }} />
-                  </div>
+                  <div className="mt-3">
+                    <Progress value={45} className="h-1.5 animate-pulse" />
                 </div>
               )}
             </div>
@@ -248,8 +247,8 @@ export default function DemosPage() {
 
       {/* Create Demo Dialog */}
       <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
+        <DialogContent className="flex max-h-[calc(100dvh-2rem)] max-w-2xl flex-col gap-0 overflow-hidden p-0">
+          <DialogHeader className="border-b border-border/40 px-6 py-5 pr-12">
             <DialogTitle className="flex items-center gap-2">
               <Rocket className="h-5 w-5 text-primary" />
               新建 Demo 生成
@@ -258,10 +257,11 @@ export default function DemosPage() {
               基于 PRD 文档自动生成交互式原型页面
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-5 mt-4">
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+          <div className="flex flex-col gap-5">
             {/* Basic Info */}
-            <div className="space-y-4">
-              <div className="space-y-2">
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-2">
                 <label className="text-sm font-medium">Demo 名称</label>
                 <Input
                   placeholder="例如：电商平台首页原型"
@@ -269,7 +269,7 @@ export default function DemosPage() {
                   onChange={(e) => setDemoName(e.target.value)}
                 />
               </div>
-              <div className="space-y-2">
+              <div className="flex flex-col gap-2">
                 <label className="text-sm font-medium">描述（可选）</label>
                 <Textarea
                   placeholder="描述这个 Demo 的目标和关注点..."
@@ -281,7 +281,7 @@ export default function DemosPage() {
             </div>
 
             {/* Source Selection */}
-            <div className="space-y-2">
+            <div className="flex flex-col gap-2">
               <label className="text-sm font-medium">关联工作流</label>
               <div className="rounded-lg border border-border/50 p-3 text-sm text-muted-foreground">
                 请先在「工作流」中完成 PRD 生成，此处可选择已完成的 PRD 作为输入
@@ -293,54 +293,56 @@ export default function DemosPage() {
             </div>
 
             {/* Type Selection */}
-            <div className="space-y-2">
+            <div className="flex flex-col gap-2">
               <label className="text-sm font-medium">原型类型</label>
-              <div className="grid grid-cols-3 gap-2">
+              <ToggleGroup
+                type="single"
+                value={selectedType}
+                onValueChange={(value) => value && setSelectedType(value as 'web' | 'mobile' | 'component')}
+                className="grid w-full grid-cols-1 gap-2 sm:grid-cols-3"
+              >
                 {([
                   { key: 'web' as const, label: 'Web 页面', desc: '桌面端网页原型', icon: Globe },
                   { key: 'mobile' as const, label: '移动端页面', desc: 'H5 / 小程序原型', icon: Smartphone },
                   { key: 'component' as const, label: '组件库', desc: 'UI 组件展示', icon: Component },
                 ]).map((type) => (
-                  <div
+                  <ToggleGroupItem
                     key={type.key}
-                    className={`rounded-lg border p-3 cursor-pointer transition-colors ${
-                      selectedType === type.key
-                        ? 'border-primary bg-primary/10 text-foreground'
-                        : 'border-border/50 bg-muted/30 text-muted-foreground hover:border-primary/50'
-                    }`}
-                    onClick={() => setSelectedType(type.key)}
+                    value={type.key}
+                    className="h-auto flex-col items-start justify-start rounded-lg border border-border/50 bg-muted/30 p-3 text-left data-[state=on]:border-primary data-[state=on]:bg-primary/10"
                   >
                     <type.icon className="h-4 w-4 mb-1.5" />
                     <div className="text-sm font-medium">{type.label}</div>
                     <div className="text-xs mt-0.5 opacity-70">{type.desc}</div>
-                  </div>
+                  </ToggleGroupItem>
                 ))}
-              </div>
+              </ToggleGroup>
             </div>
 
             {/* Fidelity Selection */}
-            <div className="space-y-2">
+            <div className="flex flex-col gap-2">
               <label className="text-sm font-medium">交互保真度</label>
-              <div className="flex gap-2">
+              <ToggleGroup
+                type="single"
+                value={selectedFidelity}
+                onValueChange={(value) => value && setSelectedFidelity(value as 'low' | 'mid' | 'high')}
+                className="grid w-full grid-cols-1 gap-2 sm:grid-cols-3"
+              >
                 {([
                   { key: 'low' as const, label: '低保真', desc: '线框图 + 基础布局' },
                   { key: 'mid' as const, label: '中保真', desc: '视觉还原 + 关键交互' },
                   { key: 'high' as const, label: '高保真', desc: '完整交互 + 动效模拟' },
                 ]).map((level) => (
-                  <div
+                  <ToggleGroupItem
                     key={level.key}
-                    className={`flex-1 rounded-lg border p-2.5 text-center cursor-pointer transition-colors ${
-                      selectedFidelity === level.key
-                        ? 'border-primary bg-primary/10 text-foreground'
-                        : 'border-border/50 bg-muted/30 text-muted-foreground hover:border-primary/50'
-                    }`}
-                    onClick={() => setSelectedFidelity(level.key)}
+                    value={level.key}
+                    className="h-auto flex-col rounded-lg border border-border/50 bg-muted/30 p-2.5 text-center data-[state=on]:border-primary data-[state=on]:bg-primary/10"
                   >
                     <div className="text-sm font-medium">{level.label}</div>
                     <div className="text-xs mt-0.5 opacity-70">{level.desc}</div>
-                  </div>
+                  </ToggleGroupItem>
                 ))}
-              </div>
+              </ToggleGroup>
             </div>
 
             {/* Generating status */}
@@ -353,9 +355,7 @@ export default function DemosPage() {
                     <div className="text-xs text-muted-foreground mt-0.5">AI 正在解析 PRD 并构建交互原型</div>
                   </div>
                 </div>
-                <div className="mt-3 h-1.5 bg-muted rounded-full overflow-hidden">
-                  <div className="h-full bg-primary rounded-full animate-pulse" style={{ width: '60%' }} />
-                </div>
+                <Progress value={60} className="mt-3 h-1.5 animate-pulse" />
               </div>
             )}
 
@@ -372,7 +372,7 @@ export default function DemosPage() {
             )}
 
             {/* Actions */}
-            <div className="flex gap-3">
+            <div className="flex flex-col-reverse gap-3 sm:flex-row">
               {!generating && !generated && (
                 <>
                   <Button
@@ -400,6 +400,7 @@ export default function DemosPage() {
                 </>
               )}
             </div>
+          </div>
           </div>
         </DialogContent>
       </Dialog>
