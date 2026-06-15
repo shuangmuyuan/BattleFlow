@@ -19,6 +19,13 @@ const nextConfigRestrictedSyntaxRules = [
   },
 ];
 
+const rawOverlayImports = [
+  '@radix-ui/react-dialog',
+  '@radix-ui/react-alert-dialog',
+  '@radix-ui/react-popover',
+  'vaul',
+];
+
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
@@ -27,6 +34,24 @@ const eslintConfig = defineConfig([
       'import/no-cycle': ['error', { ignoreExternal: true }],
       'react-hooks/set-state-in-effect': 'off',
       'no-restricted-syntax': ['error', ...syntaxRules],
+    },
+  },
+  {
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: [
+      'src/components/ui/dialog.tsx',
+      'src/components/ui/alert-dialog.tsx',
+      'src/components/ui/sheet.tsx',
+      'src/components/ui/popover.tsx',
+      'src/components/ui/drawer.tsx',
+    ],
+    rules: {
+      'no-restricted-imports': ['error', {
+        paths: rawOverlayImports.map((name) => ({
+          name,
+          message: '业务代码禁止直接使用原始浮层库，请通过 src/components/ui 中的基础组件接入统一边界保护。',
+        })),
+      }],
     },
   },
   {
