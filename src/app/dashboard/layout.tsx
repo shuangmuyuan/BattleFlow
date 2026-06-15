@@ -100,12 +100,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <div className="min-h-screen bg-background flex">
+    <div className="flex min-h-screen min-w-0 overflow-x-hidden bg-background">
       {/* Sidebar */}
       <aside
         className={`${
           collapsed ? 'w-16' : 'w-60'
-        } h-screen sticky top-0 flex flex-col border-r border-border bg-sidebar transition-all duration-200`}
+        } sticky top-0 hidden h-screen shrink-0 flex-col border-r border-border bg-sidebar transition-all duration-200 md:flex`}
       >
         {/* Logo area */}
         <div className="h-14 flex items-center justify-between px-4 border-b border-border">
@@ -126,7 +126,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 py-4 space-y-1 px-2">
+        <nav className="flex flex-1 flex-col gap-1 px-2 py-4">
           {navItems.map((item) => {
             const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href));
             return (
@@ -141,7 +141,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 onClick={() => router.push(item.href)}
               >
                 <item.icon className="h-4 w-4 shrink-0" />
-                {!collapsed && <span>{item.label}</span>}
+                {!collapsed && <span className="truncate">{item.label}</span>}
               </Button>
             );
           })}
@@ -219,18 +219,44 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 min-h-screen">
-        <div className="h-14 border-b border-border flex items-center px-6 bg-card/50">
-          <div className="text-sm text-muted-foreground">
+      <main className="flex min-h-screen min-w-0 flex-1 flex-col">
+        <div className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-card/50 px-4 md:px-6">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-brand/15 text-brand md:hidden">
+              <Swords className="size-4" />
+            </span>
+            <span className="truncate text-sm text-muted-foreground">
             {pathname === '/dashboard' && '工作台'}
             {pathname === '/dashboard/skills' && 'Skill 仓库'}
             {pathname === '/dashboard/workflows' && '工作流'}
             {pathname === '/dashboard/knowledge' && '知识库'}
             {pathname.includes('/dashboard/workflows/') && pathname !== '/dashboard/workflows' && '工作流详情'}
             {pathname.includes('/dashboard/skills/') && pathname !== '/dashboard/skills' && 'Skill 详情'}
+            </span>
           </div>
         </div>
-        <div className="p-6">
+
+        <div className="shrink-0 border-b border-border bg-card/30 md:hidden">
+          <div className="flex gap-2 overflow-x-auto px-3 py-2">
+            {navItems.map((item) => {
+              const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href));
+              return (
+                <Button
+                  key={item.href}
+                  variant={isActive ? 'secondary' : 'ghost'}
+                  size="sm"
+                  className={`h-8 shrink-0 gap-2 ${isActive ? 'text-brand' : 'text-muted-foreground'}`}
+                  onClick={() => router.push(item.href)}
+                >
+                  <item.icon className="size-4 shrink-0" />
+                  <span className="text-xs">{item.label}</span>
+                </Button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="min-w-0 flex-1 overflow-hidden p-3 md:p-6">
           {children}
         </div>
       </main>

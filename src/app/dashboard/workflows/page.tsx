@@ -1702,19 +1702,19 @@ export default function WorkflowsPage() {
   );
 
   return (
-    <div className="flex h-full min-w-0">
+    <div className="flex h-full min-w-0 flex-col overflow-auto lg:flex-row lg:overflow-hidden">
       {/* Left: Pipeline Panel */}
-      <div className="w-80 shrink-0 border-r border-border/40 flex flex-col">
-        <div className="p-4 border-b border-border/40">
+      <div className="flex max-h-80 w-full shrink-0 flex-col border-b border-border/40 lg:max-h-none lg:w-80 lg:border-b-0 lg:border-r">
+        <div className="border-b border-border/40 p-4">
           <Button variant="ghost" size="sm" onClick={() => { setActiveWorkflow(null); setActiveStepIndex(-1); setChatMessages([]); }}>
             ← 返回列表
           </Button>
-          <h2 className="font-semibold mt-2">{activeWorkflow.name}</h2>
-          <p className="text-xs text-muted-foreground mt-1">{activeWorkflow.description}</p>
+          <h2 className="mt-2 truncate font-semibold">{activeWorkflow.name}</h2>
+          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{activeWorkflow.description}</p>
         </div>
 
-        <ScrollArea className="flex-1">
-          <div className="p-4 space-y-3">
+        <ScrollArea className="min-h-0 flex-1">
+          <div className="flex flex-col gap-3 p-4">
             {workflowStepGroups.map((group) => {
               const isParallelGroup = group.length > 1;
               const groupCompletedCount = group.filter((step) => step.status === 'completed').length;
@@ -1725,8 +1725,8 @@ export default function WorkflowsPage() {
                   className={isParallelGroup ? 'rounded-xl border border-border/50 bg-muted/20 p-2' : ''}
                 >
                   {isParallelGroup && (
-                    <div className="flex items-center justify-between px-2 pb-2">
-                      <div>
+                    <div className="flex min-w-0 items-center justify-between gap-2 px-2 pb-2">
+                      <div className="min-w-0">
                         <p className="text-xs font-medium text-muted-foreground">{group[0].parallelGroupName || '并行任务组'}</p>
                         <p className="text-[11px] text-muted-foreground/80">可自由切换并行推进</p>
                       </div>
@@ -1736,7 +1736,7 @@ export default function WorkflowsPage() {
                     </div>
                   )}
 
-                  <div className="space-y-1">
+                  <div className="flex flex-col gap-1">
                     {group.map((step) => {
                       const idx = visibleWorkflowSteps.findIndex((item) => item.id === step.id);
                       const isActive = idx === activeStepIndex;
@@ -1756,9 +1756,9 @@ export default function WorkflowsPage() {
                             }
                           }}
                         >
-                          <div className="flex items-center gap-2">
+                          <div className="flex min-w-0 items-center gap-2">
                             {getStepIcon(step.status)}
-                            <span className={`text-sm font-medium ${isActive ? 'text-primary' : ''}`}>
+                            <span className={`min-w-0 truncate text-sm font-medium ${isActive ? 'text-primary' : ''}`}>
                               {step.name}
                             </span>
                             {step.runMode === 'parallel' && (
@@ -1782,14 +1782,14 @@ export default function WorkflowsPage() {
       </div>
 
       {/* Center: Chat Panel */}
-      <div className="min-w-0 flex-1 flex flex-col">
+      <div className="flex min-h-[70vh] min-w-0 flex-1 flex-col lg:min-h-0">
         {/* Chat Header */}
-        <div className="p-4 border-b border-border/40 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/40 p-4">
+          <div className="flex min-w-0 items-center gap-3">
             <MessageSquare className="h-5 w-5 text-primary" />
-            <div>
-              <h3 className="font-semibold text-sm">{currentStep?.name || '选择步骤开始对话'}</h3>
-              <p className="text-xs text-muted-foreground">
+            <div className="min-w-0">
+              <h3 className="truncate text-sm font-semibold">{currentStep?.name || '选择步骤开始对话'}</h3>
+              <p className="truncate text-xs text-muted-foreground">
                 {currentSkill ? `Skill: ${currentSkill.name} | 工具: ${currentSkill.tools.join(', ')}` : ''}
               </p>
             </div>
@@ -1817,8 +1817,8 @@ export default function WorkflowsPage() {
 
         {/* Previous Steps Context */}
         {previousSteps.length > 0 && (
-          <div className="px-4 py-2 bg-muted/30 border-b border-border/30">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <div className="border-b border-border/30 bg-muted/30 px-4 py-2">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               <BookOpen className="h-3.5 w-3.5" />
               <span>前序步骤产出已作为上下文输入:</span>
               {previousSteps.map((s, i) => (
@@ -1832,7 +1832,7 @@ export default function WorkflowsPage() {
         )}
 
         {/* Chat Messages */}
-        <ScrollArea className="flex-1 p-4">
+        <ScrollArea className="min-h-0 flex-1 p-4">
           {currentStep?.status === 'completed' && currentStep.output && chatMessages.length === 0 ? (
             /* Show completed step output */
             <div className="space-y-4">
@@ -1840,10 +1840,10 @@ export default function WorkflowsPage() {
                 <CheckCircle2 className="h-5 w-5 text-emerald-500" />
                 <h3 className="font-semibold">本步骤已完成</h3>
               </div>
-              <div className="bg-muted/50 border border-border/40 rounded-lg p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="font-medium text-sm text-primary">{currentStep.name} — 产出物</h4>
-                  <div className="flex items-center gap-1">
+              <div className="min-w-0 rounded-lg border border-border/40 bg-muted/50 p-4">
+                <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
+                  <h4 className="min-w-0 truncate text-sm font-medium text-primary">{currentStep.name} — 产出物</h4>
+                  <div className="flex shrink-0 items-center gap-1">
                     <Button
                       variant="ghost"
                       size="sm"
@@ -1867,7 +1867,7 @@ export default function WorkflowsPage() {
                     </Button>
                   </div>
                 </div>
-                <div className="prose prose-sm prose-invert max-w-none text-sm leading-relaxed whitespace-pre-wrap">
+                <div className="prose prose-sm max-w-none whitespace-pre-wrap break-words text-sm leading-relaxed dark:prose-invert">
                   {currentStep.output}
                 </div>
               </div>
@@ -1893,7 +1893,7 @@ export default function WorkflowsPage() {
               <p className="text-sm text-muted-foreground max-w-md mb-4">
                 AI 将基于「{currentSkill.name}」Skill 的方法论框架，与你协作完成本步骤。
               </p>
-              <div className="bg-muted/50 p-4 rounded-lg max-w-lg text-left text-sm">
+                <div className="max-w-lg rounded-lg bg-muted/50 p-4 text-left text-sm">
                 <p className="font-medium mb-2">方法论框架：</p>
                 <pre className="whitespace-pre-wrap font-sans text-muted-foreground">{currentSkill.methodology}</pre>
               </div>
@@ -1918,7 +1918,7 @@ export default function WorkflowsPage() {
                   className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
                   <div
-                    className={`max-w-[80%] rounded-lg p-3 text-sm ${
+                    className={`min-w-0 max-w-[min(80%,42rem)] break-words rounded-lg p-3 text-sm ${
                       msg.role === 'user'
                         ? 'bg-primary text-primary-foreground'
                         : 'bg-muted/50 border border-border/40'
@@ -1942,12 +1942,12 @@ export default function WorkflowsPage() {
 
         {/* Confirm Step Bar - show when AI has responded */}
         {currentStep?.status === 'in_progress' && chatMessages.some((m) => m.role === 'assistant') && (
-          <div className="px-4 py-3 border-t border-[#6C5CE7]/30 bg-[#6C5CE7]/5">
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-muted-foreground">
+          <div className="border-t border-primary/30 bg-primary/5 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="min-w-0 flex-1 text-sm text-muted-foreground">
                 当前步骤的 AI 协作已产出结果，确认后将保存产出{currentStep.runMode === 'parallel' ? '，可继续切换其他并行任务' : '并推进到下一步'}
               </p>
-              <Button className="gap-2 bg-[#6C5CE7] hover:bg-[#5A4BD6]" onClick={handleConfirmStep}>
+              <Button className="shrink-0 gap-2" onClick={handleConfirmStep}>
                 <CheckCircle2 className="h-4 w-4" />
                 确认完成
               </Button>
@@ -1956,8 +1956,8 @@ export default function WorkflowsPage() {
         )}
 
         {/* Chat Input */}
-        <div className="p-4 border-t border-border/40 space-y-3">
-          <div className="rounded-lg border border-border/40 bg-muted/20 p-3 space-y-3">
+        <div className="flex flex-col gap-3 border-t border-border/40 p-4">
+          <div className="flex flex-col gap-3 rounded-lg border border-border/40 bg-muted/20 p-3">
             <button
               type="button"
               className="flex w-full items-center justify-between gap-3 text-left"
@@ -1991,7 +1991,7 @@ export default function WorkflowsPage() {
             />
 
             {supplementalContextOpen && (
-              <div className="space-y-3 border-t border-border/40 pt-3">
+              <div className="flex flex-col gap-3 border-t border-border/40 pt-3">
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-xs text-muted-foreground">为当前步骤补充可引用的上下文材料。</p>
                   <Button
@@ -2005,7 +2005,7 @@ export default function WorkflowsPage() {
                   </Button>
                 </div>
 
-                <div className="space-y-2">
+                <div className="flex flex-col gap-2">
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <Database className="h-3.5 w-3.5" />
                     <span>选择知识库</span>
@@ -2037,7 +2037,7 @@ export default function WorkflowsPage() {
                   </div>
                 </div>
 
-                <div className="space-y-2">
+                <div className="flex flex-col gap-2">
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <ClipboardCheck className="h-3.5 w-3.5" />
                     <span>选择工作流内已评审材料</span>
@@ -2073,7 +2073,7 @@ export default function WorkflowsPage() {
                   )}
                 </div>
 
-                <div className="space-y-2">
+                <div className="flex flex-col gap-2">
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <Paperclip className="h-3.5 w-3.5" />
                     <span>本地文件</span>
@@ -2112,7 +2112,7 @@ export default function WorkflowsPage() {
             )}
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row">
             <Input
               placeholder="输入你的问题或指令..."
               value={chatInput}
@@ -2120,9 +2120,9 @@ export default function WorkflowsPage() {
               onPaste={handlePasteContextFiles}
               onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
               disabled={isStreaming}
-              className="flex-1"
+              className="min-w-0 flex-1"
             />
-            <Button onClick={handleSendMessage} disabled={isStreaming || !chatInput.trim()}>
+            <Button className="sm:w-auto" onClick={handleSendMessage} disabled={isStreaming || !chatInput.trim()}>
               {isStreaming ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
             </Button>
           </div>
@@ -2130,8 +2130,8 @@ export default function WorkflowsPage() {
       </div>
 
       {/* Right: Context Panel */}
-      <div className="w-80 shrink-0 overflow-hidden border-l border-border/40 flex flex-col">
-        <div className="p-4 border-b border-border/40">
+      <div className="flex max-h-[32rem] w-full shrink-0 flex-col overflow-hidden border-t border-border/40 lg:max-h-none lg:w-80 lg:border-l lg:border-t-0">
+        <div className="border-b border-border/40 p-4">
           <h3 className="font-semibold text-sm">上下文面板</h3>
         </div>
         <ScrollArea className="flex-1">
