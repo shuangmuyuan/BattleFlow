@@ -1353,13 +1353,18 @@ export default function WorkflowsPage() {
           </Alert>
         )}
 
-        <div className="max-h-[45dvh] shrink-0 overflow-y-auto border-b border-border/40 px-4 py-4 md:px-6">
+        <div className="shrink-0 border-b border-border/40 px-4 py-4 md:px-6">
           <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <h2 className="text-sm font-semibold">1. 工作目录</h2>
-              <p className="text-xs text-muted-foreground mt-1">先新建或选择工作目录，工作流只能在目录内创建和查看。</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                先新建或选择工作目录，目录较多时仅在下方区域滚动，不影响工作流列表高度。
+              </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <StatusBadge tone="neutral" className="text-xs">
+                共 {workspaces.length} 个目录
+              </StatusBadge>
               {activeWorkspace && (
                 <StatusBadge tone="brand" className="text-xs">
                   当前目录：{activeWorkspace.name}
@@ -1367,64 +1372,68 @@ export default function WorkflowsPage() {
               )}
             </div>
           </div>
-          {workspaces.length === 0 ? (
-            <ProductEmptyState
-              icon={<Plus />}
-              title="暂无工作目录"
-              description="先创建一个目录，用来承载同一阶段或同一产品线下的工作流。"
-              className="min-h-48"
-              action={(
-                <Button size="sm" className="gap-1.5" onClick={() => setWorkspaceDialogOpen(true)}>
-                  <Plus className="h-3.5 w-3.5" />
-                  新建目录
-                </Button>
-              )}
-            />
-          ) : (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-              {workspaces.map((workspace) => {
-                const selected = workspace.id === activeWorkspaceId;
-                const count = workflows.filter((workflow) => workflow.workspaceId === workspace.id).length;
+          <div className="rounded-xl border border-border/40 bg-background/40 p-2">
+            <div className="max-h-[12rem] overflow-y-auto pr-1 lg:max-h-[13.5rem]">
+              {workspaces.length === 0 ? (
+                <ProductEmptyState
+                  icon={<Plus />}
+                  title="暂无工作目录"
+                  description="先创建一个目录，用来承载同一阶段或同一产品线下的工作流。"
+                  className="min-h-40"
+                  action={(
+                    <Button size="sm" className="gap-1.5" onClick={() => setWorkspaceDialogOpen(true)}>
+                      <Plus className="h-3.5 w-3.5" />
+                      新建目录
+                    </Button>
+                  )}
+                />
+              ) : (
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {workspaces.map((workspace) => {
+                    const selected = workspace.id === activeWorkspaceId;
+                    const count = workflows.filter((workflow) => workflow.workspaceId === workspace.id).length;
 
-                return (
-                  <div
-                    key={workspace.id}
-                    className={`flex items-start gap-2 rounded-lg border p-3 transition-colors ${
-                      selected ? 'border-brand bg-brand/10' : 'border-border/60 bg-card/70 hover:border-brand/40 hover:bg-muted/40'
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      className="min-w-0 flex-1 text-left"
-                      onClick={() => {
-                        setActiveWorkspaceId(workspace.id);
-                        setEditingWorkflowId(null);
-                      }}
-                    >
-                      <div className="flex min-w-0 items-center justify-between gap-2">
-                        <p className="truncate text-sm font-medium">{workspace.name}</p>
-                        <StatusBadge tone={selected ? 'brand' : 'neutral'} className="text-[10px]">
-                          {count} 个流程
-                        </StatusBadge>
-                      </div>
-                      <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{workspace.description}</p>
-                    </button>
-                    {count === 0 && workspaces.length > 1 && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-7 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                        aria-label={`删除目录 ${workspace.name}`}
-                        onClick={() => handleDeleteWorkspace(workspace.id)}
+                    return (
+                      <div
+                        key={workspace.id}
+                        className={`flex min-h-[4.75rem] items-start gap-2 rounded-lg border p-3 transition-colors ${
+                          selected ? 'border-brand bg-brand/10' : 'border-border/60 bg-card/70 hover:border-brand/40 hover:bg-muted/40'
+                        }`}
                       >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    )}
-                  </div>
-                );
-              })}
+                        <button
+                          type="button"
+                          className="min-w-0 flex-1 text-left"
+                          onClick={() => {
+                            setActiveWorkspaceId(workspace.id);
+                            setEditingWorkflowId(null);
+                          }}
+                        >
+                          <div className="flex min-w-0 items-center justify-between gap-2">
+                            <p className="truncate text-sm font-medium">{workspace.name}</p>
+                            <StatusBadge tone={selected ? 'brand' : 'neutral'} className="text-[10px]">
+                              {count} 个流程
+                            </StatusBadge>
+                          </div>
+                          <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{workspace.description}</p>
+                        </button>
+                        {count === 0 && workspaces.length > 1 && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-7 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                            aria-label={`删除目录 ${workspace.name}`}
+                            onClick={() => handleDeleteWorkspace(workspace.id)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          )}
+          </div>
           <div className="mt-4 flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <h2 className="text-sm font-semibold">2. 当前目录内创建工作流</h2>
