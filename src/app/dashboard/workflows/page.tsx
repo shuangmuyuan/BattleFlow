@@ -488,6 +488,59 @@ export default function WorkflowsPage() {
     URL.revokeObjectURL(url);
   };
 
+  const getSavedStepOutputFileId = (stepId: string) => `saved-step-output-${stepId}`;
+
+  const buildStepOutputMarkdown = (workflow: Workflow, step: WorkflowStep) => (
+    `# ${workflow.name}\n\n## ${step.name}\n\n${step.output || ''}`
+  );
+
+  const buildSavedStepOutputFile = (
+    workflow: Workflow,
+    step: WorkflowStep,
+    createdAt: string,
+  ): ReviewedOutputFile => {
+    const content = buildStepOutputMarkdown(workflow, step);
+    return {
+      id: getSavedStepOutputFileId(step.id),
+      stepId: step.id,
+      name: `${workflow.name}-${step.name}-产出.md`.replace(/[\\/:*?"<>|]/g, '-'),
+      type: 'text/markdown',
+      size: new TextEncoder().encode(content).length,
+      contentKind: 'text',
+      content,
+      note: '由当前步骤产出保存，可作为后续步骤的补充上下文材料引用。',
+      created_at: createdAt,
+    };
+  };
+
+  const downloadReviewedOutputFile = (file: ReviewedOutputFile) => {
+    const content = file.content || file.note || file.name;
+    const blob = new Blob([content], { type: `${file.type || 'text/plain'};charset=utf-8` });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = file.name.replace(/[\\/:*?"<>|]/g, '-');
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadWorkflowFinalOutput = (workflow: Workflow, steps: WorkflowStep[]) => {
+    if (steps.length === 0) return;
+    const content = [
+      `# ${workflow.name} 最终产出`,
+      workflow.description ? `\n${workflow.description}` : '',
+      ...steps.map((step) => `\n\n## ${step.name}\n\n${step.output || ''}`),
+    ].join('');
+    const fileName = `${workflow.name}-最终产出.md`.replace(/[\\/:*?"<>|]/g, '-');
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   const formatSnapshotTime = (value?: string) => {
     if (!value) return '未记录时间';
     const date = new Date(value);
@@ -1624,6 +1677,25 @@ export default function WorkflowsPage() {
       .filter((snapshot) => snapshot.stepId === currentStep.id)
       .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
     : [];
+  const savedCurrentStepOutput = currentStep
+    ? currentReviewedOutputFiles.find((file) => file.id === getSavedStepOutputFileId(currentStep.id))
+    : undefined;
+  const currentStepOutputMarkdown = currentStep?.output
+    ? buildStepOutputMarkdown(activeWorkflow, currentStep)
+    : '';
+  const savedCurrentStepOutputIsCurrent = Boolean(
+    savedCurrentStepOutput?.content && savedCurrentStepOutput.content === currentStepOutputMarkdown,
+  );
+  const maxVisibleStepIndex = visibleWorkflowSteps.length > 0
+    ? Math.max(...visibleWorkflowSteps.map((step) => step.step_index))
+    : -1;
+  const isWorkflowFullyCompleted = visibleWorkflowSteps.length > 0
+    && visibleWorkflowSteps.every((step) => step.status === 'completed');
+  const finalWorkflowOutputSteps = isWorkflowFullyCompleted
+    ? visibleWorkflowSteps
+      .filter((step) => step.step_index === maxVisibleStepIndex && step.output)
+      .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+    : [];
   const currentReviewComment = currentStep ? reviewComments[currentStep.id]?.trim() || '' : '';
   const canArchiveReviewedOutput = currentReviewedOutputFiles.length > 0 || currentReviewComment.length > 0;
   const isReviewedOutputArchived = currentStep ? archivedReviewStepIds.includes(currentStep.id) : false;
@@ -1700,6 +1772,25 @@ export default function WorkflowsPage() {
       archivedReviewStepIds: (workflow.archivedReviewStepIds || []).includes(stepId)
         ? workflow.archivedReviewStepIds || []
         : [...(workflow.archivedReviewStepIds || []), stepId],
+      updated_at: updatedAt,
+    }));
+  };
+  const saveCurrentStepOutput = () => {
+    if (!activeWorkflow || !currentStep?.output) return;
+
+    const updatedAt = new Date().toISOString();
+    const outputFile = buildSavedStepOutputFile(activeWorkflow, currentStep, updatedAt);
+
+    setReviewedOutputFiles((prev) => [
+      outputFile,
+      ...prev.filter((file) => file.id !== outputFile.id),
+    ]);
+    updateActiveWorkflow((workflow) => ({
+      ...workflow,
+      reviewedOutputFiles: [
+        outputFile,
+        ...(workflow.reviewedOutputFiles || []).filter((file) => file.id !== outputFile.id),
+      ],
       updated_at: updatedAt,
     }));
   };
@@ -2208,6 +2299,22 @@ export default function WorkflowsPage() {
               <div className="flex min-w-0 flex-col gap-4 p-4">
                 <div className="min-w-0">
                   <div className="mb-2 flex items-center justify-between gap-2">
+                    <h4 className="min-w-0 truncate text-xs font-medium text-muted-foreground">当前步骤产出</h4>
+                    <Badge variant="outline" className="shrink-0 text-[11px]">
+                      {currentStep?.output ? '1 个' : '0 个'}
+                    </Badge>
+                  </div>
+                  {currentStep?.output ? (
+                    renderStepOutputPreview(currentStep)
+                  ) : (
+                    <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
+                      当前步骤确认完成后，会在这里展示本步骤产出。
+                    </p>
+                  )}
+                </div>
+
+                <div className="min-w-0">
+                  <div className="mb-2 flex items-center justify-between gap-2">
                     <h4 className="min-w-0 truncate text-xs font-medium text-muted-foreground">前序步骤产出</h4>
                     <Badge variant="outline" className="shrink-0 text-[11px]">{previousSteps.length} 个</Badge>
                   </div>
@@ -2229,6 +2336,43 @@ export default function WorkflowsPage() {
                     {parallelPeerSteps.map(renderStepOutputPreview)}
                   </div>
                 )}
+
+                <div className="min-w-0">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <h4 className="min-w-0 truncate text-xs font-medium text-muted-foreground">最终工作流产出</h4>
+                    <Badge variant="outline" className="shrink-0 text-[11px]">
+                      {finalWorkflowOutputSteps.length} 个
+                    </Badge>
+                  </div>
+                  {finalWorkflowOutputSteps.length > 0 ? (
+                    <div className="flex flex-col gap-3 rounded-xl border border-border/60 bg-card/70 p-3">
+                      <div className="flex min-w-0 items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-medium">{activeWorkflow.name} 最终产出</p>
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            来自最后一个步骤{finalWorkflowOutputSteps.length > 1 ? '组' : ''}的已确认产物。
+                          </p>
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 shrink-0 gap-1.5 text-xs"
+                          onClick={() => downloadWorkflowFinalOutput(activeWorkflow, finalWorkflowOutputSteps)}
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          下载
+                        </Button>
+                      </div>
+                      <div className="flex flex-col gap-2">
+                        {finalWorkflowOutputSteps.map(renderStepOutputPreview)}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
+                      最后一个步骤确认完成后，这里会自动汇总为工作流最终产出。
+                    </p>
+                  )}
+                </div>
               </div>
             </ScrollArea>
           </TabsContent>
@@ -2327,6 +2471,16 @@ export default function WorkflowsPage() {
                                   <p className="truncate font-medium">{file.name}</p>
                                   <p className="text-muted-foreground">{formatFileSize(file.size)}</p>
                                 </div>
+                                {file.content && (
+                                  <button
+                                    type="button"
+                                    className="text-muted-foreground hover:text-foreground"
+                                    onClick={() => downloadReviewedOutputFile(file)}
+                                    aria-label={`下载 ${file.name}`}
+                                  >
+                                    <Download className="h-3.5 w-3.5" />
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   className="text-muted-foreground hover:text-foreground"
@@ -2390,13 +2544,38 @@ export default function WorkflowsPage() {
                       <div className="min-w-0">
                         <p className="text-xs font-medium">保存步骤产出</p>
                         <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
-                          将当前步骤产出作为可下载材料保留，后续再接入统一知识库写入。
+                          {savedCurrentStepOutput
+                            ? `已保存为 ${savedCurrentStepOutput.name}，可在后续步骤的补充上下文中选择引用。`
+                            : '将当前步骤产出保存为工作流内材料，后续步骤可作为评审材料引用。'}
                         </p>
                       </div>
-                      <Button variant="outline" size="sm" className="w-full gap-2">
-                        <Save className="h-3.5 w-3.5" />
-                        保存产出物
-                      </Button>
+                      <div className="flex flex-col gap-2">
+                        {savedCurrentStepOutput && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            className="w-full gap-2"
+                            onClick={() => downloadReviewedOutputFile(savedCurrentStepOutput)}
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                            下载已保存产物
+                          </Button>
+                        )}
+                        <Button
+                          variant={savedCurrentStepOutputIsCurrent ? 'secondary' : 'outline'}
+                          size="sm"
+                          className="w-full gap-2"
+                          disabled={savedCurrentStepOutputIsCurrent}
+                          onClick={saveCurrentStepOutput}
+                        >
+                          <Save className="h-3.5 w-3.5" />
+                          {savedCurrentStepOutputIsCurrent
+                            ? '已保存当前版本'
+                            : savedCurrentStepOutput
+                              ? '更新产出物'
+                              : '保存产出物'}
+                        </Button>
+                      </div>
                     </CardContent>
                   </Card>
                 )}
