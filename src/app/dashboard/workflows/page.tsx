@@ -176,6 +176,16 @@ interface KnowledgeBaseOption {
   id: string;
   name: string;
   description: string;
+  source_type?: 'builtin' | 'external';
+  dataset_name?: string;
+  document_count?: number;
+  updated_at?: string;
+}
+
+interface KnowledgeBaseResponse {
+  knowledgeBases?: KnowledgeBaseOption[];
+  serviceUnavailable?: boolean;
+  error?: string;
 }
 
 interface ReviewMaterial {
@@ -232,14 +242,8 @@ interface Workspace {
   updated_at?: string;
 }
 
-const knowledgeBaseOptions: KnowledgeBaseOption[] = [
-  { id: 'company-methodology', name: '产品方法论库', description: 'PRD、竞品分析、需求拆解方法论' },
-  { id: 'industry-research', name: '行业研究库', description: '电商、社交、直播业务研究材料' },
-  { id: 'customer-feedback', name: '用户反馈库', description: '访谈纪要、工单反馈、调研问卷' },
-];
-
 const defaultContextSelection: WorkflowContextSelection = {
-  knowledgeBaseIds: ['industry-research'],
+  knowledgeBaseIds: [],
   reviewMaterialIds: [],
 };
 
@@ -312,12 +316,16 @@ export default function WorkflowsPage() {
   const [newWorkflowDesc, setNewWorkflowDesc] = useState('');
   const [selectedSkills, setSelectedSkills] = useState<Skill[]>([]);
   const [selectedSkillModes, setSelectedSkillModes] = useState<Record<string, 'serial' | 'parallel'>>({});
-  const [selectedKnowledgeBaseIds, setSelectedKnowledgeBaseIds] = useState<string[]>(['industry-research']);
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBaseOption[]>([]);
+  const [knowledgeLoading, setKnowledgeLoading] = useState(false);
+  const [knowledgeNotice, setKnowledgeNotice] = useState('');
+  const [selectedKnowledgeBaseIds, setSelectedKnowledgeBaseIds] = useState<string[]>([]);
   const [selectedReviewMaterialIds, setSelectedReviewMaterialIds] = useState<string[]>([]);
   const [uploadedContextFiles, setUploadedContextFiles] = useState<UploadedContextFile[]>([]);
   const [reviewedOutputFiles, setReviewedOutputFiles] = useState<ReviewedOutputFile[]>([]);
   const [reviewComments, setReviewComments] = useState<Record<string, string>>({});
   const [supplementalContextOpen, setSupplementalContextOpen] = useState(false);
+  const [supplementalContextTab, setSupplementalContextTab] = useState<'knowledge' | 'materials' | 'files'>('knowledge');
   const [snapshotDialogOpen, setSnapshotDialogOpen] = useState(false);
   const [selectedSnapshot, setSelectedSnapshot] = useState<WorkflowStepSnapshot | null>(null);
   const [archivedReviewStepIds, setArchivedReviewStepIds] = useState<string[]>([]);
@@ -488,9 +496,38 @@ export default function WorkflowsPage() {
     }
   }, []);
 
+  const loadKnowledgeBases = useCallback(async () => {
+    setKnowledgeLoading(true);
+    setKnowledgeNotice('');
+
+    try {
+      const response = await fetch('/api/knowledge', { cache: 'no-store' });
+      const data = await response.json() as KnowledgeBaseResponse;
+
+      if (data.serviceUnavailable) {
+        setKnowledgeBases([]);
+        setKnowledgeNotice(data.error || '知识库服务未配置，暂时无法访问真实知识库。');
+        return;
+      }
+
+      if (!response.ok) throw new Error(data.error || '知识库加载失败');
+      setKnowledgeBases(data.knowledgeBases || []);
+    } catch (error) {
+      console.error('Knowledge bases load error:', error);
+      setKnowledgeBases([]);
+      setKnowledgeNotice(error instanceof Error ? error.message : '知识库加载失败');
+    } finally {
+      setKnowledgeLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadWorkflowState();
   }, [loadWorkflowState]);
+
+  useEffect(() => {
+    loadKnowledgeBases();
+  }, [loadKnowledgeBases]);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -671,7 +708,7 @@ export default function WorkflowsPage() {
       : selection.reviewMaterialIds;
     const selectedReviewIds = new Set(reviewMaterialIds);
 
-    const selectedKnowledgeBases = knowledgeBaseOptions
+    const selectedKnowledgeBases = knowledgeBases
       .filter((kb) => knowledgeBaseIds.includes(kb.id))
       .map((kb) => `知识库：${kb.name}（${kb.description}）`);
     const stepContextFiles = (workflow.contextFiles || [])
@@ -711,7 +748,7 @@ export default function WorkflowsPage() {
 
     const userMessage = chatInput.trim();
     const currentStepContextFiles = uploadedContextFiles.filter((file) => file.stepId === currentStep.id);
-    const selectedKnowledgeBases = knowledgeBaseOptions.filter((kb) => selectedKnowledgeBaseIds.includes(kb.id));
+    const selectedKnowledgeBases = knowledgeBases.filter((kb) => selectedKnowledgeBaseIds.includes(kb.id));
     const selectedReviewMaterials = workflow.steps
       .filter((step) => !step.isRemoved && selectedReviewMaterialIds.includes(step.id) && step.output)
       .map((step) => ({
@@ -728,7 +765,7 @@ export default function WorkflowsPage() {
       }));
     const contextSummary = [
       selectedKnowledgeBases.length > 0
-        ? `选中的知识库：${selectedKnowledgeBases.map((kb) => `${kb.name}（${kb.description}）`).join('；')}`
+        ? `选中的知识库：${selectedKnowledgeBases.map((kb) => `${kb.name}（${kb.description || '无描述'}）`).join('；')}。发送时将按本轮问题检索相关片段。`
         : '',
       selectedReviewMaterials.length > 0
         ? `选中的已评审材料：${selectedReviewMaterials.map((material) => `${material.name}：${material.summary}`).join('；')}`
@@ -780,6 +817,7 @@ export default function WorkflowsPage() {
           } : undefined,
           step_context: stepContext,
           selected_knowledge_bases: selectedKnowledgeBases,
+          knowledge_query: userMessage,
           selected_review_materials: [...selectedReviewMaterials, ...selectedUploadedReviewMaterials],
           uploaded_files: currentStepContextFiles.map(({ previewUrl, ...file }) => file),
         }),
@@ -843,6 +881,7 @@ export default function WorkflowsPage() {
     activeStepIndex,
     saveStepChatMessages,
     skills,
+    knowledgeBases,
     selectedKnowledgeBaseIds,
     selectedReviewMaterialIds,
     uploadedContextFiles,
@@ -1788,6 +1827,12 @@ export default function WorkflowsPage() {
   const currentContextFiles = currentStep
     ? uploadedContextFiles.filter((file) => file.stepId === currentStep.id)
     : [];
+  const selectedKnowledgeBaseOptions = knowledgeBases.filter((kb) => selectedKnowledgeBaseIds.includes(kb.id));
+  const unavailableKnowledgeBaseCount = selectedKnowledgeBaseIds.filter((id) => (
+    !knowledgeBases.some((kb) => kb.id === id)
+  )).length;
+  const selectedReviewMaterialOptions = reviewMaterials.filter((material) => selectedReviewMaterialIds.includes(material.id));
+  const selectedContextCount = selectedKnowledgeBaseOptions.length + selectedReviewMaterialOptions.length + currentContextFiles.length;
   const currentStepSnapshots = currentStep
     ? (activeWorkflow.stepSnapshots || [])
       .filter((snapshot) => snapshot.stepId === currentStep.id)
@@ -2212,26 +2257,28 @@ export default function WorkflowsPage() {
         {/* Chat Input */}
         <div className="flex flex-col gap-3 border-t border-border/40 p-4">
           <div className="flex flex-col gap-3 rounded-lg border border-border/40 bg-muted/20 p-3">
-            <button
-              type="button"
-              className="flex w-full items-center justify-between gap-3 text-left"
-              onClick={() => setSupplementalContextOpen((prev) => !prev)}
-              aria-expanded={supplementalContextOpen}
-            >
+            <div className="flex w-full items-center justify-between gap-3">
               <div className="flex min-w-0 items-center gap-2">
                 <BookOpen className="h-4 w-4 text-primary" />
                 <div className="min-w-0">
                   <p className="text-sm font-medium">补充上下文</p>
                   <p className="truncate text-xs text-muted-foreground">
-                    {selectedKnowledgeBaseIds.length} 个知识库 · {selectedReviewMaterialIds.length} 个评审材料 · {currentContextFiles.length} 个本地文件
+                    已选 {selectedContextCount} 个来源 · 知识库 {selectedKnowledgeBaseOptions.length} · 产物 {selectedReviewMaterialOptions.length} · 文件 {currentContextFiles.length}
                   </p>
                 </div>
               </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <span className="text-xs text-muted-foreground">{supplementalContextOpen ? '收起' : '展开'}</span>
-                <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${supplementalContextOpen ? 'rotate-180' : ''}`} />
-              </div>
-            </button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 shrink-0 gap-1.5 text-xs"
+                onClick={() => setSupplementalContextOpen((prev) => !prev)}
+                aria-expanded={supplementalContextOpen}
+              >
+                管理上下文
+                <ChevronDown className={`h-3.5 w-3.5 transition-transform ${supplementalContextOpen ? 'rotate-180' : ''}`} />
+              </Button>
+            </div>
             <input
               ref={fileInputRef}
               type="file"
@@ -2246,122 +2293,264 @@ export default function WorkflowsPage() {
 
             {supplementalContextOpen && (
               <div className="flex flex-col gap-3 border-t border-border/40 pt-3">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-xs text-muted-foreground">为当前步骤补充可引用的上下文材料。</p>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 gap-1.5 text-xs"
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    <Paperclip className="h-3.5 w-3.5" />
-                    上传文件
-                  </Button>
-                </div>
-
-                <div className="flex flex-col gap-2">
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <Database className="h-3.5 w-3.5" />
-                    <span>选择知识库</span>
+                <div className="rounded-lg border border-border/50 bg-background/60 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-medium">本轮将注入的上下文</p>
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        知识库会按当前问题检索片段；产物和本地文件会直接作为上下文发送。
+                      </p>
+                    </div>
+                    {unavailableKnowledgeBaseCount > 0 && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 shrink-0 px-2 text-xs"
+                        onClick={() => {
+                          const nextIds = selectedKnowledgeBaseIds.filter((id) => knowledgeBases.some((kb) => kb.id === id));
+                          updateCurrentContextSelection(
+                            { knowledgeBaseIds: nextIds },
+                            () => setSelectedKnowledgeBaseIds(nextIds),
+                          );
+                        }}
+                      >
+                        清理失效引用
+                      </Button>
+                    )}
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {knowledgeBaseOptions.map((kb) => {
-                      const selected = selectedKnowledgeBaseIds.includes(kb.id);
-                      return (
-                        <Button
-                          key={kb.id}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {selectedContextCount === 0 && unavailableKnowledgeBaseCount === 0 ? (
+                      <span className="text-xs text-muted-foreground">未选择补充上下文。</span>
+                    ) : null}
+                    {selectedKnowledgeBaseOptions.map((kb) => (
+                      <Badge key={`selected-kb-${kb.id}`} variant="secondary" className="gap-1.5">
+                        <Database className="h-3 w-3" />
+                        {kb.name}
+                        <button
                           type="button"
-                          variant={selected ? 'default' : 'outline'}
-                          size="sm"
-                          className="h-7 text-xs"
+                          className="ml-1 text-muted-foreground hover:text-foreground"
                           onClick={() => {
-                            const nextIds = selected
-                              ? selectedKnowledgeBaseIds.filter((id) => id !== kb.id)
-                              : [...selectedKnowledgeBaseIds, kb.id];
+                            const nextIds = selectedKnowledgeBaseIds.filter((id) => id !== kb.id);
                             updateCurrentContextSelection(
                               { knowledgeBaseIds: nextIds },
                               () => setSelectedKnowledgeBaseIds(nextIds),
                             );
                           }}
+                          aria-label={`移除知识库 ${kb.name}`}
                         >
-                          {kb.name}
-                        </Button>
-                      );
-                    })}
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                    {selectedReviewMaterialOptions.map((material) => (
+                      <Badge key={`selected-material-${material.id}`} variant="secondary" className="gap-1.5">
+                        <ClipboardCheck className="h-3 w-3" />
+                        {material.name}
+                        <button
+                          type="button"
+                          className="ml-1 text-muted-foreground hover:text-foreground"
+                          onClick={() => {
+                            const nextIds = selectedReviewMaterialIds.filter((id) => id !== material.id);
+                            updateCurrentContextSelection(
+                              { reviewMaterialIds: nextIds },
+                              () => setSelectedReviewMaterialIds(nextIds),
+                            );
+                          }}
+                          aria-label={`移除材料 ${material.name}`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                    {currentContextFiles.map((file) => (
+                      <Badge key={`selected-file-${file.id}`} variant="outline" className="gap-1.5 bg-background/60">
+                        {file.isImage ? <ImageIcon className="h-3 w-3" /> : <Paperclip className="h-3 w-3" />}
+                        <span className="max-w-40 truncate">{file.name}</span>
+                        <button
+                          type="button"
+                          className="ml-1 text-muted-foreground hover:text-foreground"
+                          onClick={() => removeContextFile(file.id)}
+                          aria-label={`移除 ${file.name}`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                    {unavailableKnowledgeBaseCount > 0 && (
+                      <Badge variant="outline" className="border-warning/30 bg-warning/10 text-warning">
+                        {unavailableKnowledgeBaseCount} 个知识库引用不可用
+                      </Badge>
+                    )}
                   </div>
                 </div>
 
-                <div className="flex flex-col gap-2">
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <ClipboardCheck className="h-3.5 w-3.5" />
-                    <span>选择工作流内已评审材料</span>
-                  </div>
-                  {reviewMaterials.length > 0 ? (
-                    <div className="flex flex-wrap gap-2">
-                      {reviewMaterials.map((material) => {
-                        const selected = selectedReviewMaterialIds.includes(material.id);
-                        return (
-                          <Button
-                            key={material.id}
-                            type="button"
-                            variant={selected ? 'default' : 'outline'}
-                            size="sm"
-                            className="h-7 max-w-full text-xs"
-                            onClick={() => {
-                              const nextIds = selected
-                                ? selectedReviewMaterialIds.filter((id) => id !== material.id)
-                                : [...selectedReviewMaterialIds, material.id];
-                              updateCurrentContextSelection(
-                                { reviewMaterialIds: nextIds },
-                                () => setSelectedReviewMaterialIds(nextIds),
-                              );
-                            }}
-                          >
-                            {material.name}
-                          </Button>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">当前工作流暂无已完成产物。</p>
-                  )}
-                </div>
+                <Tabs value={supplementalContextTab} onValueChange={(value) => setSupplementalContextTab(value as 'knowledge' | 'materials' | 'files')}>
+                  <TabsList className="grid h-8 w-full grid-cols-3">
+                    <TabsTrigger value="knowledge" className="text-xs">知识库</TabsTrigger>
+                    <TabsTrigger value="materials" className="text-xs">前序产物</TabsTrigger>
+                    <TabsTrigger value="files" className="text-xs">本地文件</TabsTrigger>
+                  </TabsList>
 
-                <div className="flex flex-col gap-2">
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <Paperclip className="h-3.5 w-3.5" />
-                    <span>本地文件</span>
-                    <span className="text-muted-foreground/70">支持 .txt、.md、图片，可直接复制粘贴图片到输入框</span>
-                  </div>
-                  {currentContextFiles.length > 0 ? (
-                    <div className="flex flex-wrap gap-2">
-                      {currentContextFiles.map((file) => (
-                        <div
-                          key={file.id}
-                          className="inline-flex max-w-full items-center gap-2 rounded-md border border-border/50 bg-background/60 px-2 py-1 text-xs"
-                        >
-                          {file.isImage ? (
-                            <ImageIcon className="h-3.5 w-3.5 text-primary" />
-                          ) : (
-                            <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
-                          )}
-                          <span className="truncate max-w-40">{file.name}</span>
-                          <span className="text-muted-foreground">{formatFileSize(file.size)}</span>
-                          <button
-                            type="button"
-                            className="text-muted-foreground hover:text-foreground"
-                            onClick={() => removeContextFile(file.id)}
-                            aria-label={`移除 ${file.name}`}
-                          >
-                            <X className="h-3.5 w-3.5" />
-                          </button>
+                  <TabsContent value="knowledge" className="mt-3">
+                    <div className="flex flex-col gap-2">
+                      {knowledgeNotice && (
+                        <div className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning">
+                          {knowledgeNotice}
                         </div>
-                      ))}
+                      )}
+                      {knowledgeLoading ? (
+                        <div className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
+                          正在读取真实知识库列表...
+                        </div>
+                      ) : knowledgeBases.length === 0 ? (
+                        <div className="rounded-lg border border-dashed border-border/60 p-3 text-xs leading-5 text-muted-foreground">
+                          暂无可选知识库。当前不会向模型注入 Mock 知识库；请先在知识库页面完成服务配置和文档导入。
+                        </div>
+                      ) : (
+                        knowledgeBases.map((kb) => {
+                          const selected = selectedKnowledgeBaseIds.includes(kb.id);
+                          return (
+                            <div
+                              key={kb.id}
+                              className={`flex items-start justify-between gap-3 rounded-lg border p-3 ${
+                                selected ? 'border-primary/50 bg-primary/10' : 'border-border/50 bg-background/60'
+                              }`}
+                            >
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="text-xs font-medium">{kb.name}</p>
+                                  <StatusBadge tone={kb.document_count ? 'success' : 'warning'}>
+                                    {kb.document_count ? '已连接' : '空库'}
+                                  </StatusBadge>
+                                  <Badge variant="outline">{kb.document_count || 0} 文档</Badge>
+                                </div>
+                                <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                                  {kb.description || '未填写知识库说明'}
+                                </p>
+                                <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                                  数据集 {kb.dataset_name || '未配置'} · 更新于 {kb.updated_at ? formatSnapshotTime(kb.updated_at) : '未知'}
+                                </p>
+                              </div>
+                              <Button
+                                type="button"
+                                variant={selected ? 'default' : 'outline'}
+                                size="sm"
+                                className="h-8 shrink-0 text-xs"
+                                onClick={() => {
+                                  const nextIds = selected
+                                    ? selectedKnowledgeBaseIds.filter((id) => id !== kb.id)
+                                    : [...selectedKnowledgeBaseIds, kb.id];
+                                  updateCurrentContextSelection(
+                                    { knowledgeBaseIds: nextIds },
+                                    () => setSelectedKnowledgeBaseIds(nextIds),
+                                  );
+                                }}
+                              >
+                                {selected ? '已选' : '选择'}
+                              </Button>
+                            </div>
+                          );
+                        })
+                      )}
                     </div>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">暂无上传文件。</p>
-                  )}
-                </div>
+                  </TabsContent>
+
+                  <TabsContent value="materials" className="mt-3">
+                    {reviewMaterials.length > 0 ? (
+                      <div className="flex flex-col gap-2">
+                        {reviewMaterials.map((material) => {
+                          const selected = selectedReviewMaterialIds.includes(material.id);
+                          return (
+                            <div
+                              key={material.id}
+                              className={`flex items-start justify-between gap-3 rounded-lg border p-3 ${
+                                selected ? 'border-primary/50 bg-primary/10' : 'border-border/50 bg-background/60'
+                              }`}
+                            >
+                              <div className="min-w-0">
+                                <p className="truncate text-xs font-medium">{material.name}</p>
+                                <p className="mt-1 text-[11px] text-muted-foreground">{material.source}</p>
+                                <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{material.summary}</p>
+                              </div>
+                              <Button
+                                type="button"
+                                variant={selected ? 'default' : 'outline'}
+                                size="sm"
+                                className="h-8 shrink-0 text-xs"
+                                onClick={() => {
+                                  const nextIds = selected
+                                    ? selectedReviewMaterialIds.filter((id) => id !== material.id)
+                                    : [...selectedReviewMaterialIds, material.id];
+                                  updateCurrentContextSelection(
+                                    { reviewMaterialIds: nextIds },
+                                    () => setSelectedReviewMaterialIds(nextIds),
+                                  );
+                                }}
+                              >
+                                {selected ? '已选' : '选择'}
+                              </Button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
+                        当前工作流暂无已完成产物。步骤完成并保存后，可在这里选择为后续步骤上下文。
+                      </div>
+                    )}
+                  </TabsContent>
+
+                  <TabsContent value="files" className="mt-3">
+                    <div className="flex flex-col gap-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-xs text-muted-foreground">支持 .txt、.md、图片，也可直接粘贴图片到输入框。</p>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 shrink-0 gap-1.5 text-xs"
+                          onClick={() => fileInputRef.current?.click()}
+                        >
+                          <Paperclip className="h-3.5 w-3.5" />
+                          上传文件
+                        </Button>
+                      </div>
+                      {currentContextFiles.length > 0 ? (
+                        <div className="flex flex-col gap-2">
+                          {currentContextFiles.map((file) => (
+                            <div
+                              key={file.id}
+                              className="flex max-w-full items-center justify-between gap-3 rounded-lg border border-border/50 bg-background/60 px-3 py-2 text-xs"
+                            >
+                              <div className="flex min-w-0 items-center gap-2">
+                                {file.isImage ? (
+                                  <ImageIcon className="h-3.5 w-3.5 shrink-0 text-primary" />
+                                ) : (
+                                  <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                )}
+                                <span className="truncate">{file.name}</span>
+                                <span className="shrink-0 text-muted-foreground">{formatFileSize(file.size)}</span>
+                              </div>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon-sm"
+                                className="shrink-0"
+                                onClick={() => removeContextFile(file.id)}
+                                aria-label={`移除 ${file.name}`}
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
+                          暂无上传文件。
+                        </div>
+                      )}
+                    </div>
+                  </TabsContent>
+                </Tabs>
               </div>
             )}
           </div>

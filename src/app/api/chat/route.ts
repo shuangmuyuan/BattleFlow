@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { NextRequest } from 'next/server';
-import { LLMClient, Config, HeaderUtils } from 'coze-coding-dev-sdk';
+import { LLMClient, Config, HeaderUtils, KnowledgeClient } from 'coze-coding-dev-sdk';
 
 export const runtime = 'nodejs';
 
@@ -28,8 +28,27 @@ interface StepContext {
 }
 
 interface KnowledgeBaseContext {
+  id?: string;
   name?: string;
   description?: string;
+  dataset_name?: string;
+  document_count?: number;
+  updated_at?: string;
+}
+
+interface KnowledgeRetrievalChunk {
+  content: string;
+  source?: string;
+  score?: number;
+}
+
+interface KnowledgeRetrievalContext {
+  knowledge_base_id?: string;
+  name?: string;
+  dataset_name?: string;
+  status: 'retrieved' | 'empty' | 'skipped' | 'error';
+  error?: string;
+  chunks: KnowledgeRetrievalChunk[];
 }
 
 interface ReviewMaterialContext {
@@ -60,11 +79,128 @@ function isChatMessage(value: unknown): value is ChatMessage {
   );
 }
 
+function getString(value: unknown, fallback = '') {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function getNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function truncateForPrompt(value: string, maxLength: number) {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}\n...（已截断）` : value;
+}
+
+function getChunkContent(chunk: Record<string, unknown>) {
+  return getString(
+    chunk.content,
+    getString(chunk.text, getString(chunk.raw_data, getString(chunk.chunk))),
+  );
+}
+
+function normalizeKnowledgeChunks(chunks: unknown): KnowledgeRetrievalChunk[] {
+  if (!Array.isArray(chunks)) return [];
+  const normalized: KnowledgeRetrievalChunk[] = [];
+
+  for (const chunk of chunks) {
+    if (!chunk || typeof chunk !== 'object' || Array.isArray(chunk)) continue;
+    const record = chunk as Record<string, unknown>;
+    const content = getChunkContent(record);
+    if (!content) continue;
+    const source = getString(record.source, getString(record.url, getString(record.document_name)));
+    const score = getNumber(record.score);
+    normalized.push({
+      content: truncateForPrompt(content, 1600),
+      ...(source ? { source } : {}),
+      ...(typeof score === 'number' ? { score } : {}),
+    });
+  }
+
+  return normalized;
+}
+
+function getLastUserMessage(messages: ChatMessage[]) {
+  return [...messages].reverse().find((message) => message.role === 'user')?.content || '';
+}
+
+async function retrieveKnowledgeContext(
+  body: Record<string, unknown>,
+  messages: ChatMessage[],
+): Promise<KnowledgeRetrievalContext[]> {
+  const selectedKnowledgeBases = Array.isArray(body.selected_knowledge_bases)
+    ? body.selected_knowledge_bases as KnowledgeBaseContext[]
+    : [];
+  if (selectedKnowledgeBases.length === 0) return [];
+
+  const query = getString(body.knowledge_query, getLastUserMessage(messages));
+  if (!query.trim()) {
+    return selectedKnowledgeBases.map((knowledgeBase) => ({
+      knowledge_base_id: knowledgeBase.id,
+      name: knowledgeBase.name,
+      dataset_name: knowledgeBase.dataset_name,
+      status: 'skipped',
+      error: '缺少可用于检索的用户问题。',
+      chunks: [],
+    }));
+  }
+
+  const kbClient = new KnowledgeClient(new Config());
+  const topK = 4;
+
+  return Promise.all(selectedKnowledgeBases.map(async (knowledgeBase) => {
+    if (!knowledgeBase.dataset_name) {
+      return {
+        knowledge_base_id: knowledgeBase.id,
+        name: knowledgeBase.name,
+        dataset_name: knowledgeBase.dataset_name,
+        status: 'skipped' as const,
+        error: '知识库缺少 dataset_name，无法检索。',
+        chunks: [],
+      };
+    }
+
+    try {
+      const result = await kbClient.search(query, [knowledgeBase.dataset_name], topK, 0.3) as unknown as Record<string, unknown>;
+      if (result.code !== 0) {
+        return {
+          knowledge_base_id: knowledgeBase.id,
+          name: knowledgeBase.name,
+          dataset_name: knowledgeBase.dataset_name,
+          status: 'error' as const,
+          error: getString(result.msg, '知识检索失败。'),
+          chunks: [],
+        };
+      }
+
+      const chunks = normalizeKnowledgeChunks(result.chunks);
+      return {
+        knowledge_base_id: knowledgeBase.id,
+        name: knowledgeBase.name,
+        dataset_name: knowledgeBase.dataset_name,
+        status: chunks.length > 0 ? 'retrieved' as const : 'empty' as const,
+        chunks,
+      };
+    } catch (error) {
+      return {
+        knowledge_base_id: knowledgeBase.id,
+        name: knowledgeBase.name,
+        dataset_name: knowledgeBase.dataset_name,
+        status: 'error' as const,
+        error: error instanceof Error ? error.message : '知识检索失败。',
+        chunks: [],
+      };
+    }
+  }));
+}
+
 function buildSystemPrompt(body: Record<string, unknown>) {
   const skillDefinition = body.skill_definition as SkillDefinition | undefined;
   const stepContext = Array.isArray(body.step_context) ? body.step_context as StepContext[] : [];
   const selectedKnowledgeBases = Array.isArray(body.selected_knowledge_bases)
     ? body.selected_knowledge_bases as KnowledgeBaseContext[]
+    : [];
+  const knowledgeRetrievals = Array.isArray(body.knowledge_retrievals)
+    ? body.knowledge_retrievals as KnowledgeRetrievalContext[]
     : [];
   const selectedReviewMaterials = Array.isArray(body.selected_review_materials)
     ? body.selected_review_materials as ReviewMaterialContext[]
@@ -109,9 +245,24 @@ function buildSystemPrompt(body: Record<string, unknown>) {
   if (selectedKnowledgeBases.length > 0) {
     systemPrompt += '\n\n## Selected Knowledge Bases\n';
     for (const knowledgeBase of selectedKnowledgeBases) {
-      systemPrompt += `\n- ${knowledgeBase.name || '未知知识库'}：${knowledgeBase.description || '无描述'}`;
+      systemPrompt += `\n- ${knowledgeBase.name || '未知知识库'}：${knowledgeBase.description || '无描述'}；dataset=${knowledgeBase.dataset_name || '未配置'}；documents=${knowledgeBase.document_count ?? '未知'}`;
     }
     systemPrompt += '\n';
+  }
+
+  if (knowledgeRetrievals.length > 0) {
+    systemPrompt += '\n\n## Retrieved Knowledge Chunks\n';
+    for (const retrieval of knowledgeRetrievals) {
+      systemPrompt += `\n### ${retrieval.name || '未知知识库'} (${retrieval.dataset_name || '未配置'})\n`;
+      if (retrieval.status !== 'retrieved') {
+        systemPrompt += `状态：${retrieval.status}${retrieval.error ? `；说明：${retrieval.error}` : ''}\n`;
+        continue;
+      }
+      retrieval.chunks.forEach((chunk, index) => {
+        const score = typeof chunk.score === 'number' ? `；score=${chunk.score.toFixed(3)}` : '';
+        systemPrompt += `\n[Chunk ${index + 1}${score}${chunk.source ? `；source=${chunk.source}` : ''}]\n${chunk.content}\n`;
+      });
+    }
   }
 
   if (selectedReviewMaterials.length > 0) {
@@ -329,7 +480,11 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const systemPrompt = buildSystemPrompt(body);
+    const knowledgeRetrievals = await retrieveKnowledgeContext(body, messages);
+    const systemPrompt = buildSystemPrompt({
+      ...body,
+      knowledge_retrievals: knowledgeRetrievals,
+    });
     const provider = String(body.agent_provider || process.env.CHAT_AGENT_PROVIDER || 'claude-cli');
     if (provider === 'coze-sdk') {
       const modelId = typeof body.model_id === 'string' ? body.model_id : undefined;
