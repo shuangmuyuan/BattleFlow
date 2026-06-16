@@ -1,8 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   FileCode2,
@@ -15,6 +14,12 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import Link from 'next/link';
+import {
+  PageHeader,
+  ProductEmptyState,
+  StatusBadge,
+  appCardClassName,
+} from '@/components/battleflow/ui';
 
 interface DashboardStats {
   totalSkills: number;
@@ -26,37 +31,62 @@ interface DashboardStats {
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats>({
-    totalSkills: 4,
-    totalWorkflows: 3,
-    activeWorkflows: 1,
-    totalKnowledgeBases: 4,
-    completedPrds: 2,
+    totalSkills: 0,
+    totalWorkflows: 0,
+    activeWorkflows: 0,
+    totalKnowledgeBases: 0,
+    completedPrds: 0,
   });
+  const [recentWorkflows, setRecentWorkflows] = useState<Array<{ id: string; name: string; status: string; updated_at?: string }>>([]);
+  const [recentSkills, setRecentSkills] = useState<Array<{ id: string; name: string; scope?: string; version?: string }>>([]);
+  const [loading, setLoading] = useState(true);
 
-  const recentWorkflows = [
-    { id: '1', name: '电商平台 v3.0 规划', status: 'in_progress', steps: 4, completedSteps: 1, updatedAt: '2小时前' },
-    { id: '2', name: '支付系统重构需求', status: 'completed', steps: 3, completedSteps: 3, updatedAt: '1天前' },
-    { id: '3', name: '会员体系升级', status: 'draft', steps: 0, completedSteps: 0, updatedAt: '3天前' },
-  ];
+  useEffect(() => {
+    let ignore = false;
 
-  const recentSkills = [
-    { id: '1', name: '竞品分析', scope: 'official', version: '1.2.0' },
-    { id: '2', name: '市场洞察', scope: 'team', version: '1.0.0' },
-    { id: '3', name: '用户需求拆解', scope: 'personal', version: '2.0.0' },
-    { id: '4', name: '技术可行性评估', scope: 'team', version: '1.1.0' },
-  ];
+    async function loadDashboard() {
+      setLoading(true);
+      try {
+        const [statsRes, skillsRes] = await Promise.all([
+          fetch('/api/dashboard/stats', { cache: 'no-store' }),
+          fetch('/api/skills', { cache: 'no-store' }),
+        ]);
+        const statsData = await statsRes.json();
+        const skillsData = await skillsRes.json();
+        const workflows = Array.isArray(statsData.recentWorkflows) ? statsData.recentWorkflows : [];
+        const skills = Array.isArray(skillsData.skills) ? skillsData.skills : [];
+        if (!ignore) {
+          setRecentWorkflows(workflows);
+          setRecentSkills(skills.slice(0, 5));
+          setStats({
+            totalSkills: statsData.skillCount || skills.length || 0,
+            totalWorkflows: statsData.workflowCount || workflows.length || 0,
+            activeWorkflows: workflows.filter((workflow: { status?: string }) => workflow.status === 'in_progress').length,
+            totalKnowledgeBases: statsData.knowledgeBaseCount || 0,
+            completedPrds: workflows.filter((workflow: { status?: string }) => workflow.status === 'completed').length,
+          });
+        }
+      } finally {
+        if (!ignore) setLoading(false);
+      }
+    }
+
+    void loadDashboard();
+    return () => {
+      ignore = true;
+    };
+  }, []);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-8 overflow-auto p-4 md:p-6">
-      {/* Welcome */}
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">欢迎回来</h1>
-        <p className="text-muted-foreground mt-1">这是你的 AI Native 产品规划工作台</p>
-      </div>
+      <PageHeader
+        title="工作台"
+        description="汇总 Skill、工作流和知识资产状态，快速进入产品规划核心任务。"
+      />
 
       {/* Stats */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        <Card className="border-border/60">
+        <Card className={appCardClassName}>
           <CardContent className="p-4 flex items-center gap-3">
             <div className="p-2 rounded-lg bg-primary/10">
               <FileCode2 className="h-5 w-5 text-primary" />
@@ -67,7 +97,7 @@ export default function DashboardPage() {
             </div>
           </CardContent>
         </Card>
-        <Card className="border-border/60">
+        <Card className={appCardClassName}>
           <CardContent className="p-4 flex items-center gap-3">
             <div className="p-2 rounded-lg bg-blue-500/10">
               <Play className="h-5 w-5 text-blue-500" />
@@ -78,7 +108,7 @@ export default function DashboardPage() {
             </div>
           </CardContent>
         </Card>
-        <Card className="border-border/60">
+        <Card className={appCardClassName}>
           <CardContent className="p-4 flex items-center gap-3">
             <div className="p-2 rounded-lg bg-amber-500/10">
               <TrendingUp className="h-5 w-5 text-amber-500" />
@@ -89,7 +119,7 @@ export default function DashboardPage() {
             </div>
           </CardContent>
         </Card>
-        <Card className="border-border/60">
+        <Card className={appCardClassName}>
           <CardContent className="p-4 flex items-center gap-3">
             <div className="p-2 rounded-lg bg-emerald-500/10">
               <BookOpen className="h-5 w-5 text-emerald-500" />
@@ -100,7 +130,7 @@ export default function DashboardPage() {
             </div>
           </CardContent>
         </Card>
-        <Card className="border-border/60">
+        <Card className={appCardClassName}>
           <CardContent className="p-4 flex items-center gap-3">
             <div className="p-2 rounded-lg bg-purple-500/10">
               <FileText className="h-5 w-5 text-purple-500" />
@@ -116,7 +146,7 @@ export default function DashboardPage() {
       {/* Quick Actions */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <Link href="/dashboard/workflows">
-          <Card className="border-border/60 hover:shadow-md transition-shadow cursor-pointer group">
+          <Card className={`${appCardClassName} cursor-pointer group`}>
             <CardContent className="flex min-w-0 items-center justify-between gap-4 p-6">
               <div className="flex min-w-0 items-center gap-3">
                 <div className="p-3 rounded-lg bg-primary/10">
@@ -132,7 +162,7 @@ export default function DashboardPage() {
           </Card>
         </Link>
         <Link href="/dashboard/skills">
-          <Card className="border-border/60 hover:shadow-md transition-shadow cursor-pointer group">
+          <Card className={`${appCardClassName} cursor-pointer group`}>
             <CardContent className="flex min-w-0 items-center justify-between gap-4 p-6">
               <div className="flex min-w-0 items-center gap-3">
                 <div className="p-3 rounded-lg bg-blue-500/10">
@@ -148,7 +178,7 @@ export default function DashboardPage() {
           </Card>
         </Link>
         <Link href="/dashboard/knowledge">
-          <Card className="border-border/60 hover:shadow-md transition-shadow cursor-pointer group">
+          <Card className={`${appCardClassName} cursor-pointer group`}>
             <CardContent className="flex min-w-0 items-center justify-between gap-4 p-6">
               <div className="flex min-w-0 items-center gap-3">
                 <div className="p-3 rounded-lg bg-emerald-500/10">
@@ -167,7 +197,7 @@ export default function DashboardPage() {
 
       {/* Recent Workflows & Skills */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <Card className="border-border/60">
+        <Card className={appCardClassName}>
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">最近工作流</CardTitle>
@@ -178,7 +208,14 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="flex flex-col gap-3">
-              {recentWorkflows.map((wf) => (
+              {recentWorkflows.length === 0 && !loading ? (
+                <ProductEmptyState
+                  icon={<Play />}
+                  title="暂无最近工作流"
+                  description="创建工作流后，最近更新会显示在这里。"
+                  className="min-h-48 border-0 bg-muted/30"
+                />
+              ) : recentWorkflows.map((wf) => (
                 <div key={wf.id} className="flex min-w-0 flex-col gap-3 rounded-lg p-3 transition-colors hover:bg-muted/50 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex min-w-0 items-center gap-3">
                     {wf.status === 'completed' ? (
@@ -191,20 +228,20 @@ export default function DashboardPage() {
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium">{wf.name}</p>
                       <p className="text-xs text-muted-foreground">
-                        {wf.completedSteps}/{wf.steps} 步骤完成 · {wf.updatedAt}
+                        更新于 {wf.updated_at ? new Date(wf.updated_at).toLocaleDateString('zh-CN') : '-'}
                       </p>
                     </div>
                   </div>
-                  <Badge variant={wf.status === 'completed' ? 'default' : wf.status === 'in_progress' ? 'secondary' : 'outline'}>
+                  <StatusBadge tone={wf.status === 'completed' ? 'success' : wf.status === 'in_progress' ? 'brand' : 'neutral'}>
                     {wf.status === 'completed' ? '已完成' : wf.status === 'in_progress' ? '进行中' : '草稿'}
-                  </Badge>
+                  </StatusBadge>
                 </div>
               ))}
             </div>
           </CardContent>
         </Card>
 
-        <Card className="border-border/60">
+        <Card className={appCardClassName}>
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">最近使用的 Skills</CardTitle>
@@ -215,7 +252,14 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="flex flex-col gap-3">
-              {recentSkills.map((skill) => (
+              {recentSkills.length === 0 && !loading ? (
+                <ProductEmptyState
+                  icon={<FileCode2 />}
+                  title="暂无最近 Skill"
+                  description="导入或发布 Skill 后，常用能力会显示在这里。"
+                  className="min-h-48 border-0 bg-muted/30"
+                />
+              ) : recentSkills.map((skill) => (
                 <div key={skill.id} className="flex min-w-0 items-center justify-between gap-3 rounded-lg p-3 transition-colors hover:bg-muted/50">
                   <div className="flex min-w-0 items-center gap-3">
                     <FileCode2 className="h-4 w-4 text-muted-foreground" />
@@ -224,11 +268,9 @@ export default function DashboardPage() {
                       <p className="text-xs text-muted-foreground">v{skill.version}</p>
                     </div>
                   </div>
-                  <Badge
-                    variant={skill.scope === 'official' ? 'default' : skill.scope === 'team' ? 'secondary' : 'outline'}
-                  >
+                  <StatusBadge tone={skill.scope === 'official' ? 'brand' : skill.scope === 'team' ? 'success' : 'neutral'}>
                     {skill.scope === 'official' ? '官方' : skill.scope === 'team' ? '团队' : '个人'}
-                  </Badge>
+                  </StatusBadge>
                 </div>
               ))}
             </div>

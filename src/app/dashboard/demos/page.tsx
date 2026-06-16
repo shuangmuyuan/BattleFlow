@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
+import { Card, CardContent } from '@/components/ui/card';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Progress } from '@/components/ui/progress';
 import {
@@ -30,6 +30,13 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
+import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
+import {
+  PageHeader,
+  ProductEmptyState,
+  StatusBadge,
+  appCardClassName,
+} from '@/components/battleflow/ui';
 
 interface Demo {
   id: string;
@@ -42,54 +49,24 @@ interface Demo {
   previewUrl?: string;
 }
 
-const mockDemos: Demo[] = [
-  {
-    id: '1',
-    name: '电商平台 v3.0 首页原型',
-    sourceWorkflow: '电商平台 v3.0 规划',
-    type: 'web',
-    fidelity: 'mid',
-    status: 'completed',
-    createdAt: '2024-01-15 14:30',
-    previewUrl: '#',
-  },
-  {
-    id: '2',
-    name: '用户中心移动端页面',
-    sourceWorkflow: '电商平台 v3.0 规划',
-    type: 'mobile',
-    fidelity: 'high',
-    status: 'completed',
-    createdAt: '2024-01-14 10:15',
-    previewUrl: '#',
-  },
-  {
-    id: '3',
-    name: '商品详情页组件库',
-    sourceWorkflow: '商品模块重构',
-    type: 'component',
-    fidelity: 'low',
-    status: 'generating',
-    createdAt: '2024-01-16 09:00',
-  },
-];
+const mockDemos: Demo[] = [];
 
 const typeConfig = {
-  web: { label: 'Web 页面', icon: Globe, color: 'text-blue-400' },
-  mobile: { label: '移动端', icon: Smartphone, color: 'text-green-400' },
-  component: { label: '组件库', icon: Component, color: 'text-orange-400' },
+  web: { label: 'Web 页面', icon: Globe },
+  mobile: { label: '移动端', icon: Smartphone },
+  component: { label: '组件库', icon: Component },
 };
 
-const fidelityConfig = {
-  low: { label: '低保真', color: 'bg-yellow-500/20 text-yellow-400' },
-  mid: { label: '中保真', color: 'bg-blue-500/20 text-blue-400' },
-  high: { label: '高保真', color: 'bg-purple-500/20 text-purple-400' },
+const fidelityLabels = {
+  low: '低保真',
+  mid: '中保真',
+  high: '高保真',
 };
 
 const statusConfig = {
-  generating: { label: '生成中', color: 'text-primary', icon: Loader2, animate: true },
-  completed: { label: '已完成', color: 'text-green-400', icon: CheckCircle2, animate: false },
-  failed: { label: '生成失败', color: 'text-red-400', icon: Clock, animate: false },
+  generating: { label: '生成中', tone: 'brand' as const, icon: Loader2, animate: true },
+  completed: { label: '已完成', tone: 'success' as const, icon: CheckCircle2, animate: false },
+  failed: { label: '生成失败', tone: 'danger' as const, icon: Clock, animate: false },
 };
 
 export default function DemosPage() {
@@ -120,65 +97,73 @@ export default function DemosPage() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-6 overflow-auto">
-      {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-semibold">Demo 生成</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            基于 PRD 文档自动生成交互式原型，快速验证产品方案
-          </p>
-        </div>
-        <Button
-          className="w-full gap-2 sm:w-auto"
-          onClick={() => {
-            resetDialog();
-            setCreateDialogOpen(true);
-          }}
-        >
-          <Plus className="h-4 w-4" />
-          新建 Demo
-        </Button>
-      </div>
+    <div className="flex h-full min-h-0 flex-col">
+      <PageHeader
+        title="Demo 生成"
+        description="从已完成的规划产物生成可演示原型，帮助团队快速验证产品方向。"
+        meta={<StatusBadge tone="warning">生成服务待接入</StatusBadge>}
+        action={(
+          <Button
+            className="w-full gap-2 sm:w-auto"
+            onClick={() => {
+              resetDialog();
+              setCreateDialogOpen(true);
+            }}
+          >
+            <Plus className="h-4 w-4" />
+            新建 Demo
+          </Button>
+        )}
+      />
+
+      <div className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
+        <div className="flex flex-col gap-6">
 
       {/* Stats */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <div className="rounded-xl bg-card border border-border/50 p-4">
+        <Card className={appCardClassName}>
+          <CardContent className="p-4">
           <div className="text-2xl font-bold">{demos.length}</div>
           <div className="text-xs text-muted-foreground mt-1">Demo 总数</div>
-        </div>
-        <div className="rounded-xl bg-card border border-border/50 p-4">
-          <div className="text-2xl font-bold text-green-400">
+          </CardContent>
+        </Card>
+        <Card className={appCardClassName}>
+          <CardContent className="p-4">
+          <div className="text-2xl font-bold text-success">
             {demos.filter((d) => d.status === 'completed').length}
           </div>
           <div className="text-xs text-muted-foreground mt-1">已完成</div>
-        </div>
-        <div className="rounded-xl bg-card border border-border/50 p-4">
-          <div className="text-2xl font-bold text-primary">
+          </CardContent>
+        </Card>
+        <Card className={appCardClassName}>
+          <CardContent className="p-4">
+          <div className="text-2xl font-bold text-brand">
             {demos.filter((d) => d.status === 'generating').length}
           </div>
           <div className="text-xs text-muted-foreground mt-1">生成中</div>
-        </div>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Demo List */}
       <div className="flex flex-col gap-3">
         {demos.map((demo) => {
           const tConfig = typeConfig[demo.type];
-          const fConfig = fidelityConfig[demo.fidelity];
+          const fidelityLabel = fidelityLabels[demo.fidelity];
           const sConfig = statusConfig[demo.status];
           const TypeIcon = tConfig.icon;
           const StatusIcon = sConfig.icon;
 
           return (
-            <div
+            <Card
               key={demo.id}
-              className="rounded-xl bg-card border border-border/50 p-5 hover:border-primary/30 transition-colors"
+              className={appCardClassName}
             >
+              <CardContent className="p-5">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div className="flex items-start gap-4 flex-1 min-w-0">
                   {/* Icon */}
-                  <div className={`rounded-lg bg-muted/50 p-2.5 ${tConfig.color}`}>
+                  <div className="rounded-lg bg-brand/10 p-2.5 text-brand">
                     <TypeIcon className="h-5 w-5" />
                   </div>
 
@@ -186,9 +171,7 @@ export default function DemosPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex min-w-0 flex-wrap items-center gap-2">
                       <h3 className="font-medium truncate">{demo.name}</h3>
-                      <Badge variant="secondary" className={fConfig.color}>
-                        {fConfig.label}
-                      </Badge>
+                      <StatusBadge tone="neutral">{fidelityLabel}</StatusBadge>
                     </div>
                     <div className="mt-1.5 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                       <span className="flex min-w-0 items-center gap-1">
@@ -202,10 +185,10 @@ export default function DemosPage() {
 
                 {/* Status & Actions */}
                 <div className="flex flex-wrap items-center gap-3 lg:ml-4 lg:justify-end">
-                  <div className={`flex items-center gap-1.5 text-sm ${sConfig.color}`}>
+                  <StatusBadge tone={sConfig.tone}>
                     <StatusIcon className={`h-4 w-4 ${sConfig.animate ? 'animate-spin' : ''}`} />
                     {sConfig.label}
-                  </div>
+                  </StatusBadge>
                   {demo.status === 'completed' && (
                     <div className="flex flex-wrap items-center gap-2">
                       <Button variant="ghost" size="sm" className="gap-1.5 text-xs" disabled>
@@ -227,23 +210,28 @@ export default function DemosPage() {
                     <Progress value={45} className="h-1.5 animate-pulse" />
                 </div>
               )}
-            </div>
+              </CardContent>
+            </Card>
           );
         })}
       </div>
 
       {/* Empty hint if no demos */}
       {demos.length === 0 && (
-        <div className="text-center py-16">
-          <Rocket className="h-12 w-12 text-muted-foreground/50 mx-auto" />
-          <h3 className="text-lg font-medium mt-4">暂无 Demo</h3>
-          <p className="text-sm text-muted-foreground mt-1">从工作流的 PRD 产出物生成你的第一个交互原型</p>
-          <Button className="mt-4 gap-2" onClick={() => setCreateDialogOpen(true)}>
-            <Plus className="h-4 w-4" />
-            新建 Demo
-          </Button>
-        </div>
+        <ProductEmptyState
+          icon={<Rocket />}
+          title="暂无 Demo"
+          description="从工作流的 PRD 产出物生成第一个交互原型。生成服务接入前，可先整理输入材料。"
+          action={(
+            <Button className="gap-2" onClick={() => setCreateDialogOpen(true)}>
+              <Plus className="h-4 w-4" />
+              新建 Demo
+            </Button>
+          )}
+        />
       )}
+        </div>
+      </div>
 
       {/* Create Demo Dialog */}
       <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
@@ -258,31 +246,31 @@ export default function DemosPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-          <div className="flex flex-col gap-5">
+          <FieldGroup className="gap-5">
             {/* Basic Info */}
-            <div className="flex flex-col gap-4">
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium">Demo 名称</label>
+            <FieldGroup className="gap-4">
+              <Field>
+                <FieldLabel>Demo 名称</FieldLabel>
                 <Input
                   placeholder="例如：电商平台首页原型"
                   value={demoName}
                   onChange={(e) => setDemoName(e.target.value)}
                 />
-              </div>
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium">描述（可选）</label>
+              </Field>
+              <Field>
+                <FieldLabel>描述（可选）</FieldLabel>
                 <Textarea
                   placeholder="描述这个 Demo 的目标和关注点..."
                   value={demoDesc}
                   onChange={(e) => setDemoDesc(e.target.value)}
                   rows={3}
                 />
-              </div>
-            </div>
+              </Field>
+            </FieldGroup>
 
             {/* Source Selection */}
-            <div className="flex flex-col gap-2">
-              <label className="text-sm font-medium">关联工作流</label>
+            <Field>
+              <FieldLabel>关联工作流</FieldLabel>
               <div className="rounded-lg border border-border/50 p-3 text-sm text-muted-foreground">
                 请先在「工作流」中完成 PRD 生成，此处可选择已完成的 PRD 作为输入
                 <div className="mt-2 flex items-center gap-1 text-xs text-primary">
@@ -290,11 +278,11 @@ export default function DemosPage() {
                   前往工作流
                 </div>
               </div>
-            </div>
+            </Field>
 
             {/* Type Selection */}
-            <div className="flex flex-col gap-2">
-              <label className="text-sm font-medium">原型类型</label>
+            <Field>
+              <FieldLabel>原型类型</FieldLabel>
               <ToggleGroup
                 type="single"
                 value={selectedType}
@@ -317,11 +305,11 @@ export default function DemosPage() {
                   </ToggleGroupItem>
                 ))}
               </ToggleGroup>
-            </div>
+            </Field>
 
             {/* Fidelity Selection */}
-            <div className="flex flex-col gap-2">
-              <label className="text-sm font-medium">交互保真度</label>
+            <Field>
+              <FieldLabel>交互保真度</FieldLabel>
               <ToggleGroup
                 type="single"
                 value={selectedFidelity}
@@ -343,7 +331,7 @@ export default function DemosPage() {
                   </ToggleGroupItem>
                 ))}
               </ToggleGroup>
-            </div>
+            </Field>
 
             {/* Generating status */}
             {generating && (
@@ -377,11 +365,11 @@ export default function DemosPage() {
                 <>
                   <Button
                     className="flex-1 gap-2"
-                    disabled={!demoName.trim()}
+                    disabled
                     onClick={handleGenerate}
                   >
                     <Sparkles className="h-4 w-4" />
-                    开始生成
+                    生成服务待接入
                   </Button>
                   <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
                     取消
@@ -400,7 +388,7 @@ export default function DemosPage() {
                 </>
               )}
             </div>
-          </div>
+          </FieldGroup>
           </div>
         </DialogContent>
       </Dialog>

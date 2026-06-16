@@ -42,6 +42,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { PageHeader, appCardClassName } from '@/components/battleflow/ui';
 
 type SkillScope = 'personal' | 'team' | 'official';
 type SkillSourceType = 'local' | 'registry' | 'git';
@@ -425,11 +426,10 @@ export default function SkillsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 flex-col gap-4 border-b border-border/40 p-4 sm:flex-row sm:items-center sm:justify-between md:p-6">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight">Skill 仓库</h1>
-          <p className="mt-1 text-sm text-muted-foreground">导入、审核、发布和追踪产品规划 Skill</p>
-        </div>
+      <PageHeader
+        title="Skill 仓库"
+        description="导入、审核、发布和追踪产品规划 Skill，把团队方法沉淀为可编排能力。"
+        action={(
         <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
           <DialogTrigger asChild>
             <Button className="w-full sm:w-auto">
@@ -565,7 +565,8 @@ export default function SkillsPage() {
             </FieldGroup>
           </DialogContent>
         </Dialog>
-      </div>
+        )}
+      />
 
       <div className="min-h-0 flex-1 overflow-auto">
         <div className="flex flex-col gap-6 p-4 md:p-6">
@@ -630,7 +631,7 @@ export default function SkillsPage() {
               {filteredSkills.map((skill) => (
                 <Card
                   key={skill.id}
-                  className="min-w-0 border-border/60 transition-shadow hover:shadow-md"
+                  className={appCardClassName}
                 >
                   <CardHeader className="pb-3">
                     <div className="flex items-start justify-between gap-3">

@@ -6,7 +6,15 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  PageHeader,
+  ProductEmptyState,
+  StatusBadge,
+  appCardClassName,
+} from '@/components/battleflow/ui';
 import {
   Dialog,
   DialogContent,
@@ -1033,17 +1041,21 @@ export default function WorkflowsPage() {
 
     return (
       <div className="flex h-full min-h-0 flex-col">
-        <div className="shrink-0 border-b border-border/40 p-4 md:p-6">
-          <div className="min-w-0">
-            <h1 className="text-2xl font-bold tracking-tight">工作流</h1>
-            <p className="text-muted-foreground text-sm mt-1">先建立工作目录，再在目录内创建规划工作流</p>
-          </div>
-        </div>
+        <PageHeader
+          title="工作流"
+          description="先建立工作目录，再在目录内编排 Skill，把产品规划过程沉淀为可追踪的协作流。"
+          action={(
+            <Button variant="outline" className="w-full gap-2 sm:w-auto" onClick={() => setWorkspaceDialogOpen(true)}>
+              <Plus className="h-4 w-4" />
+              新建目录
+            </Button>
+          )}
+        />
 
         {errorMessage && (
-          <div className="mx-6 mt-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-            {errorMessage}
-          </div>
+          <Alert variant="destructive" className="mx-4 mt-4 md:mx-6">
+            <AlertDescription>{errorMessage}</AlertDescription>
+          </Alert>
         )}
 
         <div className="max-h-[45dvh] shrink-0 overflow-y-auto border-b border-border/40 px-4 py-4 md:px-6">
@@ -1054,25 +1066,25 @@ export default function WorkflowsPage() {
             </div>
             <div className="flex flex-wrap items-center gap-2">
               {activeWorkspace && (
-                <Badge variant="secondary" className="text-xs">
+                <StatusBadge tone="brand" className="text-xs">
                   当前目录：{activeWorkspace.name}
-                </Badge>
+                </StatusBadge>
               )}
-              <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setWorkspaceDialogOpen(true)}>
-                <Plus className="h-3.5 w-3.5" />
-                新建目录
-              </Button>
             </div>
           </div>
           {workspaces.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-border/70 p-5 text-center">
-              <p className="text-sm font-medium">暂无工作目录</p>
-              <p className="mt-1 text-xs text-muted-foreground">请先创建工作目录，再继续创建工作流。</p>
-              <Button size="sm" className="mt-3 gap-1.5" onClick={() => setWorkspaceDialogOpen(true)}>
-                <Plus className="h-3.5 w-3.5" />
-                新建目录
-              </Button>
-            </div>
+            <ProductEmptyState
+              icon={<Plus />}
+              title="暂无工作目录"
+              description="先创建一个目录，用来承载同一阶段或同一产品线下的工作流。"
+              className="min-h-48"
+              action={(
+                <Button size="sm" className="gap-1.5" onClick={() => setWorkspaceDialogOpen(true)}>
+                  <Plus className="h-3.5 w-3.5" />
+                  新建目录
+                </Button>
+              )}
+            />
           ) : (
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               {workspaces.map((workspace) => {
@@ -1083,7 +1095,7 @@ export default function WorkflowsPage() {
                   <div
                     key={workspace.id}
                     className={`flex items-start gap-2 rounded-lg border p-3 transition-colors ${
-                      selected ? 'border-primary bg-primary/10' : 'border-border/60 hover:border-primary/50 hover:bg-muted/40'
+                      selected ? 'border-brand bg-brand/10' : 'border-border/60 bg-card/70 hover:border-brand/40 hover:bg-muted/40'
                     }`}
                   >
                     <button
@@ -1096,9 +1108,9 @@ export default function WorkflowsPage() {
                     >
                       <div className="flex min-w-0 items-center justify-between gap-2">
                         <p className="truncate text-sm font-medium">{workspace.name}</p>
-                        <Badge variant={selected ? 'default' : 'outline'} className="text-[10px]">
+                        <StatusBadge tone={selected ? 'brand' : 'neutral'} className="text-[10px]">
                           {count} 个流程
-                        </Badge>
+                        </StatusBadge>
                       </div>
                       <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{workspace.description}</p>
                     </button>
@@ -1134,17 +1146,23 @@ export default function WorkflowsPage() {
 
         <div className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
           {!activeWorkspace ? (
-            <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
-              <Plus className="mb-4 h-12 w-12 opacity-30" />
-              <p>请先新建工作目录</p>
-              <p className="mt-1 text-sm">工作流必须归属到一个工作目录后才能创建</p>
-            </div>
+            <ProductEmptyState
+              icon={<Plus />}
+              title="请先新建工作目录"
+              description="工作流必须归属到一个目录后才能创建和查看。"
+            />
           ) : workspaceWorkflows.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-              <Play className="h-12 w-12 mb-4 opacity-30" />
-              <p>暂无工作流</p>
-              <p className="text-sm mt-1">在当前工作目录内新建工作流</p>
-            </div>
+            <ProductEmptyState
+              icon={<Play />}
+              title="当前目录暂无工作流"
+              description="创建一个工作流，选择至少三个 Skill，开始串行或并行推进产品规划。"
+              action={(
+                <Button className="gap-2" onClick={() => setCreateDialogOpen(true)}>
+                  <Plus className="h-4 w-4" />
+                  新建工作流
+                </Button>
+              )}
+            />
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {workspaceWorkflows.map((wf) => {
@@ -1161,7 +1179,7 @@ export default function WorkflowsPage() {
                 return (
                   <Card
                     key={wf.id}
-                    className="flex min-h-56 min-w-0 flex-col overflow-hidden transition-shadow hover:shadow-md"
+                    className={`flex min-h-56 min-w-0 flex-col overflow-hidden ${appCardClassName}`}
                   >
                     <CardHeader className="flex min-w-0 flex-col gap-3 pb-3">
                       <div className="flex min-w-0 items-start justify-between gap-3">
@@ -1169,12 +1187,12 @@ export default function WorkflowsPage() {
                           <CardTitle className="line-clamp-2 text-base leading-snug">{wf.name}</CardTitle>
                           <p className="mt-2 line-clamp-2 min-h-10 text-sm text-muted-foreground">{wf.description || '未填写工作流说明'}</p>
                         </div>
-                        <Badge
+                        <StatusBadge
                           className="shrink-0"
-                          variant={wf.status === 'completed' ? 'default' : wf.status === 'in_progress' ? 'secondary' : 'outline'}
+                          tone={wf.status === 'completed' ? 'success' : wf.status === 'in_progress' ? 'brand' : 'neutral'}
                         >
                           {wf.status === 'completed' ? '已完成' : wf.status === 'in_progress' ? '进行中' : '草稿'}
-                        </Badge>
+                        </StatusBadge>
                       </div>
                       <div className="grid grid-cols-3 gap-2">
                           <Button
@@ -1694,6 +1712,27 @@ export default function WorkflowsPage() {
       return groups;
     }, {})
   );
+  const renderStepOutputPreview = (step: WorkflowStep) => (
+    <Card key={step.id} className={`${appCardClassName} mb-2`}>
+      <CardContent className="p-3">
+        <div className="mb-1 flex min-w-0 items-center justify-between gap-2">
+          <p className="min-w-0 truncate text-xs font-medium">{step.name}</p>
+          {step.output && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 shrink-0 gap-1 px-1.5 text-[11px]"
+              onClick={() => downloadStepOutput(step.name, step.output || '')}
+            >
+              <Download className="h-3 w-3" />
+              下载
+            </Button>
+          )}
+        </div>
+        <p className="mt-1 line-clamp-4 break-words text-xs text-muted-foreground">{step.output}</p>
+      </CardContent>
+    </Card>
+  );
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-auto lg:flex-row lg:overflow-hidden">
@@ -2125,102 +2164,92 @@ export default function WorkflowsPage() {
 
       {/* Right: Context Panel */}
       <div className="flex max-h-[32rem] min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-border/40 lg:h-full lg:max-h-none lg:w-80 lg:border-l lg:border-t-0">
-        <div className="border-b border-border/40 p-4">
-          <h3 className="font-semibold text-sm">上下文面板</h3>
-        </div>
-        <ScrollArea className="min-h-0 flex-1">
-          <div className="min-w-0 p-4 space-y-4">
-            {/* Current Skill Info */}
-            {currentSkill && (
-              <div className="min-w-0">
-                <h4 className="text-xs font-medium text-muted-foreground mb-2">当前 Skill</h4>
-                <Card className="border-border/40">
-                  <CardContent className="p-3">
-                    <p className="font-medium text-sm">{currentSkill.name}</p>
-                    <p className="mt-1 break-words text-xs text-muted-foreground">{currentSkill.description}</p>
-                    <div className="flex flex-wrap gap-1 mt-2">
-                      {currentSkill.tools.map((tool) => (
-                        <Badge key={tool} variant="secondary" className="text-xs">{tool}</Badge>
-                      ))}
+        <Tabs defaultValue="skill" className="min-h-0 flex-1 gap-0">
+          <div className="shrink-0 border-b border-border/40 p-4">
+            <h3 className="text-sm font-semibold">上下文面板</h3>
+            <p className="mt-1 truncate text-xs text-muted-foreground">
+              {currentStep?.name || '未选择步骤'}
+            </p>
+            <TabsList className="mt-3 grid h-8 w-full grid-cols-5">
+              <TabsTrigger value="skill" className="text-xs">Skill</TabsTrigger>
+              <TabsTrigger value="outputs" className="text-xs">产出</TabsTrigger>
+              <TabsTrigger value="snapshots" className="text-xs">快照</TabsTrigger>
+              <TabsTrigger value="review" className="text-xs">审核</TabsTrigger>
+              <TabsTrigger value="archive" className="text-xs">沉淀</TabsTrigger>
+            </TabsList>
+          </div>
+
+          <TabsContent value="skill" className="min-h-0 flex-1 overflow-hidden">
+            <ScrollArea className="h-full">
+              <div className="flex min-w-0 flex-col gap-4 p-4">
+                {currentSkill ? (
+                  <Card className={appCardClassName}>
+                    <CardContent className="p-3">
+                      <p className="text-sm font-medium">{currentSkill.name}</p>
+                      <p className="mt-2 break-words text-xs leading-5 text-muted-foreground">{currentSkill.description}</p>
+                      <div className="mt-3 flex flex-wrap gap-1">
+                        {currentSkill.tools.map((tool) => (
+                          <Badge key={tool} variant="secondary" className="text-xs">{tool}</Badge>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
+                    选择一个步骤后查看 Skill 信息。
+                  </p>
+                )}
+              </div>
+            </ScrollArea>
+          </TabsContent>
+
+          <TabsContent value="outputs" className="min-h-0 flex-1 overflow-hidden">
+            <ScrollArea className="h-full">
+              <div className="flex min-w-0 flex-col gap-4 p-4">
+                <div className="min-w-0">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <h4 className="min-w-0 truncate text-xs font-medium text-muted-foreground">前序步骤产出</h4>
+                    <Badge variant="outline" className="shrink-0 text-[11px]">{previousSteps.length} 个</Badge>
+                  </div>
+                  {previousSteps.length > 0 ? (
+                    previousSteps.map(renderStepOutputPreview)
+                  ) : (
+                    <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
+                      当前步骤暂无前序产出。
+                    </p>
+                  )}
+                </div>
+
+                {parallelPeerSteps.length > 0 && (
+                  <div className="min-w-0">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <h4 className="min-w-0 truncate text-xs font-medium text-muted-foreground">并行任务产出</h4>
+                      <Badge variant="outline" className="shrink-0 text-[11px]">{parallelPeerSteps.length} 个</Badge>
                     </div>
-                  </CardContent>
-                </Card>
+                    {parallelPeerSteps.map(renderStepOutputPreview)}
+                  </div>
+                )}
               </div>
-            )}
+            </ScrollArea>
+          </TabsContent>
 
-            {/* Previous Step Outputs */}
-            {previousSteps.length > 0 && (
-              <div className="min-w-0">
-                <h4 className="text-xs font-medium text-muted-foreground mb-2">前序步骤产出</h4>
-                {previousSteps.map((step) => (
-                  <Card key={step.id} className="border-border/40 mb-2">
-                    <CardContent className="p-3">
-                      <div className="mb-1 flex min-w-0 items-center justify-between gap-2">
-                        <p className="min-w-0 truncate font-medium text-xs">{step.name}</p>
-                        {step.output && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-6 shrink-0 gap-1 px-1.5 text-[11px]"
-                            onClick={() => downloadStepOutput(step.name, step.output || '')}
-                          >
-                            <Download className="h-3 w-3" />
-                            下载
-                          </Button>
-                        )}
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-1 line-clamp-4">{step.output}</p>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            )}
-
-            {/* Parallel Peer Outputs */}
-            {parallelPeerSteps.length > 0 && (
-              <div className="min-w-0">
-                <h4 className="text-xs font-medium text-muted-foreground mb-2">并行任务产出</h4>
-                {parallelPeerSteps.map((step) => (
-                  <Card key={step.id} className="border-border/40 mb-2">
-                    <CardContent className="p-3">
-                      <div className="mb-1 flex min-w-0 items-center justify-between gap-2">
-                        <p className="min-w-0 truncate font-medium text-xs">{step.name}</p>
-                        {step.output && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-6 shrink-0 gap-1 px-1.5 text-[11px]"
-                            onClick={() => downloadStepOutput(step.name, step.output || '')}
-                          >
-                            <Download className="h-3 w-3" />
-                            下载
-                          </Button>
-                        )}
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-1 line-clamp-4">{step.output}</p>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            )}
-
-            {/* Step Snapshots */}
-            {currentStep && (
-              <div className="min-w-0">
-                <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
+          <TabsContent value="snapshots" className="min-h-0 flex-1 overflow-hidden">
+            <ScrollArea className="h-full">
+              <div className="flex min-w-0 flex-col gap-3 p-4">
+                <div className="flex min-w-0 items-center justify-between gap-2">
                   <h4 className="min-w-0 truncate text-xs font-medium text-muted-foreground">历史快照</h4>
                   <Badge variant="outline" className="shrink-0 text-[11px]">
                     {currentStepSnapshots.length} 条
                   </Badge>
                 </div>
-                <Card className="border-border/40">
-                  <CardContent className="space-y-2 p-3">
+                <Card className={appCardClassName}>
+                  <CardContent className="flex flex-col gap-2 p-3">
                     {currentStepSnapshots.length > 0 ? (
                       currentStepSnapshots.map((snapshot) => (
                         <button
                           key={snapshot.id}
                           type="button"
-                          className="w-full rounded-md border border-border/50 bg-background/60 p-2 text-left transition-colors hover:border-primary/50 hover:bg-muted/40"
+                          className="w-full rounded-md border border-border/50 bg-background/60 p-2 text-left transition-colors hover:border-brand/50 hover:bg-muted/40"
                           onClick={() => {
                             setSelectedSnapshot(snapshot);
                             setSnapshotDialogOpen(true);
@@ -2228,7 +2257,7 @@ export default function WorkflowsPage() {
                         >
                           <div className="flex min-w-0 items-center justify-between gap-2">
                             <div className="flex min-w-0 items-center gap-2">
-                              <History className="h-3.5 w-3.5 shrink-0 text-primary" />
+                              <History className="h-3.5 w-3.5 shrink-0 text-brand" />
                               <span className="truncate text-xs font-medium">{formatSnapshotTime(snapshot.created_at)}</span>
                             </div>
                             <span className="shrink-0 text-[11px] text-muted-foreground">查看</span>
@@ -2242,118 +2271,139 @@ export default function WorkflowsPage() {
                         </button>
                       ))
                     ) : (
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-xs leading-5 text-muted-foreground">
                         确认完成当前步骤后，会自动保存产出、上下文和审核反馈快照。
                       </p>
                     )}
                   </CardContent>
                 </Card>
               </div>
-            )}
+            </ScrollArea>
+          </TabsContent>
 
-            {/* Reviewed Output Upload */}
-            {currentStep && (
-              <div className="min-w-0">
-                <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
-                  <h4 className="min-w-0 truncate text-xs font-medium text-muted-foreground">产物审核反馈</h4>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 shrink-0 gap-1.5 text-xs"
-                    onClick={() => reviewedOutputInputRef.current?.click()}
-                  >
-                    <Paperclip className="h-3.5 w-3.5" />
-                    上传已审核产物
-                  </Button>
-                  <input
-                    ref={reviewedOutputInputRef}
-                    type="file"
-                    multiple
-                    accept=".txt,.md,.doc,.docx,.pdf,image/*"
-                    className="hidden"
-                    onChange={(event) => {
-                      void addReviewedOutputFiles(Array.from(event.target.files || []), currentStep.id);
-                      event.target.value = '';
-                    }}
-                  />
-                </div>
-                <Card className="border-border/40">
-                  <CardContent className="space-y-3 p-3">
-                    <p className="break-words text-xs text-muted-foreground">
-                      下载产物并在本地完成评审后，上传已审核版本，同时填写审核评论，后续可用于优化 Skill。
-                    </p>
-
-                    {currentReviewedOutputFiles.length > 0 ? (
-                      <div className="space-y-2">
-                        {currentReviewedOutputFiles.map((file) => (
-                          <div
-                            key={file.id}
-                            className="flex items-center gap-2 rounded-md border border-border/50 bg-background/60 px-2 py-1.5 text-xs"
-                          >
-                            <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate font-medium">{file.name}</p>
-                              <p className="text-muted-foreground">{formatFileSize(file.size)}</p>
-                            </div>
-                            <button
-                              type="button"
-                              className="text-muted-foreground hover:text-foreground"
-                              onClick={() => removeReviewedOutputFile(file.id)}
-                              aria-label={`移除 ${file.name}`}
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-xs text-muted-foreground">暂无已审核产物。</p>
-                    )}
-
-                    <textarea
-                      className="min-h-20 w-full rounded-md border border-border/60 bg-background/60 px-3 py-2 text-xs outline-none placeholder:text-muted-foreground focus:border-primary/50"
-                      placeholder="填写审核评论，例如：结论是否充分、哪些地方需要补充、Skill 输出模板是否需要调整..."
-                      value={reviewComments[currentStep.id] || ''}
-                      onChange={(event) => updateReviewComment(currentStep.id, event.target.value)}
-                    />
-
-                    <div className="flex min-w-0 items-center justify-between gap-2 border-t border-border/40 pt-3">
-                      <div className="min-w-0">
-                        <p className="text-xs font-medium">归档知识库</p>
-                        <p className="mt-0.5 break-words text-[11px] leading-snug text-muted-foreground">
-                          {isReviewedOutputArchived
-                            ? '已归档，可在后续上下文中选择引用。'
-                            : '将已审核产物和评论沉淀为可复用材料。'}
-                        </p>
-                      </div>
+          <TabsContent value="review" className="min-h-0 flex-1 overflow-hidden">
+            <ScrollArea className="h-full">
+              <div className="flex min-w-0 flex-col gap-3 p-4">
+                {currentStep && (
+                  <>
+                    <div className="flex min-w-0 items-center justify-between gap-2">
+                      <h4 className="min-w-0 truncate text-xs font-medium text-muted-foreground">产物审核反馈</h4>
                       <Button
-                        variant={isReviewedOutputArchived ? 'secondary' : 'outline'}
+                        variant="outline"
                         size="sm"
                         className="h-7 shrink-0 gap-1.5 text-xs"
-                        disabled={!canArchiveReviewedOutput || isReviewedOutputArchived}
-                        onClick={() => archiveReviewedOutput(currentStep.id)}
+                        onClick={() => reviewedOutputInputRef.current?.click()}
                       >
-                        <Save className="h-3.5 w-3.5" />
-                        {isReviewedOutputArchived ? '已归档' : '归档'}
+                        <Paperclip className="h-3.5 w-3.5" />
+                        上传
                       </Button>
+                      <input
+                        ref={reviewedOutputInputRef}
+                        type="file"
+                        multiple
+                        accept=".txt,.md,.doc,.docx,.pdf,image/*"
+                        className="hidden"
+                        onChange={(event) => {
+                          void addReviewedOutputFiles(Array.from(event.target.files || []), currentStep.id);
+                          event.target.value = '';
+                        }}
+                      />
                     </div>
+                    <Card className={appCardClassName}>
+                      <CardContent className="flex flex-col gap-3 p-3">
+                        <p className="break-words text-xs leading-5 text-muted-foreground">
+                          下载产物并完成评审后，上传已审核版本并填写审核评论，后续可用于优化 Skill。
+                        </p>
+
+                        {currentReviewedOutputFiles.length > 0 ? (
+                          <div className="flex flex-col gap-2">
+                            {currentReviewedOutputFiles.map((file) => (
+                              <div
+                                key={file.id}
+                                className="flex items-center gap-2 rounded-md border border-border/50 bg-background/60 px-2 py-1.5 text-xs"
+                              >
+                                <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate font-medium">{file.name}</p>
+                                  <p className="text-muted-foreground">{formatFileSize(file.size)}</p>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="text-muted-foreground hover:text-foreground"
+                                  onClick={() => removeReviewedOutputFile(file.id)}
+                                  aria-label={`移除 ${file.name}`}
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="rounded-md border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
+                            暂无已审核产物。
+                          </p>
+                        )}
+
+                        <textarea
+                          className="min-h-24 w-full rounded-md border border-border/60 bg-background/60 px-3 py-2 text-xs outline-none placeholder:text-muted-foreground focus:border-brand/50"
+                          placeholder="填写审核评论，例如：结论是否充分、哪些地方需要补充、Skill 输出模板是否需要调整..."
+                          value={reviewComments[currentStep.id] || ''}
+                          onChange={(event) => updateReviewComment(currentStep.id, event.target.value)}
+                        />
+                      </CardContent>
+                    </Card>
+                  </>
+                )}
+              </div>
+            </ScrollArea>
+          </TabsContent>
+
+          <TabsContent value="archive" className="min-h-0 flex-1 overflow-hidden">
+            <ScrollArea className="h-full">
+              <div className="flex min-w-0 flex-col gap-3 p-4">
+                <Card className={appCardClassName}>
+                  <CardContent className="flex flex-col gap-3 p-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium">归档为工作流知识材料</p>
+                      <p className="mt-1 break-words text-[11px] leading-5 text-muted-foreground">
+                        {isReviewedOutputArchived
+                          ? '已归档，可在后续上下文中选择引用。'
+                          : '将已审核产物和评论沉淀为当前工作流可复用材料。'}
+                      </p>
+                    </div>
+                    <Button
+                      variant={isReviewedOutputArchived ? 'secondary' : 'outline'}
+                      size="sm"
+                      className="h-8 w-full gap-1.5 text-xs"
+                      disabled={!canArchiveReviewedOutput || isReviewedOutputArchived}
+                      onClick={() => currentStep && archiveReviewedOutput(currentStep.id)}
+                    >
+                      <Save className="h-3.5 w-3.5" />
+                      {isReviewedOutputArchived ? '已归档' : '归档审核材料'}
+                    </Button>
                   </CardContent>
                 </Card>
-              </div>
-            )}
 
-            {/* Save to Knowledge Base */}
-            {currentStep?.output && (
-              <div>
-                <h4 className="text-xs font-medium text-muted-foreground mb-2">沉淀到知识库</h4>
-                <Button variant="outline" size="sm" className="w-full gap-2">
-                  <Save className="h-3.5 w-3.5" />
-                  保存产出物
-                </Button>
+                {currentStep?.output && (
+                  <Card className={appCardClassName}>
+                    <CardContent className="flex flex-col gap-3 p-3">
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium">保存步骤产出</p>
+                        <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
+                          将当前步骤产出作为可下载材料保留，后续再接入统一知识库写入。
+                        </p>
+                      </div>
+                      <Button variant="outline" size="sm" className="w-full gap-2">
+                        <Save className="h-3.5 w-3.5" />
+                        保存产出物
+                      </Button>
+                    </CardContent>
+                  </Card>
+                )}
               </div>
-            )}
-          </div>
-        </ScrollArea>
+            </ScrollArea>
+          </TabsContent>
+        </Tabs>
       </div>
 
       <Dialog

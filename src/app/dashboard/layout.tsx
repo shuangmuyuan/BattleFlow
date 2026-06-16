@@ -230,6 +230,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             {pathname === '/dashboard/skills' && 'Skill 仓库'}
             {pathname === '/dashboard/workflows' && '工作流'}
             {pathname === '/dashboard/knowledge' && '知识库'}
+            {pathname === '/dashboard/demos' && 'Demo 生成'}
             {pathname.includes('/dashboard/workflows/') && pathname !== '/dashboard/workflows' && '工作流详情'}
             {pathname.includes('/dashboard/skills/') && pathname !== '/dashboard/skills' && 'Skill 详情'}
             </span>

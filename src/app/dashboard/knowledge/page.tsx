@@ -26,6 +26,12 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
+import {
+  PageHeader,
+  ProductEmptyState,
+  StatusBadge,
+  appCardClassName,
+} from '@/components/battleflow/ui';
 
 interface KnowledgeBase {
   id: string;
@@ -58,51 +64,34 @@ export default function KnowledgePage() {
   const [selectedKb, setSelectedKb] = useState<KnowledgeBase | null>(null);
   const [uploadContent, setUploadContent] = useState('');
   const [activeTab, setActiveTab] = useState('bases');
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState('');
 
   useEffect(() => {
-    // Demo knowledge bases
-    setKnowledgeBases([
-      {
-        id: '1',
-        name: '产品历史文档',
-        description: '历次产品迭代的PRD、技术方案和复盘总结',
-        source_type: 'builtin',
-        connection_config: null,
-        dataset_name: 'product_history',
-        document_count: 42,
-        updated_at: '2025-01-15',
-      },
-      {
-        id: '2',
-        name: '研发能力边界',
-        description: '技术栈清单、API能力列表、系统架构约束',
-        source_type: 'builtin',
-        connection_config: null,
-        dataset_name: 'tech_capabilities',
-        document_count: 18,
-        updated_at: '2025-01-10',
-      },
-      {
-        id: '3',
-        name: '行业报告库',
-        description: '对接外部行业研究报告数据源',
-        source_type: 'external',
-        connection_config: { type: 'confluence', url: 'https://wiki.example.com' },
-        dataset_name: 'industry_reports',
-        document_count: 156,
-        updated_at: '2025-01-12',
-      },
-      {
-        id: '4',
-        name: '部门经验沉淀',
-        description: '产品规划部门的最佳实践、模板和经验总结',
-        source_type: 'builtin',
-        connection_config: null,
-        dataset_name: 'team_experience',
-        document_count: 27,
-        updated_at: '2025-01-08',
-      },
-    ]);
+    let ignore = false;
+
+    async function loadKnowledgeBases() {
+      setLoading(true);
+      setErrorMessage('');
+      try {
+        const res = await fetch('/api/knowledge', { cache: 'no-store' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || '知识库加载失败');
+        if (!ignore) setKnowledgeBases(data.knowledgeBases || []);
+      } catch (error) {
+        if (!ignore) {
+          setErrorMessage(error instanceof Error ? error.message : '知识库加载失败');
+          setKnowledgeBases([]);
+        }
+      } finally {
+        if (!ignore) setLoading(false);
+      }
+    }
+
+    void loadKnowledgeBases();
+    return () => {
+      ignore = true;
+    };
   }, []);
 
   const handleSearch = useCallback(async () => {
@@ -110,66 +99,85 @@ export default function KnowledgePage() {
 
     setIsSearching(true);
     try {
+      setErrorMessage('');
       const res = await fetch(`/api/knowledge?query=${encodeURIComponent(searchQuery)}&topK=5`);
       if (!res.ok) throw new Error('Search failed');
       const data = await res.json();
       setSearchResults(data.results || []);
     } catch (error) {
       console.error('Search error:', error);
-      // Demo results
-      setSearchResults([
-        { content: '电商平台v2.0支持社交分享功能，用户可将商品链接分享至微信、微博等平台，带来约15%的新增用户转化。', score: 0.92, source: '产品历史文档' },
-        { content: '推荐系统基于协同过滤算法，当前CTR为3.2%，目标提升至5%。技术方案需升级为深度学习模型。', score: 0.87, source: '研发能力边界' },
-        { content: '社交电商市场规模预计2025年达到2.5万亿，年增长率35%，头部平台MAU均超1亿。', score: 0.83, source: '行业报告库' },
-      ]);
+      setErrorMessage(error instanceof Error ? error.message : '知识检索失败');
+      setSearchResults([]);
     } finally {
       setIsSearching(false);
     }
   }, [searchQuery]);
 
-  const handleCreateKb = () => {
+  const handleCreateKb = async () => {
     if (!newKbName) return;
 
-    const newKb: KnowledgeBase = {
-      id: `kb-${Date.now()}`,
-      name: newKbName,
-      description: newKbDesc,
-      source_type: newKbSource,
-      connection_config: newKbSource === 'external' ? { type: 'custom', url: newKbUrl } : null,
-      dataset_name: `kb_${Date.now()}`,
-      document_count: 0,
-      updated_at: new Date().toISOString().split('T')[0],
-    };
-
-    setKnowledgeBases((prev) => [newKb, ...prev]);
-    setCreateDialogOpen(false);
-    setNewKbName('');
-    setNewKbDesc('');
-    setNewKbUrl('');
+    try {
+      setErrorMessage('');
+      const res = await fetch('/api/knowledge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create',
+          name: newKbName,
+          description: newKbDesc,
+          source_type: newKbSource,
+          connection_config: newKbSource === 'external' ? { type: 'custom', url: newKbUrl } : null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '知识库创建失败');
+      setKnowledgeBases((prev) => [data.knowledgeBase, ...prev]);
+      setCreateDialogOpen(false);
+      setNewKbName('');
+      setNewKbDesc('');
+      setNewKbUrl('');
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : '知识库创建失败');
+    }
   };
 
-  const handleUpload = () => {
+  const handleUpload = async () => {
     if (!selectedKb || !uploadContent) return;
 
-    setKnowledgeBases((prev) =>
-      prev.map((kb) =>
-        kb.id === selectedKb.id ? { ...kb, document_count: kb.document_count + 1 } : kb
-      )
-    );
+    try {
+      setErrorMessage('');
+      const res = await fetch('/api/knowledge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'add_documents',
+          knowledge_base_id: selectedKb.id,
+          documents: [{ source_type: 'text', content: uploadContent }],
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '文档上传失败');
 
-    setUploadDialogOpen(false);
-    setUploadContent('');
-    setSelectedKb(null);
+      setKnowledgeBases((prev) =>
+        prev.map((kb) =>
+          kb.id === selectedKb.id ? { ...kb, document_count: kb.document_count + 1 } : kb
+        )
+      );
+      setUploadDialogOpen(false);
+      setUploadContent('');
+      setSelectedKb(null);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : '文档上传失败');
+    }
   };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 flex-col gap-4 border-b border-border/40 p-4 sm:flex-row sm:items-center sm:justify-between md:p-6">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight">知识库</h1>
-          <p className="text-muted-foreground text-sm mt-1">管理和检索规划过程中的知识资产</p>
-        </div>
-        <div className="flex flex-col gap-2 sm:flex-row">
+      <PageHeader
+        title="知识库"
+        description="管理规划过程中的知识资产，让工作流能够引用真实上下文和评审材料。"
+        action={(
+          <>
           <Button variant="outline" className="gap-2" onClick={() => setActiveTab('search')}>
             <Search className="h-4 w-4" />
             语义检索
@@ -178,10 +186,17 @@ export default function KnowledgePage() {
             <Plus className="h-4 w-4" />
             新建知识库
           </Button>
-        </div>
-      </div>
+          </>
+        )}
+      />
 
       <div className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
+        {errorMessage && (
+          <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            {errorMessage}
+          </div>
+        )}
+
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="mb-6">
             <TabsTrigger value="bases">知识库列表</TabsTrigger>
@@ -189,22 +204,41 @@ export default function KnowledgePage() {
           </TabsList>
 
           <TabsContent value="bases">
+            {loading ? (
+              <ProductEmptyState
+                icon={<Database />}
+                title="正在加载知识库"
+                description="正在连接知识库服务并读取资产列表。"
+              />
+            ) : knowledgeBases.length === 0 ? (
+              <ProductEmptyState
+                icon={<Database />}
+                title="暂无知识库"
+                description="创建一个知识库，用来沉淀 PRD、评审材料、方法论和外部报告。"
+                action={(
+                  <Button className="gap-2" onClick={() => setCreateDialogOpen(true)}>
+                    <Plus className="h-4 w-4" />
+                    新建知识库
+                  </Button>
+                )}
+              />
+            ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {knowledgeBases.map((kb) => (
-                <Card key={kb.id} className="border-border/60 hover:shadow-md transition-shadow">
+                <Card key={kb.id} className={appCardClassName}>
                   <CardHeader className="pb-3">
                     <div className="flex min-w-0 items-start justify-between gap-3">
                       <div className="flex min-w-0 items-center gap-2">
                         {kb.source_type === 'builtin' ? (
-                          <Database className="h-4 w-4 text-primary" />
+                          <Database className="h-4 w-4 text-brand" />
                         ) : (
-                          <ExternalLink className="h-4 w-4 text-blue-500" />
+                          <ExternalLink className="h-4 w-4 text-muted-foreground" />
                         )}
                         <CardTitle className="truncate text-base">{kb.name}</CardTitle>
                       </div>
-                      <Badge className="shrink-0" variant={kb.source_type === 'builtin' ? 'secondary' : 'outline'}>
+                      <StatusBadge className="shrink-0" tone={kb.source_type === 'builtin' ? 'brand' : 'neutral'}>
                         {kb.source_type === 'builtin' ? '内置' : '外部'}
-                      </Badge>
+                      </StatusBadge>
                     </div>
                     <p className="text-sm text-muted-foreground">{kb.description}</p>
                   </CardHeader>
@@ -243,6 +277,7 @@ export default function KnowledgePage() {
                 </Card>
               ))}
             </div>
+            )}
           </TabsContent>
 
           <TabsContent value="search">
@@ -280,11 +315,22 @@ export default function KnowledgePage() {
                 </div>
               )}
 
-              {searchResults.length === 0 && searchQuery && !isSearching && (
-                <div className="text-center text-muted-foreground py-10">
-                  <BookOpen className="h-8 w-8 mx-auto mb-3 opacity-30" />
-                  <p>输入查询条件开始检索</p>
-                </div>
+              {searchResults.length === 0 && searchQuery && !isSearching && !errorMessage && (
+                <ProductEmptyState
+                  icon={<BookOpen />}
+                  title="未找到匹配内容"
+                  description="当前知识库没有返回相关片段，可以换一个关键词或补充知识材料。"
+                  className="min-h-60"
+                />
+              )}
+
+              {searchResults.length === 0 && !searchQuery && !isSearching && (
+                <ProductEmptyState
+                  icon={<Search />}
+                  title="输入问题开始检索"
+                  description="支持关键词或自然语言描述，例如“最近一次竞品分析里的用户痛点”。"
+                  className="min-h-60"
+                />
               )}
             </div>
           </TabsContent>
