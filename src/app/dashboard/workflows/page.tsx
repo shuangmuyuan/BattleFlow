@@ -1964,6 +1964,9 @@ export default function WorkflowsPage() {
   const currentReviewComment = currentStep ? reviewComments[currentStep.id]?.trim() || '' : '';
   const canArchiveReviewedOutput = currentReviewedOutputFiles.length > 0 || currentReviewComment.length > 0;
   const isReviewedOutputArchived = currentStep ? archivedReviewStepIds.includes(currentStep.id) : false;
+  const currentStepReadyToConfirm = Boolean(
+    currentStep?.status === 'in_progress' && chatMessages.some((message) => message.role === 'assistant'),
+  );
   const updateCurrentContextSelection = (
     nextSelection: Partial<WorkflowContextSelection>,
     localStateUpdate?: () => void,
@@ -2151,36 +2154,64 @@ export default function WorkflowsPage() {
                       const idx = visibleWorkflowSteps.findIndex((item) => item.id === step.id);
                       const isActive = idx === activeStepIndex;
                       const isDisabled = step.status === 'pending' && !isActive;
+                      const showNodeConfirm = step.id === currentStep?.id && currentStepReadyToConfirm;
 
                       return (
-                        <button
+                        <div
                           key={step.id}
-                          type="button"
-                          disabled={isDisabled}
-                          className={`w-full rounded-lg p-3 text-left transition-all disabled:cursor-not-allowed ${
-                            isActive ? 'border border-primary/30 bg-primary/10' : isDisabled ? 'opacity-60' : 'hover:bg-muted/50'
+                          className={`overflow-hidden rounded-lg transition-all ${
+                            isActive
+                              ? 'border border-primary/30 bg-primary/10'
+                              : isDisabled
+                                ? 'border border-transparent opacity-60'
+                                : 'border border-transparent hover:bg-muted/50'
                           }`}
-                          onClick={() => {
-                            if (!isDisabled) {
-                              switchActiveStep(activeWorkflow, idx);
-                            }
-                          }}
                         >
-                          <div className="flex min-w-0 items-center gap-2">
-                            {getStepIcon(step.status)}
-                            <span className={`min-w-0 truncate text-sm font-medium ${isActive ? 'text-primary' : ''}`}>
-                              {step.name}
-                            </span>
-                            {step.runMode === 'parallel' && (
-                              <Badge variant="secondary" className="ml-auto text-[10px]">并行</Badge>
+                          <button
+                            type="button"
+                            disabled={isDisabled}
+                            className="w-full p-3 text-left disabled:cursor-not-allowed"
+                            onClick={() => {
+                              if (!isDisabled) {
+                                switchActiveStep(activeWorkflow, idx);
+                              }
+                            }}
+                          >
+                            <div className="flex min-w-0 items-center gap-2">
+                              {getStepIcon(step.status)}
+                              <span className={`min-w-0 truncate text-sm font-medium ${isActive ? 'text-primary' : ''}`}>
+                                {step.name}
+                              </span>
+                              {step.runMode === 'parallel' && (
+                                <Badge variant="secondary" className="ml-auto text-[10px]">并行</Badge>
+                              )}
+                            </div>
+                            {step.output && (
+                              <p className="text-xs text-emerald-500/80 mt-1 ml-7 line-clamp-2">
+                                已完成 — {compactMarkdownPreview(step.output, 50)}...
+                              </p>
                             )}
-                          </div>
-                          {step.output && (
-                            <p className="text-xs text-emerald-500/80 mt-1 ml-7 line-clamp-2">
-                              已完成 — {compactMarkdownPreview(step.output, 50)}...
-                            </p>
+                            {showNodeConfirm && (
+                              <p className="mt-2 ml-7 text-[11px] leading-4 text-muted-foreground">
+                                AI 已产出结果，可确认沉淀为 Markdown 文档。
+                              </p>
+                            )}
+                          </button>
+                          {showNodeConfirm && (
+                            <div className="border-t border-primary/20 px-3 pb-3 pt-2">
+                              <Button
+                                size="sm"
+                                className="h-8 w-full gap-1.5 text-xs"
+                                onClick={() => {
+                                  void handleConfirmStep();
+                                }}
+                              >
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                                确认完成
+                              </Button>
+                            </div>
                           )}
-                        </button>
+                        </div>
                       );
                     })}
                   </div>
@@ -2377,17 +2408,14 @@ export default function WorkflowsPage() {
           )}
         </ScrollArea>
 
-        {/* Confirm Step Bar - show when AI has responded */}
-        {currentStep?.status === 'in_progress' && chatMessages.some((m) => m.role === 'assistant') && (
-          <div className="border-t border-primary/30 bg-primary/5 px-4 py-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="min-w-0 flex-1 text-sm text-muted-foreground">
-                当前步骤的 AI 协作已产出结果，确认后将保存产出{currentStep.runMode === 'parallel' ? '，可继续切换其他并行任务' : '并推进到下一步'}
+        {/* Confirm Step Hint - the primary action is now attached to the active node */}
+        {currentStepReadyToConfirm && (
+          <div className="border-t border-primary/20 bg-primary/5 px-4 py-2">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-primary" />
+              <p className="min-w-0">
+                AI 已产出结果，可在左侧当前节点末端点击“确认完成”保存产物{currentStep?.runMode === 'parallel' ? '，并继续并行任务' : '并推进到下一步'}。
               </p>
-              <Button className="shrink-0 gap-2" onClick={handleConfirmStep}>
-                <CheckCircle2 className="h-4 w-4" />
-                确认完成
-              </Button>
             </div>
           </div>
         )}
