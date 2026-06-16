@@ -49,7 +49,6 @@ import {
   RotateCcw,
   Copy,
   ChevronDown,
-  History,
   FileText,
 } from 'lucide-react';
 
@@ -329,9 +328,7 @@ export default function WorkflowsPage() {
   const [reviewComments, setReviewComments] = useState<Record<string, string>>({});
   const [supplementalContextOpen, setSupplementalContextOpen] = useState(false);
   const [supplementalContextTab, setSupplementalContextTab] = useState<'knowledge' | 'materials' | 'files'>('knowledge');
-  const [rightPanelTab, setRightPanelTab] = useState<'skill' | 'outputs' | 'snapshots' | 'review' | 'archive'>('outputs');
-  const [snapshotDialogOpen, setSnapshotDialogOpen] = useState(false);
-  const [selectedSnapshot, setSelectedSnapshot] = useState<WorkflowStepSnapshot | null>(null);
+  const [rightPanelTab, setRightPanelTab] = useState<'skill' | 'outputs' | 'review' | 'archive'>('outputs');
   const [archivedReviewStepIds, setArchivedReviewStepIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
@@ -1946,11 +1943,6 @@ export default function WorkflowsPage() {
     + selectedReviewMaterialOptions.length
     + currentContextFiles.length
   );
-  const currentStepSnapshots = currentStep
-    ? (activeWorkflow.stepSnapshots || [])
-      .filter((snapshot) => snapshot.stepId === currentStep.id)
-      .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
-    : [];
   const savedCurrentStepOutput = currentStep
     ? currentReviewedOutputFiles.find((file) => file.id === getSavedStepOutputFileId(currentStep.id))
     : undefined;
@@ -2821,10 +2813,9 @@ export default function WorkflowsPage() {
             <p className="mt-1 truncate text-xs text-muted-foreground">
               {currentStep?.name || '未选择步骤'}
             </p>
-            <TabsList className="mt-3 grid h-8 w-full grid-cols-5">
+            <TabsList className="mt-3 grid h-8 w-full grid-cols-4">
               <TabsTrigger value="skill" className="text-xs">Skill</TabsTrigger>
               <TabsTrigger value="outputs" className="text-xs">产出</TabsTrigger>
-              <TabsTrigger value="snapshots" className="text-xs">快照</TabsTrigger>
               <TabsTrigger value="review" className="text-xs">审核</TabsTrigger>
               <TabsTrigger value="archive" className="text-xs">沉淀</TabsTrigger>
             </TabsList>
@@ -2933,54 +2924,6 @@ export default function WorkflowsPage() {
                     </p>
                   )}
                 </div>
-              </div>
-            </ScrollArea>
-          </TabsContent>
-
-          <TabsContent value="snapshots" className="min-h-0 flex-1 overflow-hidden">
-            <ScrollArea className="h-full">
-              <div className="flex min-w-0 flex-col gap-3 p-4">
-                <div className="flex min-w-0 items-center justify-between gap-2">
-                  <h4 className="min-w-0 truncate text-xs font-medium text-muted-foreground">历史快照</h4>
-                  <Badge variant="outline" className="shrink-0 text-[11px]">
-                    {currentStepSnapshots.length} 条
-                  </Badge>
-                </div>
-                <Card className={appCardClassName}>
-                  <CardContent className="flex flex-col gap-2 p-3">
-                    {currentStepSnapshots.length > 0 ? (
-                      currentStepSnapshots.map((snapshot) => (
-                        <button
-                          key={snapshot.id}
-                          type="button"
-                          className="w-full rounded-md border border-border/50 bg-background/60 p-2 text-left transition-colors hover:border-brand/50 hover:bg-muted/40"
-                          onClick={() => {
-                            setSelectedSnapshot(snapshot);
-                            setSnapshotDialogOpen(true);
-                          }}
-                        >
-                          <div className="flex min-w-0 items-center justify-between gap-2">
-                            <div className="flex min-w-0 items-center gap-2">
-                              <History className="h-3.5 w-3.5 shrink-0 text-brand" />
-                              <span className="truncate text-xs font-medium">{formatSnapshotTime(snapshot.created_at)}</span>
-                            </div>
-                            <span className="shrink-0 text-[11px] text-muted-foreground">查看</span>
-                          </div>
-                          <p className="mt-1 line-clamp-2 break-words text-xs text-muted-foreground">
-                            {compactMarkdownPreview(snapshot.output, 120)}
-                          </p>
-                          <p className="mt-1 text-[11px] text-muted-foreground/80">
-                            上下文 {snapshot.contextFiles.length} · 审核材料 {snapshot.reviewedMaterials.length}
-                          </p>
-                        </button>
-                      ))
-                    ) : (
-                      <p className="text-xs leading-5 text-muted-foreground">
-                        确认完成当前步骤后，会自动保存产出、上下文和审核反馈快照。
-                      </p>
-                    )}
-                  </CardContent>
-                </Card>
               </div>
             </ScrollArea>
           </TabsContent>
@@ -3145,99 +3088,6 @@ export default function WorkflowsPage() {
         </Tabs>
       </div>
 
-      <Dialog
-        open={snapshotDialogOpen}
-        onOpenChange={(open) => {
-          setSnapshotDialogOpen(open);
-          if (!open) setSelectedSnapshot(null);
-        }}
-      >
-        <DialogContent className="flex max-h-[calc(100dvh-2rem)] max-w-3xl flex-col gap-0 overflow-hidden p-0">
-          <DialogHeader className="border-b border-border/40 px-6 py-5 pr-12">
-            <DialogTitle>{selectedSnapshot?.stepName || '步骤快照'}</DialogTitle>
-            <DialogDescription>
-              {selectedSnapshot
-                ? `${formatSnapshotTime(selectedSnapshot.created_at)} 确认时保存的产出、上下文和审核反馈。`
-                : '查看步骤确认时保存的历史记录。'}
-            </DialogDescription>
-          </DialogHeader>
-
-          {selectedSnapshot && (
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
-              <section className="space-y-2">
-                <div className="flex items-center justify-between gap-3">
-                  <h3 className="text-sm font-semibold">步骤产出</h3>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 gap-1.5 text-xs"
-                    onClick={() => downloadStepOutput(selectedSnapshot.stepName, selectedSnapshot.output)}
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                    下载
-                  </Button>
-                </div>
-                <div className="max-h-80 overflow-auto rounded-lg border border-border/50 bg-muted/30 p-3">
-                  <CompactMarkdown content={selectedSnapshot.output} className="text-xs leading-6" />
-                </div>
-              </section>
-
-              <section className="space-y-2">
-                <h3 className="text-sm font-semibold">确认时上下文</h3>
-                {selectedSnapshot.contextFiles.length > 0 ? (
-                  <div className="space-y-2">
-                    {selectedSnapshot.contextFiles.map((item, index) => (
-                      <pre
-                        key={`${selectedSnapshot.id}-context-${index}`}
-                        className="whitespace-pre-wrap rounded-md border border-border/40 bg-background/60 p-2 font-sans text-xs leading-relaxed text-muted-foreground"
-                      >
-                        {item}
-                      </pre>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="rounded-md border border-dashed border-border/50 p-3 text-xs text-muted-foreground">
-                    该快照未记录补充上下文。
-                  </p>
-                )}
-              </section>
-
-              <section className="space-y-2">
-                <h3 className="text-sm font-semibold">审核材料</h3>
-                {selectedSnapshot.reviewedMaterials.length > 0 ? (
-                  <div className="space-y-2">
-                    {selectedSnapshot.reviewedMaterials.map((item, index) => (
-                      <pre
-                        key={`${selectedSnapshot.id}-review-${index}`}
-                        className="whitespace-pre-wrap rounded-md border border-border/40 bg-background/60 p-2 font-sans text-xs leading-relaxed text-muted-foreground"
-                      >
-                        {item}
-                      </pre>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="rounded-md border border-dashed border-border/50 p-3 text-xs text-muted-foreground">
-                    该快照未关联审核材料。
-                  </p>
-                )}
-              </section>
-
-              <section className="space-y-2">
-                <h3 className="text-sm font-semibold">审核评论</h3>
-                {selectedSnapshot.reviewComment ? (
-                  <p className="whitespace-pre-wrap rounded-md border border-border/40 bg-background/60 p-3 text-xs leading-relaxed text-muted-foreground">
-                    {selectedSnapshot.reviewComment}
-                  </p>
-                ) : (
-                  <p className="rounded-md border border-dashed border-border/50 p-3 text-xs text-muted-foreground">
-                    该快照未填写审核评论。
-                  </p>
-                )}
-              </section>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
