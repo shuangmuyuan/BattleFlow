@@ -116,6 +116,8 @@ const sourceLabels: Record<SkillSourceType, string> = {
   git: 'Git 同步',
 };
 
+const slugAcronyms = new Set(['ai', 'api', 'cli', 'dcp', 'id', 'prd', 'tr1', 'tr2', 'ui', 'ux']);
+
 const versionBumpLabels: Record<VersionBump, string> = {
   patch: '小修订',
   minor: '能力增强',
@@ -170,6 +172,56 @@ function getSkillDescription(skill: Skill) {
     return '未填写简介。打开详情可查看完整 skill.md、方法论框架和元数据。';
   }
   return description;
+}
+
+function isSlugLike(value: string) {
+  return /^[a-z0-9]+(?:[-_][a-z0-9]+)+$/i.test(value);
+}
+
+function formatSlugLabel(value: string) {
+  return value
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => {
+      const normalized = part.toLowerCase();
+      if (slugAcronyms.has(normalized)) return normalized.toUpperCase();
+      return `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`;
+    })
+    .join(' ');
+}
+
+function getSkillDisplayName(skill: Skill) {
+  const name = skill.name?.trim() || skill.id;
+  if (isSlugLike(name)) {
+    return formatSlugLabel(name);
+  }
+  return name;
+}
+
+function getSourceMeta(skill: Skill) {
+  const source = skill.source_uri?.trim();
+  if (!source) {
+    return { label: sourceLabels[skill.source_type], detail: '' };
+  }
+
+  const withoutFragment = source.split('#')[0];
+  const fileName = withoutFragment.split('/').filter(Boolean).pop() || withoutFragment;
+
+  if (source.startsWith('upload:')) {
+    return { label: '上传包', detail: fileName };
+  }
+  if (source.startsWith('official://')) {
+    return { label: '注册中心', detail: source.replace('official://', '') };
+  }
+  if (source.startsWith('http://') || source.startsWith('https://') || source.endsWith('.git')) {
+    return { label: sourceLabels[skill.source_type], detail: source };
+  }
+  return { label: sourceLabels[skill.source_type], detail: fileName };
+}
+
+function formatSourceMetaText(skill: Skill) {
+  const sourceMeta = getSourceMeta(skill);
+  return sourceMeta.detail ? `${sourceMeta.label} · ${sourceMeta.detail}` : sourceMeta.label;
 }
 
 function getScopeIcon(scope: SkillScope) {
@@ -467,11 +519,6 @@ export default function SkillsPage() {
     return `${skill.name}-v${version.version}.md`.replace(/[\\/:*?"<>|]/g, '-');
   };
 
-  const renderSourceMeta = (skill: Skill) => {
-    const source = skill.source_uri || sourceLabels[skill.source_type];
-    return source.length > 72 ? `${source.slice(0, 72)}...` : source;
-  };
-
   return (
     <div className="flex h-full min-h-0 flex-col">
       <PageHeader
@@ -745,25 +792,33 @@ export default function SkillsPage() {
             </Empty>
           ) : (
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
-              {filteredSkills.map((skill) => (
+              {filteredSkills.map((skill) => {
+                const displayName = getSkillDisplayName(skill);
+                const sourceMeta = getSourceMeta(skill);
+
+                return (
                 <Card
                   key={skill.id}
                   className={`${appCardClassName} group overflow-hidden`}
                 >
                   <CardHeader className="pb-4">
-                    <div className="flex items-start gap-4">
-                      <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border ${getScopeCardClassName(skill.scope)} [&_svg]:h-5 [&_svg]:w-5`}>
+                    <div className="flex min-w-0 items-start gap-3">
+                      <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border ${getScopeCardClassName(skill.scope)} [&_svg]:h-5 [&_svg]:w-5`}>
                         {getSourceIcon(skill.source_type)}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <CardTitle className="min-w-0 truncate text-base leading-6">{skill.name}</CardTitle>
+                        <div className="flex min-w-0 items-start gap-2">
+                          <CardTitle className="min-w-0 flex-1 truncate text-base leading-6" title={skill.name}>
+                            {displayName}
+                          </CardTitle>
                           <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotClassName(skill.status)}`} aria-label={statusLabels[skill.status]} />
                         </div>
                         <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-                          <span className="truncate font-mono">{skill.id}</span>
+                          <span className="min-w-0 truncate font-mono" title={skill.id}>{skill.id}</span>
                           <span className="shrink-0">·</span>
-                          <span className="shrink-0">v{skill.version}</span>
+                          <span className="shrink-0 rounded-md border border-border/60 bg-background/70 px-1.5 py-0.5 font-medium text-foreground/80">
+                            v{skill.version}
+                          </span>
                         </div>
                       </div>
                       <DropdownMenu>
@@ -880,10 +935,13 @@ export default function SkillsPage() {
                     </div>
 
                     {skill.review && (
-                      <div className="rounded-lg border border-border/50 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                        审核来源 <span className="font-mono text-foreground/80">{skill.review.source_skill_id}</span>
-                        <span> v{skill.review.source_version}</span>
-                        <span> · 提交于 {formatDate(skill.review.submitted_at)}</span>
+                      <div
+                        className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-border/50 bg-muted/20 px-3 py-2 text-xs text-muted-foreground"
+                        title={`审核来源 ${skill.review.source_skill_id} v${skill.review.source_version}`}
+                      >
+                        <span className="font-medium text-foreground/80">团队审核副本</span>
+                        <span>来源版本 v{skill.review.source_version}</span>
+                        <span>提交于 {formatDate(skill.review.submitted_at)}</span>
                       </div>
                     )}
 
@@ -891,9 +949,9 @@ export default function SkillsPage() {
                       {getSkillCapabilities(skill).length > 0 ? (
                         <div className="flex flex-wrap gap-1.5">
                           {getSkillCapabilities(skill).map((capability) => (
-                            <Badge key={capability} variant="outline" className="bg-background/60">
+                            <Badge key={capability} variant="outline" className="max-w-full bg-background/60" title={capability}>
                               <Tag />
-                              {capability}
+                              <span className="max-w-36 truncate">{capability}</span>
                             </Badge>
                           ))}
                           {skill.tags.length + skill.tools.length > getSkillCapabilities(skill).length && (
@@ -907,7 +965,15 @@ export default function SkillsPage() {
 
                     <div className="mt-auto flex min-w-0 items-center justify-between gap-3 border-t border-border/50 pt-4">
                       <div className="min-w-0 text-xs text-muted-foreground">
-                        <div className="truncate">{renderSourceMeta(skill)}</div>
+                        <div className="truncate">
+                          <span className="font-medium text-foreground/70">{sourceMeta.label}</span>
+                          {sourceMeta.detail && (
+                            <>
+                              <span> · </span>
+                              <span title={sourceMeta.detail}>{sourceMeta.detail}</span>
+                            </>
+                          )}
+                        </div>
                       </div>
                       <Button
                         variant="outline"
@@ -920,7 +986,8 @@ export default function SkillsPage() {
                     </div>
                   </CardContent>
                 </Card>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -933,7 +1000,7 @@ export default function SkillsPage() {
               <DialogHeader>
                 <div className="flex flex-wrap items-center gap-2">
                   {getSourceIcon(detailSkill.source_type)}
-                  <DialogTitle className="text-xl">{detailSkill.name}</DialogTitle>
+                  <DialogTitle className="text-xl">{getSkillDisplayName(detailSkill)}</DialogTitle>
                   <Badge variant="outline">v{detailSkill.version}</Badge>
                   <ScopeBadge scope={detailSkill.scope} />
                   <StatusBadge status={detailSkill.status} />
@@ -955,7 +1022,7 @@ export default function SkillsPage() {
                     <div className="grid gap-3 rounded-lg border p-4 text-sm md:grid-cols-2">
                       <div>
                         <div className="text-muted-foreground">来源</div>
-                        <div className="mt-1 break-all">{renderSourceMeta(detailSkill)}</div>
+                        <div className="mt-1 break-all">{formatSourceMetaText(detailSkill)}</div>
                       </div>
                       <div>
                         <div className="text-muted-foreground">更新时间</div>
