@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Archive, CheckCircle2, Download, FileCode2, GitBranch, GitPullRequest, Globe, MoreVertical, RotateCcw, Search, Star, Tag, Upload, XCircle } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -146,6 +146,12 @@ function getErrorMessage(error: unknown) {
   return '操作失败';
 }
 
+function formatFileSize(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
 function getSourceIcon(type: SkillSourceType) {
   switch (type) {
     case 'git':
@@ -204,6 +210,7 @@ export default function SkillsPage() {
   const [importUrl, setImportUrl] = useState('');
   const [versionBump, setVersionBump] = useState<VersionBump>('patch');
   const [importChangelogNote, setImportChangelogNote] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchSkills = useCallback(async () => {
     setLoading(true);
@@ -474,12 +481,68 @@ export default function SkillsPage() {
                     <FieldGroup className="gap-4">
                       <Field>
                         <FieldLabel htmlFor="skill-package">上传 zip 包</FieldLabel>
-                        <Input
+                        <input
+                          ref={fileInputRef}
                           id="skill-package"
                           type="file"
                           accept=".zip"
+                          className="sr-only"
                           onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
                         />
+                        <label
+                          htmlFor="skill-package"
+                          className={`flex cursor-pointer flex-col gap-3 rounded-xl border border-dashed p-4 transition-colors sm:flex-row sm:items-center ${
+                            selectedFile
+                              ? 'border-primary/50 bg-primary/10'
+                              : 'border-border/70 bg-muted/20 hover:border-primary/50 hover:bg-primary/5'
+                          }`}
+                          onDragOver={(event) => {
+                            event.preventDefault();
+                            event.dataTransfer.dropEffect = 'copy';
+                          }}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            const file = event.dataTransfer.files?.[0];
+                            if (file) setSelectedFile(file);
+                          }}
+                        >
+                          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                            <Upload className="h-5 w-5" />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium">
+                              {selectedFile ? selectedFile.name : '点击选择或拖入 zip 包'}
+                            </span>
+                            <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                              {selectedFile
+                                ? `${formatFileSize(selectedFile.size)} · 将使用该压缩包导入 Skill`
+                                : '支持 .zip，适用于单个 Skill 包或包含 registry.json 的批量包。'}
+                            </span>
+                          </span>
+                          <span className="inline-flex shrink-0 items-center justify-center rounded-md border border-border/60 bg-background px-3 py-1.5 text-xs font-medium text-foreground shadow-xs transition-colors">
+                            {selectedFile ? '重新选择' : '选择文件'}
+                          </span>
+                        </label>
+                        {selectedFile && (
+                          <div className="flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2">
+                            <div className="min-w-0">
+                              <p className="truncate text-xs font-medium">{selectedFile.name}</p>
+                              <p className="text-[11px] text-muted-foreground">{formatFileSize(selectedFile.size)}</p>
+                            </div>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 shrink-0 px-2 text-xs"
+                              onClick={() => {
+                                setSelectedFile(null);
+                                if (fileInputRef.current) fileInputRef.current.value = '';
+                              }}
+                            >
+                              清除
+                            </Button>
+                          </div>
+                        )}
                         <FieldDescription>
                           zip 内应包含 skill.md、meta.json、CHANGELOG.md，或包含 registry.json 的批量包。
                         </FieldDescription>
