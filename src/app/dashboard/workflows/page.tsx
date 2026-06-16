@@ -2417,18 +2417,6 @@ export default function WorkflowsPage() {
           )}
         </ScrollArea>
 
-        {/* Confirm Step Hint - the primary action is now attached to the active node */}
-        {currentStepReadyToConfirm && (
-          <div className="border-t border-primary/20 bg-primary/5 px-4 py-2">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-primary" />
-              <p className="min-w-0">
-                AI 已产出结果，可在左侧当前节点末端点击“确认完成”保存产物{currentStep?.runMode === 'parallel' ? '，并继续并行任务' : '并推进到下一步'}。
-              </p>
-            </div>
-          </div>
-        )}
-
         {/* Chat Input */}
         <div className="flex flex-col gap-3 border-t border-border/40 p-4">
           <div className="flex flex-col gap-3 rounded-lg border border-border/40 bg-muted/20 p-3">
