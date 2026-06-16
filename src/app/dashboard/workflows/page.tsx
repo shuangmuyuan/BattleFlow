@@ -1498,13 +1498,7 @@ export default function WorkflowsPage() {
         {!openedWorkspace ? (
           <div className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
             <div className="mx-auto flex w-full max-w-6xl flex-col gap-5">
-              <div className="flex flex-col gap-3 border-b border-border/40 pb-4 sm:flex-row sm:items-end sm:justify-between">
-                <div className="min-w-0">
-                  <h2 className="text-base font-semibold">工作目录</h2>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    点击目录进入对应的工作流空间。目录页只负责选择入口，避免和工作流列表混在一起。
-                  </p>
-                </div>
+              <div className="flex justify-end border-b border-border/40 pb-4">
                 <StatusBadge tone="neutral" className="w-fit text-xs">
                   共 {workspaces.length} 个目录
                 </StatusBadge>
