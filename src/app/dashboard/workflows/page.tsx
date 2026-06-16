@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { ClipboardEvent } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -65,6 +65,63 @@ interface Skill {
   skill_md?: string;
   scope?: 'personal' | 'team' | 'official';
   status?: 'imported' | 'pending_review' | 'published' | 'rejected' | 'archived';
+  updated_at?: string;
+  review?: {
+    source_skill_id?: string;
+    source_version?: string;
+    decision?: 'approved' | 'rejected';
+  };
+}
+
+const skillStatusPriority: Record<string, number> = {
+  published: 4,
+  imported: 3,
+};
+
+const skillScopePriority: Record<string, number> = {
+  official: 3,
+  team: 2,
+  personal: 1,
+};
+
+function getWorkflowSkillFamilyId(skill: Skill) {
+  return skill.review?.source_skill_id || skill.id;
+}
+
+function getWorkflowSkillScore(skill: Skill) {
+  const updatedAt = skill.updated_at ? new Date(skill.updated_at).getTime() : 0;
+  return [
+    skillStatusPriority[skill.status || ''] || 0,
+    skillScopePriority[skill.scope || ''] || 0,
+    Number.isNaN(updatedAt) ? 0 : updatedAt,
+  ];
+}
+
+function isPreferredWorkflowSkill(candidate: Skill, current: Skill) {
+  const candidateScore = getWorkflowSkillScore(candidate);
+  const currentScore = getWorkflowSkillScore(current);
+
+  for (let index = 0; index < candidateScore.length; index += 1) {
+    if (candidateScore[index] !== currentScore[index]) {
+      return candidateScore[index] > currentScore[index];
+    }
+  }
+
+  return candidate.id.localeCompare(current.id) < 0;
+}
+
+function dedupeWorkflowSkillOptions(sourceSkills: Skill[]) {
+  const preferredByFamily = new Map<string, Skill>();
+
+  sourceSkills.forEach((skill) => {
+    const familyId = getWorkflowSkillFamilyId(skill);
+    const current = preferredByFamily.get(familyId);
+    if (!current || isPreferredWorkflowSkill(skill, current)) {
+      preferredByFamily.set(familyId, skill);
+    }
+  });
+
+  return sourceSkills.filter((skill) => preferredByFamily.get(getWorkflowSkillFamilyId(skill))?.id === skill.id);
 }
 
 interface WorkflowStep {
@@ -266,6 +323,7 @@ export default function WorkflowsPage() {
   const [archivedReviewStepIds, setArchivedReviewStepIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
+  const workflowSkillOptions = useMemo(() => dedupeWorkflowSkillOptions(skills), [skills]);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1409,13 +1467,13 @@ export default function WorkflowsPage() {
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium">选择 Skill（按顺序点击添加）</label>
-                  {skills.length === 0 ? (
+                  {workflowSkillOptions.length === 0 ? (
                     <div className="rounded-lg border border-dashed border-border/60 p-4 text-center text-sm text-muted-foreground">
                       暂无可用 Skill，请先到 Skill 仓库导入或发布 Skill。
                     </div>
                   ) : (
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    {skills.map((skill) => {
+                    {workflowSkillOptions.map((skill) => {
                       const isSelected = selectedSkills.find((s) => s.id === skill.id);
                       const orderIndex = isSelected ? selectedSkills.findIndex((s) => s.id === skill.id) : -1;
                       return (
@@ -1666,7 +1724,7 @@ export default function WorkflowsPage() {
                 <div className="space-y-2">
                   <label className="text-sm font-medium">追加 Skill</label>
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    {skills.map((skill) => (
+                    {workflowSkillOptions.map((skill) => (
                       <div
                         key={skill.id}
                         className="flex items-center justify-between gap-2 rounded-lg border border-border/60 p-3"
