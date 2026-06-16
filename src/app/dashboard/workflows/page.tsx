@@ -338,6 +338,7 @@ export default function WorkflowsPage() {
   const [supplementalContextOpen, setSupplementalContextOpen] = useState(false);
   const [supplementalContextTab, setSupplementalContextTab] = useState<'knowledge' | 'materials' | 'files'>('knowledge');
   const [rightPanelTab, setRightPanelTab] = useState<'skill' | 'outputs' | 'review' | 'archive'>('outputs');
+  const [expandedOutputIds, setExpandedOutputIds] = useState<Record<string, boolean>>({});
   const [archivedReviewStepIds, setArchivedReviewStepIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
@@ -2206,36 +2207,80 @@ export default function WorkflowsPage() {
       return groups;
     }, {})
   );
-  const renderStepOutputPreview = (step: WorkflowStep, options: { expanded?: boolean } = {}) => (
-    <Card key={step.id} className={`${appCardClassName} mb-2`}>
-      <CardContent className="p-3">
-        <div className="mb-1 flex min-w-0 items-center justify-between gap-2">
-          <p className="min-w-0 truncate text-xs font-medium">{step.name}</p>
-          {step.output && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 shrink-0 gap-1 px-1.5 text-[11px]"
-              onClick={() => downloadStepOutput(step.name, step.output || '')}
-            >
-              <Download className="h-3 w-3" />
-              下载
-            </Button>
-          )}
-        </div>
-        {step.output ? (
-          <div className={`mt-3 min-w-0 overflow-hidden ${options.expanded ? '' : 'max-h-56'}`}>
-            <CompactMarkdown
-              content={buildStepOutputMarkdown(activeWorkflow, step)}
-              className="text-xs leading-6 [&_p]:text-xs [&_li]:text-xs [&_table]:text-[11px]"
-            />
+  const toggleOutputExpanded = (stepId: string) => {
+    setExpandedOutputIds((prev) => ({
+      ...prev,
+      [stepId]: !prev[stepId],
+    }));
+  };
+  const renderStepOutputPreview = (step: WorkflowStep, options: { label?: string } = {}) => {
+    const output = step.output || '';
+    const isExpanded = Boolean(expandedOutputIds[step.id]);
+    const preview = compactMarkdownPreview(output, 132) || '暂无摘要。';
+
+    return (
+      <Card key={step.id} className="mb-2 border-border/60 bg-card/75 shadow-none">
+        <CardContent className="p-3">
+          <div className="flex min-w-0 items-start gap-2">
+            <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+              <FileText className="h-3.5 w-3.5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="min-w-0 truncate text-xs font-semibold">{step.name}</p>
+                  <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                    {options.label || '已确认产物'} · {output.length.toLocaleString('zh-CN')} 字符
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  {output && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-7 p-0"
+                      title="下载 Markdown"
+                      onClick={() => downloadStepOutput(step.name, output)}
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                  {output && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 gap-1 px-1.5 text-[11px]"
+                      onClick={() => toggleOutputExpanded(step.id)}
+                    >
+                      {isExpanded ? '收起' : '展开'}
+                      <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                    </Button>
+                  )}
+                </div>
+              </div>
+              {output ? (
+                <>
+                  <p className="mt-2 break-words text-xs leading-5 text-muted-foreground">
+                    {preview}{output.length > preview.length ? '...' : ''}
+                  </p>
+                  {isExpanded && (
+                    <div className="mt-3 max-h-72 min-w-0 overflow-y-auto rounded-lg border border-border/60 bg-background/80 p-3">
+                      <CompactMarkdown
+                        content={output}
+                        className="text-xs leading-5 [&_blockquote]:my-2 [&_h2]:text-sm [&_h3]:text-xs [&_li]:text-xs [&_p]:text-xs [&_table]:text-[11px]"
+                      />
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="mt-2 break-words text-xs text-muted-foreground">暂无产物。</p>
+              )}
+            </div>
           </div>
-        ) : (
-          <p className="mt-1 break-words text-xs text-muted-foreground">暂无产物。</p>
-        )}
-      </CardContent>
-    </Card>
-  );
+        </CardContent>
+      </Card>
+    );
+  };
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-auto lg:flex-row lg:overflow-hidden">
@@ -2975,7 +3020,7 @@ export default function WorkflowsPage() {
                     </Badge>
                   </div>
                   {currentStep?.output ? (
-                    renderStepOutputPreview(currentStep, { expanded: true })
+                    renderStepOutputPreview(currentStep, { label: '当前步骤' })
                   ) : (
                     <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
                       当前步骤确认完成后，会在这里展示本步骤产出。
@@ -2989,7 +3034,7 @@ export default function WorkflowsPage() {
                     <Badge variant="outline" className="shrink-0 text-[11px]">{previousSteps.length} 个</Badge>
                   </div>
                   {previousSteps.length > 0 ? (
-                    previousSteps.map((step) => renderStepOutputPreview(step))
+                    previousSteps.map((step) => renderStepOutputPreview(step, { label: '前序步骤' }))
                   ) : (
                     <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
                       当前步骤暂无前序产出。
@@ -3003,7 +3048,7 @@ export default function WorkflowsPage() {
                       <h4 className="min-w-0 truncate text-xs font-medium text-muted-foreground">并行任务产出</h4>
                       <Badge variant="outline" className="shrink-0 text-[11px]">{parallelPeerSteps.length} 个</Badge>
                     </div>
-                    {parallelPeerSteps.map((step) => renderStepOutputPreview(step))}
+                    {parallelPeerSteps.map((step) => renderStepOutputPreview(step, { label: '并行步骤' }))}
                   </div>
                 )}
 
@@ -3015,27 +3060,22 @@ export default function WorkflowsPage() {
                     </Badge>
                   </div>
                   {finalWorkflowOutputSteps.length > 0 ? (
-                    <div className="flex flex-col gap-3 rounded-xl border border-border/60 bg-card/70 p-3">
-                      <div className="flex min-w-0 items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="truncate text-xs font-medium">{activeWorkflow.name} 最终产出</p>
-                          <p className="mt-1 text-[11px] text-muted-foreground">
-                            来自最后一个步骤{finalWorkflowOutputSteps.length > 1 ? '组' : ''}的已确认产物。
-                          </p>
-                        </div>
+                    <div className="min-w-0">
+                      <div className="mb-2 flex min-w-0 items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/25 px-3 py-2">
+                        <p className="min-w-0 truncate text-[11px] text-muted-foreground">
+                          来自最后步骤的已确认产物
+                        </p>
                         <Button
-                          variant="outline"
+                          variant="ghost"
                           size="sm"
-                          className="h-7 shrink-0 gap-1.5 text-xs"
+                          className="h-7 shrink-0 gap-1 px-1.5 text-[11px]"
                           onClick={() => downloadWorkflowFinalOutput(activeWorkflow, finalWorkflowOutputSteps)}
                         >
                           <Download className="h-3.5 w-3.5" />
-                          下载
+                          全部下载
                         </Button>
                       </div>
-                      <div className="flex flex-col gap-2">
-                        {finalWorkflowOutputSteps.map((step) => renderStepOutputPreview(step))}
-                      </div>
+                      {finalWorkflowOutputSteps.map((step) => renderStepOutputPreview(step, { label: '最终产物' }))}
                     </div>
                   ) : (
                     <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
