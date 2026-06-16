@@ -2,16 +2,44 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { KnowledgeClient, Config, KnowledgeDocument, DataSourceType } from 'coze-coding-dev-sdk';
 
+const KNOWLEDGE_UNAVAILABLE_MESSAGE = '知识库服务未配置：当前环境缺少 Supabase 知识库连接配置，暂时无法访问知识库资产。';
+
+function isKnowledgeServiceConfigError(error: unknown) {
+  return error instanceof Error && (
+    error.message.includes('COZE_SUPABASE_URL')
+    || error.message.includes('COZE_SUPABASE_ANON_KEY')
+  );
+}
+
+function knowledgeUnavailableResponse(status = 503) {
+  return NextResponse.json({
+    serviceUnavailable: true,
+    error: KNOWLEDGE_UNAVAILABLE_MESSAGE,
+    knowledgeBases: [],
+    results: [],
+  }, { status });
+}
+
 // GET /api/knowledge - List knowledge bases or search
 export async function GET(request: NextRequest) {
+  const { searchParams } = new URL(request.url);
+  const query = searchParams.get('query');
+
   try {
     const token = request.headers.get('x-session') || undefined;
-    const client = getSupabaseClient(token);
-    const { searchParams } = new URL(request.url);
-    const query = searchParams.get('query');
 
     // List knowledge bases
     if (!query) {
+      let client;
+      try {
+        client = getSupabaseClient(token);
+      } catch (error) {
+        if (isKnowledgeServiceConfigError(error)) {
+          return knowledgeUnavailableResponse(200);
+        }
+        throw error;
+      }
+
       const { data, error } = await client
         .from('knowledge_bases')
         .select('*')
@@ -38,6 +66,9 @@ export async function GET(request: NextRequest) {
     }
   } catch (error) {
     console.error('Knowledge GET error:', error);
+    if (isKnowledgeServiceConfigError(error)) {
+      return query ? knowledgeUnavailableResponse(503) : knowledgeUnavailableResponse(200);
+    }
     return NextResponse.json({ error: 'Failed to access knowledge base' }, { status: 500 });
   }
 }
@@ -46,8 +77,16 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const token = request.headers.get('x-session') || undefined;
-    const client = getSupabaseClient(token);
     const body = await request.json();
+    let client;
+    try {
+      client = getSupabaseClient(token);
+    } catch (error) {
+      if (isKnowledgeServiceConfigError(error)) {
+        return knowledgeUnavailableResponse(503);
+      }
+      throw error;
+    }
 
     // Create new knowledge base
     if (body.action === 'create') {
@@ -114,6 +153,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
   } catch (error) {
     console.error('Knowledge POST error:', error);
+    if (isKnowledgeServiceConfigError(error)) {
+      return knowledgeUnavailableResponse(503);
+    }
     return NextResponse.json({ error: 'Failed to process knowledge request' }, { status: 500 });
   }
 }

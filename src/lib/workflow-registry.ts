@@ -76,6 +76,11 @@ export interface WorkflowStepSnapshotRecord {
   created_at: string;
 }
 
+export interface WorkflowChatMessageRecord {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export interface WorkflowRecord {
   id: string;
   workspaceId: string;
@@ -89,6 +94,7 @@ export interface WorkflowRecord {
   archivedReviewStepIds: string[];
   contextSelections: Record<string, WorkflowContextSelectionRecord>;
   stepSnapshots: WorkflowStepSnapshotRecord[];
+  stepChats: Record<string, WorkflowChatMessageRecord[]>;
   created_at: string;
   updated_at: string;
 }
@@ -275,6 +281,29 @@ function normalizeStepSnapshot(
   };
 }
 
+function normalizeStepChats(value: unknown): Record<string, WorkflowChatMessageRecord[]> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([stepId, messages]) => [
+      stepId,
+      Array.isArray(messages)
+        ? messages
+          .filter((message): message is Partial<WorkflowChatMessageRecord> => (
+            Boolean(message)
+            && typeof message === 'object'
+            && !Array.isArray(message)
+            && (message as Partial<WorkflowChatMessageRecord>).role !== undefined
+            && typeof (message as Partial<WorkflowChatMessageRecord>).content === 'string'
+          ))
+          .map((message) => ({
+            role: message.role === 'assistant' ? 'assistant' : 'user',
+            content: message.content || '',
+          }))
+        : [],
+    ]).filter(([, messages]) => messages.length > 0),
+  );
+}
+
 function deriveWorkflowStatus(workflow: WorkflowRecord): WorkflowStatus {
   const activeSteps = workflow.steps.filter((step) => !step.isRemoved);
   if (activeSteps.length === 0) return 'draft';
@@ -311,6 +340,7 @@ function normalizeWorkflow(workflow: Partial<WorkflowRecord>): WorkflowRecord {
     stepSnapshots: Array.isArray(workflow.stepSnapshots)
       ? workflow.stepSnapshots.map((snapshot, index) => normalizeStepSnapshot(snapshot, index, workflow.id || ''))
       : [],
+    stepChats: normalizeStepChats(workflow.stepChats),
     created_at: workflow.created_at || now,
     updated_at: now,
   };

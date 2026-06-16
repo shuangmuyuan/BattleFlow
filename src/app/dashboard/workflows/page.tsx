@@ -105,6 +105,7 @@ interface Workflow {
   archivedReviewStepIds?: string[];
   contextSelections?: Record<string, WorkflowContextSelection>;
   stepSnapshots?: WorkflowStepSnapshot[];
+  stepChats?: Record<string, ChatMessage[]>;
   created_at?: string;
   updated_at?: string;
 }
@@ -278,6 +279,12 @@ export default function WorkflowsPage() {
       : defaultContextSelection
   );
 
+  const getStepChatMessages = (workflow: Workflow, stepId?: string): ChatMessage[] => (
+    stepId && Array.isArray(workflow.stepChats?.[stepId])
+      ? workflow.stepChats[stepId]
+      : []
+  );
+
   const syncWorkflowSupportingState = (workflow: Workflow, stepIndex: number) => {
     const visibleSteps = getVisibleSteps(workflow);
     const step = visibleSteps[stepIndex] || visibleSteps[0];
@@ -289,6 +296,16 @@ export default function WorkflowsPage() {
     setArchivedReviewStepIds(workflow.archivedReviewStepIds || []);
     setSelectedKnowledgeBaseIds(selection.knowledgeBaseIds);
     setSelectedReviewMaterialIds(selection.reviewMaterialIds);
+  };
+
+  const switchActiveStep = (workflow: Workflow, stepIndex: number) => {
+    const visibleSteps = getVisibleSteps(workflow);
+    const nextStep = visibleSteps[stepIndex] || visibleSteps[0];
+    const nextIndex = Math.max(visibleSteps.findIndex((step) => step.id === nextStep?.id), 0);
+
+    setActiveStepIndex(nextIndex);
+    syncWorkflowSupportingState(workflow, nextIndex);
+    setChatMessages(getStepChatMessages(workflow, nextStep?.id));
   };
 
   const persistWorkflow = useCallback(async (workflow: Workflow) => {
@@ -333,14 +350,43 @@ export default function WorkflowsPage() {
     void persistWorkflow(updatedWorkflow);
   }, [activeWorkflow, persistWorkflow, workflows]);
 
+  const saveStepChatMessages = useCallback((
+    workflow: Workflow,
+    stepId: string,
+    messages: ChatMessage[],
+    options: { persist?: boolean } = {},
+  ) => {
+    const updatedAt = new Date().toISOString();
+    const buildNextWorkflow = (source: Workflow): Workflow => ({
+      ...source,
+      stepChats: {
+        ...(source.stepChats || {}),
+        [stepId]: messages,
+      },
+      updated_at: updatedAt,
+    });
+    const updatedWorkflow = buildNextWorkflow(workflow);
+
+    setWorkflows((prev) => prev.map((item) => (
+      item.id === workflow.id ? buildNextWorkflow(item) : item
+    )));
+    setActiveWorkflow((prev) => (
+      prev?.id === workflow.id ? buildNextWorkflow(prev) : prev
+    ));
+
+    if (options.persist !== false) {
+      void persistWorkflow(updatedWorkflow);
+    }
+
+    return updatedWorkflow;
+  }, [persistWorkflow]);
+
   const openWorkflow = (workflow: Workflow) => {
     setActiveWorkflow(workflow);
     const visibleSteps = getVisibleSteps(workflow);
     const firstInProgress = visibleSteps.findIndex((step) => step.status === 'in_progress');
     const nextStepIndex = firstInProgress >= 0 ? firstInProgress : 0;
-    setActiveStepIndex(nextStepIndex);
-    syncWorkflowSupportingState(workflow, nextStepIndex);
-    setChatMessages([]);
+    switchActiveStep(workflow, nextStepIndex);
   };
 
   const loadWorkflowState = useCallback(async () => {
@@ -601,19 +647,20 @@ export default function WorkflowsPage() {
   const handleSendMessage = useCallback(async () => {
     if (!chatInput.trim() || isStreaming) return;
 
+    const workflow = activeWorkflow;
+    const currentStep = workflow ? getVisibleSteps(workflow)[activeStepIndex] : undefined;
+    if (!workflow || !currentStep) return;
+
     const userMessage = chatInput.trim();
-    const currentStepForContext = activeWorkflow ? getVisibleSteps(activeWorkflow)[activeStepIndex] : undefined;
-    const currentStepContextFiles = currentStepForContext
-      ? uploadedContextFiles.filter((file) => file.stepId === currentStepForContext.id)
-      : [];
+    const currentStepContextFiles = uploadedContextFiles.filter((file) => file.stepId === currentStep.id);
     const selectedKnowledgeBases = knowledgeBaseOptions.filter((kb) => selectedKnowledgeBaseIds.includes(kb.id));
-    const selectedReviewMaterials = activeWorkflow?.steps
+    const selectedReviewMaterials = workflow.steps
       .filter((step) => !step.isRemoved && selectedReviewMaterialIds.includes(step.id) && step.output)
       .map((step) => ({
         name: step.name,
         source: '工作流已评审产物',
         summary: step.output?.slice(0, 400) || '',
-      })) || [];
+      }));
     const selectedUploadedReviewMaterials = reviewedOutputFiles
       .filter((file) => selectedReviewMaterialIds.includes(file.id))
       .map((file) => ({
@@ -638,16 +685,18 @@ export default function WorkflowsPage() {
     const messageWithContext = contextSummary
       ? `${userMessage}\n\n[本轮补充上下文]\n${contextSummary}`
       : userMessage;
+    const visibleMessages: ChatMessage[] = [...chatMessages, { role: 'user', content: userMessage }];
+    const requestMessages: ChatMessage[] = [...chatMessages, { role: 'user', content: messageWithContext }];
 
     setChatInput('');
-    setChatMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
+    setChatMessages(visibleMessages);
+    saveStepChatMessages(workflow, currentStep.id, visibleMessages, { persist: false });
     setIsStreaming(true);
 
     try {
-      const currentStep = activeWorkflow ? getVisibleSteps(activeWorkflow)[activeStepIndex] : undefined;
-      const stepContext = activeWorkflow?.steps
-        .filter((s) => currentStep && !s.isRemoved && s.step_index < currentStep.step_index && s.output)
-        .map((s) => ({ step_name: s.name, step_output: s.output })) || [];
+      const stepContext = workflow.steps
+        .filter((s) => !s.isRemoved && s.step_index < currentStep.step_index && s.output)
+        .map((s) => ({ step_name: s.name, step_output: s.output }));
 
       const skillDef = skills.find((s) => s.id === currentStep?.skill_id);
 
@@ -655,7 +704,7 @@ export default function WorkflowsPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: [...chatMessages, { role: 'user', content: messageWithContext }].map((m) => ({
+          messages: requestMessages.map((m) => ({
             role: m.role,
             content: m.content,
           })),
@@ -684,7 +733,7 @@ export default function WorkflowsPage() {
       const decoder = new TextDecoder();
       let assistantContent = '';
 
-      setChatMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
+      setChatMessages([...visibleMessages, { role: 'assistant', content: '' }]);
 
       while (true) {
         const { done, value } = await reader.read();
@@ -705,25 +754,26 @@ export default function WorkflowsPage() {
             if (data.error) throw new Error(data.error);
             if (data.content) {
               assistantContent += data.content;
-              setChatMessages((prev) => {
-                const newMessages = [...prev];
-                newMessages[newMessages.length - 1] = {
-                  role: 'assistant',
-                  content: assistantContent,
-                };
-                return newMessages;
-              });
+              setChatMessages([...visibleMessages, { role: 'assistant', content: assistantContent }]);
             }
             if (data.done) break;
           }
         }
       }
+      const finalMessages: ChatMessage[] = [
+        ...visibleMessages,
+        { role: 'assistant', content: assistantContent },
+      ];
+      setChatMessages(finalMessages);
+      saveStepChatMessages(workflow, currentStep.id, finalMessages);
     } catch (error) {
       console.error('Chat error:', error);
-      setChatMessages((prev) => [
-        ...prev,
+      const errorMessages: ChatMessage[] = [
+        ...visibleMessages,
         { role: 'assistant', content: '抱歉，对话出现了问题，请重试。' },
-      ]);
+      ];
+      setChatMessages(errorMessages);
+      saveStepChatMessages(workflow, currentStep.id, errorMessages);
     } finally {
       setIsStreaming(false);
     }
@@ -733,6 +783,7 @@ export default function WorkflowsPage() {
     isStreaming,
     activeWorkflow,
     activeStepIndex,
+    saveStepChatMessages,
     skills,
     selectedKnowledgeBaseIds,
     selectedReviewMaterialIds,
@@ -817,15 +868,17 @@ export default function WorkflowsPage() {
     const stepSnapshot = buildStepSnapshot(activeWorkflow, currentStep, lastAssistantMsg.content, snapshotCreatedAt);
     const workflowWithSnapshot = {
       ...nextWorkflow,
+      stepChats: {
+        ...(nextWorkflow.stepChats || {}),
+        [currentStep.id]: chatMessages,
+      },
       stepSnapshots: [stepSnapshot, ...(nextWorkflow.stepSnapshots || [])],
       updated_at: snapshotCreatedAt,
     };
 
     setWorkflows((prev) => prev.map((workflow) => (workflow.id === workflowWithSnapshot.id ? workflowWithSnapshot : workflow)));
     setActiveWorkflow(workflowWithSnapshot);
-    setActiveStepIndex(nextActiveStepIndex);
-    syncWorkflowSupportingState(workflowWithSnapshot, nextActiveStepIndex);
-    setChatMessages([]);
+    switchActiveStep(workflowWithSnapshot, nextActiveStepIndex);
     await persistWorkflow(workflowWithSnapshot);
   };
 
@@ -990,6 +1043,7 @@ export default function WorkflowsPage() {
         removedAt: step.isRemoved ? new Date().toISOString() : undefined,
       })),
       stepSnapshots: [],
+      stepChats: {},
     };
 
     setWorkflows((prev) => [clonedWorkflow, ...prev]);
@@ -1873,16 +1927,16 @@ export default function WorkflowsPage() {
                       const isDisabled = step.status === 'pending' && !isActive;
 
                       return (
-                        <div
+                        <button
                           key={step.id}
-                          className={`p-3 rounded-lg transition-colors ${
-                            isActive ? 'bg-primary/10 border border-primary/30' : isDisabled ? 'opacity-60' : 'hover:bg-muted/50 cursor-pointer'
+                          type="button"
+                          disabled={isDisabled}
+                          className={`w-full rounded-lg p-3 text-left transition-all disabled:cursor-not-allowed ${
+                            isActive ? 'border border-primary/30 bg-primary/10' : isDisabled ? 'opacity-60' : 'hover:bg-muted/50'
                           }`}
                           onClick={() => {
                             if (!isDisabled) {
-                              setActiveStepIndex(idx);
-                              syncWorkflowSupportingState(activeWorkflow, idx);
-                              setChatMessages([]);
+                              switchActiveStep(activeWorkflow, idx);
                             }
                           }}
                         >
@@ -1900,7 +1954,7 @@ export default function WorkflowsPage() {
                               已完成 — {compactMarkdownPreview(step.output, 50)}...
                             </p>
                           )}
-                        </div>
+                        </button>
                       );
                     })}
                   </div>
@@ -1924,20 +1978,30 @@ export default function WorkflowsPage() {
               </p>
             </div>
           </div>
-          {currentStep?.status === 'completed' && chatMessages.length === 0 && (
+          {currentStep?.status === 'completed' && (
             <Button
               variant="outline"
               size="sm"
               className="gap-2"
               onClick={() => {
-                // Re-enter conversation mode for this completed step
-                setActiveWorkflow((prev) => {
-                  if (!prev) return prev;
-                  const newSteps = [...prev.steps];
-                  newSteps[activeStepIndex] = { ...newSteps[activeStepIndex], status: 'in_progress' };
-                  return { ...prev, steps: newSteps };
-                });
-                setChatMessages([]);
+                if (!activeWorkflow || !currentStep) return;
+                const updatedAt = new Date().toISOString();
+                const nextWorkflow: Workflow = {
+                  ...activeWorkflow,
+                  status: 'in_progress',
+                  steps: activeWorkflow.steps.map((step) => (
+                    step.id === currentStep.id
+                      ? { ...step, status: 'in_progress', updated_at: updatedAt }
+                      : step
+                  )),
+                  updated_at: updatedAt,
+                };
+                setWorkflows((prev) => prev.map((workflow) => (
+                  workflow.id === nextWorkflow.id ? nextWorkflow : workflow
+                )));
+                setActiveWorkflow(nextWorkflow);
+                switchActiveStep(nextWorkflow, activeStepIndex);
+                void persistWorkflow(nextWorkflow);
               }}
             >
               重新编辑

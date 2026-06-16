@@ -66,6 +66,14 @@ export default function KnowledgePage() {
   const [activeTab, setActiveTab] = useState('bases');
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
+  const [serviceNotice, setServiceNotice] = useState('');
+
+  const applyServiceNotice = useCallback((data: { serviceUnavailable?: boolean; error?: string }) => {
+    if (!data.serviceUnavailable) return false;
+    setServiceNotice(data.error || '知识库服务未配置，暂时无法访问知识库资产。');
+    setErrorMessage('');
+    return true;
+  }, []);
 
   useEffect(() => {
     let ignore = false;
@@ -73,9 +81,14 @@ export default function KnowledgePage() {
     async function loadKnowledgeBases() {
       setLoading(true);
       setErrorMessage('');
+      setServiceNotice('');
       try {
         const res = await fetch('/api/knowledge', { cache: 'no-store' });
         const data = await res.json();
+        if (!ignore && applyServiceNotice(data)) {
+          setKnowledgeBases(data.knowledgeBases || []);
+          return;
+        }
         if (!res.ok) throw new Error(data.error || '知识库加载失败');
         if (!ignore) setKnowledgeBases(data.knowledgeBases || []);
       } catch (error) {
@@ -92,7 +105,7 @@ export default function KnowledgePage() {
     return () => {
       ignore = true;
     };
-  }, []);
+  }, [applyServiceNotice]);
 
   const handleSearch = useCallback(async () => {
     if (!searchQuery.trim()) return;
@@ -100,9 +113,14 @@ export default function KnowledgePage() {
     setIsSearching(true);
     try {
       setErrorMessage('');
+      setServiceNotice('');
       const res = await fetch(`/api/knowledge?query=${encodeURIComponent(searchQuery)}&topK=5`);
-      if (!res.ok) throw new Error('Search failed');
       const data = await res.json();
+      if (applyServiceNotice(data)) {
+        setSearchResults([]);
+        return;
+      }
+      if (!res.ok) throw new Error(data.error || '知识检索失败');
       setSearchResults(data.results || []);
     } catch (error) {
       console.error('Search error:', error);
@@ -111,13 +129,14 @@ export default function KnowledgePage() {
     } finally {
       setIsSearching(false);
     }
-  }, [searchQuery]);
+  }, [applyServiceNotice, searchQuery]);
 
   const handleCreateKb = async () => {
     if (!newKbName) return;
 
     try {
       setErrorMessage('');
+      setServiceNotice('');
       const res = await fetch('/api/knowledge', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -130,6 +149,7 @@ export default function KnowledgePage() {
         }),
       });
       const data = await res.json();
+      if (applyServiceNotice(data)) return;
       if (!res.ok) throw new Error(data.error || '知识库创建失败');
       setKnowledgeBases((prev) => [data.knowledgeBase, ...prev]);
       setCreateDialogOpen(false);
@@ -146,6 +166,7 @@ export default function KnowledgePage() {
 
     try {
       setErrorMessage('');
+      setServiceNotice('');
       const res = await fetch('/api/knowledge', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -156,6 +177,7 @@ export default function KnowledgePage() {
         }),
       });
       const data = await res.json();
+      if (applyServiceNotice(data)) return;
       if (!res.ok) throw new Error(data.error || '文档上传失败');
 
       setKnowledgeBases((prev) =>
@@ -191,6 +213,12 @@ export default function KnowledgePage() {
       />
 
       <div className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
+        {serviceNotice && (
+          <div className="mb-4 rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
+            {serviceNotice}
+          </div>
+        )}
+
         {errorMessage && (
           <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
             {errorMessage}
