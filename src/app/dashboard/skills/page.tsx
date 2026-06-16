@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Archive, CheckCircle2, Download, FileCode2, GitBranch, GitPullRequest, Globe, MoreVertical, RotateCcw, Search, Star, Tag, Upload, XCircle } from 'lucide-react';
+import { AlertCircle, Archive, CheckCircle2, Clock3, Download, FileCode2, GitBranch, GitPullRequest, Globe, LockKeyhole, MoreVertical, PackageCheck, RotateCcw, Search, ShieldCheck, Star, Tag, Upload, Users, XCircle } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -129,6 +129,7 @@ const versionBumpDescriptions: Record<VersionBump, string> = {
 };
 
 const codeBlockClassName = 'w-full max-w-full min-w-0 overflow-x-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/30 p-4 font-mono';
+const emptyDescriptionPattern = /^[\s|,.;:，。；：、_-]*$/;
 
 function formatDate(value: string) {
   if (!value) return '-';
@@ -161,6 +162,46 @@ function getSourceIcon(type: SkillSourceType) {
     default:
       return <FileCode2 />;
   }
+}
+
+function getSkillDescription(skill: Skill) {
+  const description = skill.description?.trim();
+  if (!description || emptyDescriptionPattern.test(description)) {
+    return '未填写简介。打开详情可查看完整 skill.md、方法论框架和元数据。';
+  }
+  return description;
+}
+
+function getScopeIcon(scope: SkillScope) {
+  switch (scope) {
+    case 'official':
+      return <ShieldCheck className="h-4 w-4" />;
+    case 'team':
+      return <Users className="h-4 w-4" />;
+    default:
+      return <LockKeyhole className="h-4 w-4" />;
+  }
+}
+
+function getScopeCardClassName(scope: SkillScope) {
+  if (scope === 'official') return 'border-primary/20 bg-primary/10 text-primary';
+  if (scope === 'team') return 'border-success/20 bg-success/10 text-success';
+  return 'border-border/70 bg-muted/50 text-muted-foreground';
+}
+
+function getStatusDotClassName(status: SkillStatus) {
+  if (status === 'published') return 'bg-success';
+  if (status === 'pending_review') return 'bg-warning';
+  if (status === 'rejected') return 'bg-destructive';
+  return 'bg-muted-foreground';
+}
+
+function getSkillCapabilities(skill: Skill) {
+  const values = [
+    ...skill.tags,
+    ...skill.tools.map((tool) => `工具:${tool}`),
+  ];
+  return Array.from(new Set(values)).slice(0, 5);
 }
 
 function ScopeBadge({ scope }: { scope: SkillScope }) {
@@ -600,7 +641,7 @@ export default function SkillsPage() {
                   <ToggleGroupItem value="major">不兼容变更</ToggleGroupItem>
                 </ToggleGroup>
                 <FieldDescription>
-                  新 Skill 首次导入保留包内版本；如果导入包与已有 Skill ID 相同，平台会自动按“{versionBumpLabels[versionBump]}”递增版本号，{versionBumpDescriptions[versionBump]}
+                  新 Skill 首次导入保留包内版本；平台用 Skill ID 判断是否更新已有 Skill。Skill ID 优先读取包内 id 字段，未提供时由 name 自动生成；如果 ID 相同，平台会按“{versionBumpLabels[versionBump]}”递增版本号，{versionBumpDescriptions[versionBump]}
                 </FieldDescription>
               </Field>
 
@@ -649,26 +690,39 @@ export default function SkillsPage() {
             </Alert>
           )}
 
-          <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center">
-            <div className="relative min-w-0 max-w-md flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder="搜索 Skill 名称、描述或标签..."
-                className="pl-10"
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-              />
-            </div>
-            <Tabs className="min-w-0" value={activeTab} onValueChange={(value) => setActiveTab(value as 'all' | SkillScope)}>
-              <div className="max-w-full overflow-x-auto">
-                <TabsList className="w-max">
-                <TabsTrigger value="all">全部 {skillCounts.all}</TabsTrigger>
-                <TabsTrigger value="official">官方 {skillCounts.official}</TabsTrigger>
-                <TabsTrigger value="team">团队 {skillCounts.team}</TabsTrigger>
-                <TabsTrigger value="personal">个人 {skillCounts.personal}</TabsTrigger>
-                </TabsList>
+          <div className="rounded-xl border border-border/60 bg-card/80 p-3 shadow-sm shadow-foreground/5">
+            <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="relative min-w-0 flex-1 lg:max-w-xl">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  placeholder="搜索 Skill 名称、ID、描述、标签或工具..."
+                  className="h-10 bg-background/80 pl-10"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                />
               </div>
-            </Tabs>
+              <Tabs className="min-w-0" value={activeTab} onValueChange={(value) => setActiveTab(value as 'all' | SkillScope)}>
+                <div className="max-w-full overflow-x-auto">
+                  <TabsList className="w-max bg-muted/70">
+                    <TabsTrigger value="all">全部 {skillCounts.all}</TabsTrigger>
+                    <TabsTrigger value="official">官方 {skillCounts.official}</TabsTrigger>
+                    <TabsTrigger value="team">团队 {skillCounts.team}</TabsTrigger>
+                    <TabsTrigger value="personal">个人 {skillCounts.personal}</TabsTrigger>
+                  </TabsList>
+                </div>
+              </Tabs>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span>按最近更新排序</span>
+              <span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
+              <span>{filteredSkills.length} 个结果</span>
+              {searchQuery.trim() && (
+                <>
+                  <span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
+                  <span className="truncate">搜索：{searchQuery.trim()}</span>
+                </>
+              )}
+            </div>
           </div>
 
           {loading ? (
@@ -690,17 +744,27 @@ export default function SkillsPage() {
               </EmptyContent>
             </Empty>
           ) : (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
               {filteredSkills.map((skill) => (
                 <Card
                   key={skill.id}
-                  className={appCardClassName}
+                  className={`${appCardClassName} group overflow-hidden`}
                 >
-                  <CardHeader className="pb-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex min-w-0 items-center gap-2">
+                  <CardHeader className="pb-4">
+                    <div className="flex items-start gap-4">
+                      <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border ${getScopeCardClassName(skill.scope)} [&_svg]:h-5 [&_svg]:w-5`}>
                         {getSourceIcon(skill.source_type)}
-                        <CardTitle className="min-w-0 truncate text-base">{skill.name}</CardTitle>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <CardTitle className="min-w-0 truncate text-base leading-6">{skill.name}</CardTitle>
+                          <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotClassName(skill.status)}`} aria-label={statusLabels[skill.status]} />
+                        </div>
+                        <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+                          <span className="truncate font-mono">{skill.id}</span>
+                          <span className="shrink-0">·</span>
+                          <span className="shrink-0">v{skill.version}</span>
+                        </div>
                       </div>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
@@ -780,48 +844,80 @@ export default function SkillsPage() {
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </div>
-                    <CardDescription className="line-clamp-2">{skill.description}</CardDescription>
+                    <CardDescription className="mt-4 line-clamp-3 min-h-[3.75rem] text-sm leading-5">
+                      {getSkillDescription(skill)}
+                    </CardDescription>
                   </CardHeader>
-                  <CardContent className="flex flex-col gap-3">
+                  <CardContent className="flex flex-1 flex-col gap-4">
                     <div className="flex flex-wrap items-center gap-2">
-                      <ScopeBadge scope={skill.scope} />
+                      <Badge variant="outline" className={getScopeCardClassName(skill.scope)}>
+                        {getScopeIcon(skill.scope)}
+                        {scopeLabels[skill.scope]}
+                      </Badge>
                       <StatusBadge status={skill.status} />
-                      <Badge variant="outline">v{skill.version}</Badge>
+                      <Badge variant="outline" className="gap-1.5">
+                        <PackageCheck />
+                        {skill.versions.length} 个版本
+                      </Badge>
                     </div>
-                    <div className="truncate text-xs text-muted-foreground">
-                      {sourceLabels[skill.source_type]} · {skill.author} · 更新于 {formatDate(skill.updated_at)}
+
+                    <div className="grid grid-cols-3 overflow-hidden rounded-lg border border-border/50 bg-muted/20 text-xs">
+                      <div className="min-w-0 p-3">
+                        <div className="flex items-center gap-1.5 text-muted-foreground">
+                          <Clock3 className="h-3.5 w-3.5" />
+                          更新
+                        </div>
+                        <div className="mt-1 truncate font-medium">{formatDate(skill.updated_at)}</div>
+                      </div>
+                      <div className="min-w-0 border-l border-border/50 p-3">
+                        <div className="text-muted-foreground">来源</div>
+                        <div className="mt-1 truncate font-medium">{sourceLabels[skill.source_type]}</div>
+                      </div>
+                      <div className="min-w-0 border-l border-border/50 p-3">
+                        <div className="text-muted-foreground">作者</div>
+                        <div className="mt-1 truncate font-medium">{skill.author}</div>
+                      </div>
                     </div>
+
                     {skill.review && (
-                      <div className="text-xs text-muted-foreground">
-                        来源 {skill.review.source_skill_id} v{skill.review.source_version} · 提交于 {formatDate(skill.review.submitted_at)}
+                      <div className="rounded-lg border border-border/50 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                        审核来源 <span className="font-mono text-foreground/80">{skill.review.source_skill_id}</span>
+                        <span> v{skill.review.source_version}</span>
+                        <span> · 提交于 {formatDate(skill.review.submitted_at)}</span>
                       </div>
                     )}
-                    <div className="flex flex-wrap gap-1">
-                      {skill.tags.map((tag) => (
-                        <Badge key={tag} variant="outline">
-                          <Tag />
-                          {tag}
-                        </Badge>
-                      ))}
+
+                    <div className="min-h-7">
+                      {getSkillCapabilities(skill).length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {getSkillCapabilities(skill).map((capability) => (
+                            <Badge key={capability} variant="outline" className="bg-background/60">
+                              <Tag />
+                              {capability}
+                            </Badge>
+                          ))}
+                          {skill.tags.length + skill.tools.length > getSkillCapabilities(skill).length && (
+                            <Badge variant="secondary">+{skill.tags.length + skill.tools.length - getSkillCapabilities(skill).length}</Badge>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="text-xs text-muted-foreground">暂无标签或工具声明</div>
+                      )}
                     </div>
-                    {skill.tools.length > 0 && (
-                      <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
-                        <span>工具</span>
-                        {skill.tools.map((tool) => (
-                          <Badge key={tool} variant="secondary">
-                            {tool}
-                          </Badge>
-                        ))}
+
+                    <div className="mt-auto flex min-w-0 items-center justify-between gap-3 border-t border-border/50 pt-4">
+                      <div className="min-w-0 text-xs text-muted-foreground">
+                        <div className="truncate">{renderSourceMeta(skill)}</div>
                       </div>
-                    )}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="mt-1 w-full"
-                      onClick={() => setDetailSkill(skill)}
-                    >
-                      查看详情
-                    </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="shrink-0 transition-colors group-hover:border-primary/40 group-hover:text-primary"
+                        onClick={() => setDetailSkill(skill)}
+                      >
+                        查看详情
+                      </Button>
+                    </div>
                   </CardContent>
                 </Card>
               ))}
