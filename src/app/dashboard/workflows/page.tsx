@@ -10,6 +10,12 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
   PageHeader,
   ProductEmptyState,
   StatusBadge,
@@ -51,6 +57,7 @@ import {
   Copy,
   ChevronDown,
   FileText,
+  MoreHorizontal,
 } from 'lucide-react';
 
 interface Skill {
@@ -1524,6 +1531,10 @@ export default function WorkflowsPage() {
                     const count = workspaceWorkflowList.length;
                     const inProgressCount = workspaceWorkflowList.filter((workflow) => workflow.status === 'in_progress').length;
                     const completedCount = workspaceWorkflowList.filter((workflow) => workflow.status === 'completed').length;
+                    const canDeleteWorkspace = count === 0 && workspaces.length > 1;
+                    const deleteDisabledReason = count > 0
+                      ? '已有流程，不能删除'
+                      : '至少保留一个目录';
                     const latestUpdatedAt = [workspace.updated_at, ...workspaceWorkflowList.map((workflow) => workflow.updated_at)]
                       .filter(Boolean)
                       .sort((a, b) => String(b).localeCompare(String(a)))[0];
@@ -1541,9 +1552,39 @@ export default function WorkflowsPage() {
                                 {workspace.description || '未填写目录说明'}
                               </p>
                             </div>
-                            <StatusBadge tone="neutral" className="shrink-0 text-xs">
-                              {count} 个流程
-                            </StatusBadge>
+                            <div className="flex shrink-0 items-center gap-1.5">
+                              <StatusBadge tone="neutral" className="text-xs">
+                                {count} 个流程
+                              </StatusBadge>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="size-8 text-muted-foreground"
+                                    aria-label={`${workspace.name} 更多操作`}
+                                  >
+                                    <MoreHorizontal className="h-4 w-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-44">
+                                  {canDeleteWorkspace ? (
+                                    <DropdownMenuItem
+                                      variant="destructive"
+                                      onSelect={() => handleDeleteWorkspace(workspace.id)}
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                      删除目录
+                                    </DropdownMenuItem>
+                                  ) : (
+                                    <DropdownMenuItem disabled>
+                                      <Trash2 className="h-4 w-4" />
+                                      {deleteDisabledReason}
+                                    </DropdownMenuItem>
+                                  )}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </div>
                           </div>
 
                           <div className="grid grid-cols-3 overflow-hidden rounded-lg border border-border/50 bg-muted/20 text-center text-xs">
@@ -1573,17 +1614,6 @@ export default function WorkflowsPage() {
                                 进入空间
                                 <ArrowRight className="h-4 w-4" />
                               </Button>
-                              {count === 0 && workspaces.length > 1 && (
-                                <Button
-                                  variant="outline"
-                                  size="icon"
-                                  className="size-10 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                                  aria-label={`删除目录 ${workspace.name}`}
-                                  onClick={() => handleDeleteWorkspace(workspace.id)}
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              )}
                             </div>
                           </div>
                         </CardContent>
