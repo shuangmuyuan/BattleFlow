@@ -16,6 +16,10 @@ import {
   appCardClassName,
 } from '@/components/battleflow/ui';
 import {
+  CompactMarkdown,
+  compactMarkdownPreview,
+} from '@/components/battleflow/compact-markdown';
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -1651,7 +1655,7 @@ export default function WorkflowsPage() {
       id: step.id,
       name: `${step.name}产物`,
       source: activeWorkflow.name,
-      summary: step.output?.slice(0, 120).replace(/[#*\n]/g, ' ') || '',
+      summary: compactMarkdownPreview(step.output || '', 120),
     }))
     .concat(
       reviewedOutputFiles.map((file) => ({
@@ -1820,7 +1824,9 @@ export default function WorkflowsPage() {
             </Button>
           )}
         </div>
-        <p className="mt-1 line-clamp-4 break-words text-xs text-muted-foreground">{step.output}</p>
+        <p className="mt-1 line-clamp-4 break-words text-xs text-muted-foreground">
+          {compactMarkdownPreview(step.output || '')}
+        </p>
       </CardContent>
     </Card>
   );
@@ -1891,7 +1897,7 @@ export default function WorkflowsPage() {
                           </div>
                           {step.output && (
                             <p className="text-xs text-emerald-500/80 mt-1 ml-7 line-clamp-2">
-                              已完成 — {step.output.slice(0, 50).replace(/[#*\n]/g, ' ')}...
+                              已完成 — {compactMarkdownPreview(step.output, 50)}...
                             </p>
                           )}
                         </div>
@@ -1991,9 +1997,7 @@ export default function WorkflowsPage() {
                     </Button>
                   </div>
                 </div>
-                <div className="prose prose-sm max-w-none whitespace-pre-wrap break-words text-sm leading-relaxed dark:prose-invert">
-                  {currentStep.output}
-                </div>
+                <CompactMarkdown content={currentStep.output} />
               </div>
               {currentSkill?.checklist && currentSkill.checklist.length > 0 && (
                 <div className="bg-muted/30 border border-border/30 rounded-lg p-4">
@@ -2048,7 +2052,11 @@ export default function WorkflowsPage() {
                         : 'bg-muted/50 border border-border/40'
                     }`}
                   >
-                    <div className="whitespace-pre-wrap">{msg.content}</div>
+                    {msg.role === 'assistant' ? (
+                      <CompactMarkdown content={msg.content} />
+                    ) : (
+                      <div className="whitespace-pre-wrap">{msg.content}</div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -2407,7 +2415,7 @@ export default function WorkflowsPage() {
                             <span className="shrink-0 text-[11px] text-muted-foreground">查看</span>
                           </div>
                           <p className="mt-1 line-clamp-2 break-words text-xs text-muted-foreground">
-                            {snapshot.output.replace(/[#*\n]/g, ' ').slice(0, 120)}
+                            {compactMarkdownPreview(snapshot.output, 120)}
                           </p>
                           <p className="mt-1 text-[11px] text-muted-foreground/80">
                             上下文 {snapshot.contextFiles.length} · 审核材料 {snapshot.reviewedMaterials.length}
@@ -2617,9 +2625,9 @@ export default function WorkflowsPage() {
                     下载
                   </Button>
                 </div>
-                <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-lg border border-border/50 bg-muted/30 p-3 font-sans text-xs leading-relaxed">
-                  {selectedSnapshot.output}
-                </pre>
+                <div className="max-h-80 overflow-auto rounded-lg border border-border/50 bg-muted/30 p-3">
+                  <CompactMarkdown content={selectedSnapshot.output} className="text-xs leading-6" />
+                </div>
               </section>
 
               <section className="space-y-2">
