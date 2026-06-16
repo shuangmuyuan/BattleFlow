@@ -181,6 +181,21 @@ interface ChatMessage {
   content: string;
 }
 
+type ChatPersistenceStatus = 'idle' | 'streaming' | 'saving' | 'saved' | 'failed';
+
+const chatErrorFallbackContent = '抱歉，对话出现了问题，请重试。';
+
+function getLastAssistantMessage(messages: ChatMessage[]) {
+  return [...messages].reverse().find((message) => message.role === 'assistant');
+}
+
+function hasConfirmableAssistantMessage(messages: ChatMessage[]) {
+  const lastAssistantMessage = getLastAssistantMessage(messages);
+  const content = lastAssistantMessage?.content.trim() || '';
+
+  return content.length > 0 && content !== chatErrorFallbackContent;
+}
+
 interface KnowledgeBaseOption {
   id: string;
   name: string;
@@ -317,6 +332,8 @@ export default function WorkflowsPage() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const [chatPersistenceByStepId, setChatPersistenceByStepId] = useState<Record<string, ChatPersistenceStatus>>({});
+  const [isConfirmingStep, setIsConfirmingStep] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
@@ -369,6 +386,13 @@ export default function WorkflowsPage() {
       : []
   );
 
+  const setStepChatPersistenceStatus = (stepId: string, status: ChatPersistenceStatus) => {
+    setChatPersistenceByStepId((prev) => ({
+      ...prev,
+      [stepId]: status,
+    }));
+  };
+
   const syncWorkflowSupportingState = (workflow: Workflow, stepIndex: number) => {
     const visibleSteps = getVisibleSteps(workflow);
     const step = visibleSteps[stepIndex] || visibleSteps[0];
@@ -389,7 +413,11 @@ export default function WorkflowsPage() {
 
     setActiveStepIndex(nextIndex);
     syncWorkflowSupportingState(workflow, nextIndex);
-    setChatMessages(getStepChatMessages(workflow, nextStep?.id));
+    const nextStepMessages = getStepChatMessages(workflow, nextStep?.id);
+    setChatMessages(nextStepMessages);
+    if (nextStep?.id) {
+      setStepChatPersistenceStatus(nextStep.id, hasConfirmableAssistantMessage(nextStepMessages) ? 'saved' : 'idle');
+    }
     setRightPanelTab(
       nextStep?.output || (nextStep && visibleSteps.some((step) => step.step_index < nextStep.step_index && step.output))
         ? 'outputs'
@@ -409,9 +437,11 @@ export default function WorkflowsPage() {
       const savedWorkflow = data.workflow as Workflow;
       setWorkflows((prev) => prev.map((item) => (item.id === savedWorkflow.id ? savedWorkflow : item)));
       setActiveWorkflow((prev) => (prev?.id === savedWorkflow.id ? savedWorkflow : prev));
+      return savedWorkflow;
     } catch (error) {
       console.error('Workflow save error:', error);
       setErrorMessage(error instanceof Error ? error.message : '工作流保存失败');
+      return null;
     }
   }, []);
 
@@ -884,6 +914,7 @@ export default function WorkflowsPage() {
     setChatInput('');
     setChatMessages(visibleMessages);
     saveStepChatMessages(workflow, currentStep.id, visibleMessages, { persist: false });
+    setStepChatPersistenceStatus(currentStep.id, 'streaming');
     setIsStreaming(true);
 
     try {
@@ -958,15 +989,21 @@ export default function WorkflowsPage() {
         { role: 'assistant', content: assistantContent },
       ];
       setChatMessages(finalMessages);
-      saveStepChatMessages(workflow, currentStep.id, finalMessages);
+      const workflowWithFinalMessages = saveStepChatMessages(workflow, currentStep.id, finalMessages, { persist: false });
+      setStepChatPersistenceStatus(currentStep.id, 'saving');
+      const savedWorkflow = await persistWorkflow(workflowWithFinalMessages);
+      setStepChatPersistenceStatus(currentStep.id, savedWorkflow ? 'saved' : 'failed');
     } catch (error) {
       console.error('Chat error:', error);
       const errorMessages: ChatMessage[] = [
         ...visibleMessages,
-        { role: 'assistant', content: '抱歉，对话出现了问题，请重试。' },
+        { role: 'assistant', content: chatErrorFallbackContent },
       ];
       setChatMessages(errorMessages);
-      saveStepChatMessages(workflow, currentStep.id, errorMessages);
+      const workflowWithErrorMessages = saveStepChatMessages(workflow, currentStep.id, errorMessages, { persist: false });
+      setStepChatPersistenceStatus(currentStep.id, 'saving');
+      const savedWorkflow = await persistWorkflow(workflowWithErrorMessages);
+      setStepChatPersistenceStatus(currentStep.id, savedWorkflow ? 'saved' : 'failed');
     } finally {
       setIsStreaming(false);
     }
@@ -977,6 +1014,7 @@ export default function WorkflowsPage() {
     activeWorkflow,
     activeStepIndex,
     saveStepChatMessages,
+    persistWorkflow,
     skills,
     knowledgeBases,
     selectedKnowledgeBaseIds,
@@ -1045,37 +1083,50 @@ export default function WorkflowsPage() {
   };
 
   const handleConfirmStep = async () => {
-    if (!activeWorkflow || activeStepIndex < 0) return;
-
-    const lastAssistantMsg = [...chatMessages].reverse().find((m) => m.role === 'assistant');
-    if (!lastAssistantMsg) return;
+    if (!activeWorkflow || activeStepIndex < 0 || isConfirmingStep) return;
 
     const currentStep = getVisibleSteps(activeWorkflow)[activeStepIndex];
     if (!currentStep) return;
 
-    const stepOutputDocument = normalizeSkillOutputDocument(activeWorkflow, currentStep, lastAssistantMsg.content);
-    const { workflow: nextWorkflow, nextActiveStepIndex } = completeWorkflowStep(
-      activeWorkflow,
-      currentStep.id,
-      stepOutputDocument,
-    );
-    const snapshotCreatedAt = new Date().toISOString();
-    const stepSnapshot = buildStepSnapshot(activeWorkflow, currentStep, stepOutputDocument, snapshotCreatedAt);
-    const workflowWithSnapshot = {
-      ...nextWorkflow,
-      stepChats: {
-        ...(nextWorkflow.stepChats || {}),
-        [currentStep.id]: chatMessages,
-      },
-      stepSnapshots: [stepSnapshot, ...(nextWorkflow.stepSnapshots || [])],
-      updated_at: snapshotCreatedAt,
-    };
+    const lastAssistantMsg = getLastAssistantMessage(chatMessages);
+    const currentStepChatStatus = chatPersistenceByStepId[currentStep.id] || 'idle';
+    if (
+      isStreaming
+      || currentStepChatStatus !== 'saved'
+      || !lastAssistantMsg
+      || !hasConfirmableAssistantMessage(chatMessages)
+    ) {
+      return;
+    }
 
-    setWorkflows((prev) => prev.map((workflow) => (workflow.id === workflowWithSnapshot.id ? workflowWithSnapshot : workflow)));
-    setActiveWorkflow(workflowWithSnapshot);
-    setRightPanelTab('outputs');
-    switchActiveStep(workflowWithSnapshot, nextActiveStepIndex);
-    await persistWorkflow(workflowWithSnapshot);
+    setIsConfirmingStep(true);
+
+    try {
+      const stepOutputDocument = normalizeSkillOutputDocument(activeWorkflow, currentStep, lastAssistantMsg.content);
+      const { workflow: nextWorkflow, nextActiveStepIndex } = completeWorkflowStep(
+        activeWorkflow,
+        currentStep.id,
+        stepOutputDocument,
+      );
+      const snapshotCreatedAt = new Date().toISOString();
+      const stepSnapshot = buildStepSnapshot(activeWorkflow, currentStep, stepOutputDocument, snapshotCreatedAt);
+      const workflowWithSnapshot = {
+        ...nextWorkflow,
+        stepChats: {
+          ...(nextWorkflow.stepChats || {}),
+          [currentStep.id]: chatMessages,
+        },
+        stepSnapshots: [stepSnapshot, ...(nextWorkflow.stepSnapshots || [])],
+        updated_at: snapshotCreatedAt,
+      };
+      const savedWorkflow = await persistWorkflow(workflowWithSnapshot);
+      if (!savedWorkflow) return;
+
+      setRightPanelTab('outputs');
+      switchActiveStep(savedWorkflow, nextActiveStepIndex);
+    } finally {
+      setIsConfirmingStep(false);
+    }
   };
 
   const handleCreateWorkflow = async () => {
@@ -1526,101 +1577,103 @@ export default function WorkflowsPage() {
                   )}
                 />
               ) : (
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                  {workspaces.map((workspace) => {
-                    const workspaceWorkflowList = workflows.filter((workflow) => workflow.workspaceId === workspace.id);
-                    const count = workspaceWorkflowList.length;
-                    const inProgressCount = workspaceWorkflowList.filter((workflow) => workflow.status === 'in_progress').length;
-                    const completedCount = workspaceWorkflowList.filter((workflow) => workflow.status === 'completed').length;
-                    const canDeleteWorkspace = count === 0 && workspaces.length > 1;
-                    const deleteDisabledReason = count > 0
-                      ? '已有流程，不能删除'
-                      : '至少保留一个目录';
-                    const latestUpdatedAt = [workspace.updated_at, ...workspaceWorkflowList.map((workflow) => workflow.updated_at)]
-                      .filter(Boolean)
-                      .sort((a, b) => String(b).localeCompare(String(a)))[0];
+                <div className="max-h-[45dvh] overflow-y-auto pr-1">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {workspaces.map((workspace) => {
+                      const workspaceWorkflowList = workflows.filter((workflow) => workflow.workspaceId === workspace.id);
+                      const count = workspaceWorkflowList.length;
+                      const inProgressCount = workspaceWorkflowList.filter((workflow) => workflow.status === 'in_progress').length;
+                      const completedCount = workspaceWorkflowList.filter((workflow) => workflow.status === 'completed').length;
+                      const canDeleteWorkspace = count === 0 && workspaces.length > 1;
+                      const deleteDisabledReason = count > 0
+                        ? '已有流程，不能删除'
+                        : '至少保留一个目录';
+                      const latestUpdatedAt = [workspace.updated_at, ...workspaceWorkflowList.map((workflow) => workflow.updated_at)]
+                        .filter(Boolean)
+                        .sort((a, b) => String(b).localeCompare(String(a)))[0];
 
-                    return (
-                      <Card
-                        key={workspace.id}
-                        className={`min-w-0 overflow-hidden ${appCardClassName}`}
-                      >
-                        <CardContent className="flex h-full flex-col gap-4 p-4">
-                          <div className="flex min-w-0 items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <h3 className="truncate text-base font-semibold">{workspace.name}</h3>
-                              <p className="mt-1 line-clamp-2 min-h-10 text-sm text-muted-foreground">
-                                {workspace.description || '未填写目录说明'}
-                              </p>
-                            </div>
-                            <div className="flex shrink-0 items-center gap-1.5">
-                              <StatusBadge tone="neutral" className="text-xs">
-                                {count} 个流程
-                              </StatusBadge>
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="size-8 text-muted-foreground"
-                                    aria-label={`${workspace.name} 更多操作`}
-                                  >
-                                    <MoreHorizontal className="h-4 w-4" />
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" className="w-44">
-                                  {canDeleteWorkspace ? (
-                                    <DropdownMenuItem
-                                      variant="destructive"
-                                      onSelect={() => handleDeleteWorkspace(workspace.id)}
+                      return (
+                        <Card
+                          key={workspace.id}
+                          className={`min-w-0 overflow-hidden ${appCardClassName}`}
+                        >
+                          <CardContent className="flex h-full flex-col gap-4 p-4">
+                            <div className="flex min-w-0 items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <h3 className="truncate text-base font-semibold">{workspace.name}</h3>
+                                <p className="mt-1 line-clamp-2 min-h-10 text-sm text-muted-foreground">
+                                  {workspace.description || '未填写目录说明'}
+                                </p>
+                              </div>
+                              <div className="flex shrink-0 items-center gap-1.5">
+                                <StatusBadge tone="neutral" className="text-xs">
+                                  {count} 个流程
+                                </StatusBadge>
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="size-8 text-muted-foreground"
+                                      aria-label={`${workspace.name} 更多操作`}
                                     >
-                                      <Trash2 className="h-4 w-4" />
-                                      删除目录
-                                    </DropdownMenuItem>
-                                  ) : (
-                                    <DropdownMenuItem disabled>
-                                      <Trash2 className="h-4 w-4" />
-                                      {deleteDisabledReason}
-                                    </DropdownMenuItem>
-                                  )}
-                                </DropdownMenuContent>
-                              </DropdownMenu>
+                                      <MoreHorizontal className="h-4 w-4" />
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end" className="w-44">
+                                    {canDeleteWorkspace ? (
+                                      <DropdownMenuItem
+                                        variant="destructive"
+                                        onSelect={() => handleDeleteWorkspace(workspace.id)}
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                        删除目录
+                                      </DropdownMenuItem>
+                                    ) : (
+                                      <DropdownMenuItem disabled>
+                                        <Trash2 className="h-4 w-4" />
+                                        {deleteDisabledReason}
+                                      </DropdownMenuItem>
+                                    )}
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              </div>
                             </div>
-                          </div>
 
-                          <div className="grid grid-cols-3 overflow-hidden rounded-lg border border-border/50 bg-muted/20 text-center text-xs">
-                            <div className="min-w-0 border-r border-border/50 p-2">
-                              <p className="font-semibold">{count}</p>
-                              <p className="mt-0.5 text-muted-foreground">全部</p>
+                            <div className="grid grid-cols-3 overflow-hidden rounded-lg border border-border/50 bg-muted/20 text-center text-xs">
+                              <div className="min-w-0 border-r border-border/50 p-2">
+                                <p className="font-semibold">{count}</p>
+                                <p className="mt-0.5 text-muted-foreground">全部</p>
+                              </div>
+                              <div className="min-w-0 border-r border-border/50 p-2">
+                                <p className="font-semibold text-primary">{inProgressCount}</p>
+                                <p className="mt-0.5 text-muted-foreground">进行中</p>
+                              </div>
+                              <div className="min-w-0 p-2">
+                                <p className="font-semibold text-emerald-500">{completedCount}</p>
+                                <p className="mt-0.5 text-muted-foreground">已完成</p>
+                              </div>
                             </div>
-                            <div className="min-w-0 border-r border-border/50 p-2">
-                              <p className="font-semibold text-primary">{inProgressCount}</p>
-                              <p className="mt-0.5 text-muted-foreground">进行中</p>
-                            </div>
-                            <div className="min-w-0 p-2">
-                              <p className="font-semibold text-emerald-500">{completedCount}</p>
-                              <p className="mt-0.5 text-muted-foreground">已完成</p>
-                            </div>
-                          </div>
 
-                          <div className="mt-auto flex flex-col gap-3">
-                            <p className="truncate text-xs text-muted-foreground">
-                              最近更新：{formatSnapshotTime(latestUpdatedAt)}
-                            </p>
-                            <div className="flex items-center gap-2">
-                              <Button
-                                className="min-w-0 flex-1 gap-2"
-                                onClick={() => openWorkspaceSpace(workspace.id)}
-                              >
-                                进入空间
-                                <ArrowRight className="h-4 w-4" />
-                              </Button>
+                            <div className="mt-auto flex flex-col gap-3">
+                              <p className="truncate text-xs text-muted-foreground">
+                                最近更新：{formatSnapshotTime(latestUpdatedAt)}
+                              </p>
+                              <div className="flex items-center gap-2">
+                                <Button
+                                  className="min-w-0 flex-1 gap-2"
+                                  onClick={() => openWorkspaceSpace(workspace.id)}
+                                >
+                                  进入空间
+                                  <ArrowRight className="h-4 w-4" />
+                                </Button>
+                              </div>
                             </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    );
-                  })}
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
@@ -2088,9 +2141,25 @@ export default function WorkflowsPage() {
   const currentReviewComment = currentStep ? reviewComments[currentStep.id]?.trim() || '' : '';
   const canArchiveReviewedOutput = currentReviewedOutputFiles.length > 0 || currentReviewComment.length > 0;
   const isReviewedOutputArchived = currentStep ? archivedReviewStepIds.includes(currentStep.id) : false;
-  const currentStepReadyToConfirm = Boolean(
-    currentStep?.status === 'in_progress' && chatMessages.some((message) => message.role === 'assistant'),
+  const currentStepChatPersistenceStatus = currentStep
+    ? chatPersistenceByStepId[currentStep.id] || 'idle'
+    : 'idle';
+  const currentStepHasConfirmableOutput = Boolean(
+    currentStep?.status === 'in_progress' && hasConfirmableAssistantMessage(chatMessages),
   );
+  const currentStepCanConfirm = Boolean(
+    currentStepHasConfirmableOutput
+      && !isStreaming
+      && !isConfirmingStep
+      && currentStepChatPersistenceStatus === 'saved',
+  );
+  const currentStepConfirmHint = (() => {
+    if (currentStepChatPersistenceStatus === 'saving') return '正在保存对话记录，保存完成后才能确认。';
+    if (currentStepChatPersistenceStatus === 'failed') return '对话记录保存失败，请重新发送或刷新后再试。';
+    if (isStreaming) return 'AI 正在生成，完成后会自动保存对话记录。';
+    if (isConfirmingStep) return '正在确认并保存步骤产物。';
+    return 'AI 已产出并保存，可确认沉淀为 Markdown 文档。';
+  })();
   const updateCurrentContextSelection = (
     nextSelection: Partial<WorkflowContextSelection>,
     localStateUpdate?: () => void,
@@ -2322,7 +2391,7 @@ export default function WorkflowsPage() {
                       const idx = visibleWorkflowSteps.findIndex((item) => item.id === step.id);
                       const isActive = idx === activeStepIndex;
                       const isDisabled = step.status === 'pending' && !isActive;
-                      const showNodeConfirm = step.id === currentStep?.id && currentStepReadyToConfirm;
+                      const showNodeConfirm = step.id === currentStep?.id && currentStepHasConfirmableOutput;
 
                       return (
                         <div
@@ -2361,7 +2430,7 @@ export default function WorkflowsPage() {
                             )}
                             {showNodeConfirm && (
                               <p className="mt-2 ml-7 text-[11px] leading-4 text-muted-foreground">
-                                AI 已产出结果，可确认沉淀为 Markdown 文档。
+                                {currentStepConfirmHint}
                               </p>
                             )}
                           </button>
@@ -2370,12 +2439,17 @@ export default function WorkflowsPage() {
                               <Button
                                 size="sm"
                                 className="h-8 w-full gap-1.5 text-xs"
+                                disabled={!currentStepCanConfirm}
                                 onClick={() => {
                                   void handleConfirmStep();
                                 }}
                               >
-                                <CheckCircle2 className="h-3.5 w-3.5" />
-                                确认完成
+                                {isConfirmingStep ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <CheckCircle2 className="h-3.5 w-3.5" />
+                                )}
+                                {isConfirmingStep ? '确认中' : '确认完成'}
                               </Button>
                             </div>
                           )}
@@ -2969,7 +3043,7 @@ export default function WorkflowsPage() {
       </div>
 
       {/* Right: Context Panel */}
-      <div className="flex max-h-[32rem] min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-border/40 lg:h-full lg:max-h-none lg:w-72 lg:border-l lg:border-t-0 xl:w-80">
+      <div className="flex max-h-[32rem] min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-border/40 lg:h-full lg:max-h-none lg:w-80 lg:border-l lg:border-t-0 xl:w-80">
         <Tabs
           value={rightPanelTab}
           onValueChange={(value) => setRightPanelTab(value as typeof rightPanelTab)}
