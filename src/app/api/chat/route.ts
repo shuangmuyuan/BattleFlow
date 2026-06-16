@@ -300,7 +300,7 @@ function buildConversationPrompt(messages: ChatMessage[]) {
 function streamClaudeCli(request: NextRequest, messages: ChatMessage[], systemPrompt: string) {
   const encoder = new TextEncoder();
   const model = process.env.CLAUDE_MODEL || 'sonnet';
-  const maxBudgetUsd = process.env.CLAUDE_MAX_BUDGET_USD || '0.25';
+  const maxBudgetUsd = process.env.CLAUDE_MAX_BUDGET_USD || '1.00';
   const cwd = process.env.CLAUDE_WORKSPACE_DIR || process.cwd();
   const prompt = buildConversationPrompt(messages);
 
@@ -326,6 +326,7 @@ function streamClaudeCli(request: NextRequest, messages: ChatMessage[], systemPr
   ];
 
   let child: ReturnType<typeof spawn> | null = null;
+  let streamClosed = false;
 
   const readable = new ReadableStream({
     start(controller) {
@@ -342,19 +343,30 @@ function streamClaudeCli(request: NextRequest, messages: ChatMessage[], systemPr
       let stderrBuffer = '';
       let sawContentDelta = false;
       let finalResult = '';
-      let closed = false;
 
       const closeWith = (payload: Record<string, unknown>) => {
-        if (closed) return;
-        closed = true;
-        controller.enqueue(encoder.encode(sse(payload)));
-        controller.close();
+        if (streamClosed) return;
+        streamClosed = true;
+        try {
+          controller.enqueue(encoder.encode(sse(payload)));
+        } catch {
+          // The browser may have cancelled the request after a long generation.
+        }
+        try {
+          controller.close();
+        } catch {
+          // Ignore duplicate close attempts from child process shutdown races.
+        }
       };
 
       const emitContent = (content: string) => {
-        if (!content) return;
+        if (!content || streamClosed) return;
         sawContentDelta = true;
-        controller.enqueue(encoder.encode(sse({ content })));
+        try {
+          controller.enqueue(encoder.encode(sse({ content })));
+        } catch {
+          streamClosed = true;
+        }
       };
 
       const handleLine = (line: string) => {
@@ -397,22 +409,24 @@ function streamClaudeCli(request: NextRequest, messages: ChatMessage[], systemPr
 
       child.on('close', (code) => {
         if (stdoutBuffer.trim()) handleLine(stdoutBuffer);
-        if (closed) return;
+        if (streamClosed) return;
         if (code && code !== 0) {
           closeWith({ error: stderrBuffer.trim() || `Claude CLI exited with code ${code}` });
           return;
         }
         if (!sawContentDelta && finalResult) {
-          controller.enqueue(encoder.encode(sse({ content: finalResult })));
+          emitContent(finalResult);
         }
         closeWith({ done: true });
       });
 
       request.signal.addEventListener('abort', () => {
+        streamClosed = true;
         child?.kill('SIGTERM');
       });
     },
     cancel() {
+      streamClosed = true;
       child?.kill('SIGTERM');
     },
   });
