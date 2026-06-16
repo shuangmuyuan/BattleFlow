@@ -285,6 +285,7 @@ function buildSystemPrompt(body: Record<string, unknown>) {
   }
 
   systemPrompt += '\n\n## Instructions\n- Provide structured, professional output\n- If this is a methodology-driven skill, follow the methodology steps\n- Reference context from previous steps when relevant\n- Be thorough but concise\n- Use markdown formatting for better readability';
+  systemPrompt += '\n- When a step is ready to be confirmed, make the durable deliverable a standalone Markdown document that can be saved as this skill step output. Avoid making the saved deliverable depend on conversational wording such as greetings or follow-up chatter.';
 
   return systemPrompt;
 }

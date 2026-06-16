@@ -60,6 +60,7 @@ export interface WorkflowReviewedOutputFileRecord {
 export interface WorkflowContextSelectionRecord {
   knowledgeBaseIds: string[];
   reviewMaterialIds: string[];
+  disabledAutoInjectedStepIds?: string[];
   updated_at?: string;
 }
 
@@ -250,6 +251,9 @@ function normalizeContextSelections(value: unknown): Record<string, WorkflowCont
           : [],
         reviewMaterialIds: Array.isArray(selection?.reviewMaterialIds)
           ? selection.reviewMaterialIds.filter((id): id is string => typeof id === 'string')
+          : [],
+        disabledAutoInjectedStepIds: Array.isArray(selection?.disabledAutoInjectedStepIds)
+          ? selection.disabledAutoInjectedStepIds.filter((id): id is string => typeof id === 'string')
           : [],
         updated_at: typeof selection?.updated_at === 'string' ? selection.updated_at : undefined,
       },

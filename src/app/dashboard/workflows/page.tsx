@@ -50,6 +50,7 @@ import {
   Copy,
   ChevronDown,
   History,
+  FileText,
 } from 'lucide-react';
 
 interface Skill {
@@ -146,6 +147,7 @@ type WorkflowFileContentKind = 'text' | 'image_data_url' | 'metadata';
 interface WorkflowContextSelection {
   knowledgeBaseIds: string[];
   reviewMaterialIds: string[];
+  disabledAutoInjectedStepIds?: string[];
   updated_at?: string;
 }
 
@@ -245,6 +247,7 @@ interface Workspace {
 const defaultContextSelection: WorkflowContextSelection = {
   knowledgeBaseIds: [],
   reviewMaterialIds: [],
+  disabledAutoInjectedStepIds: [],
 };
 
 const maxTextContextChars = 120_000;
@@ -326,6 +329,7 @@ export default function WorkflowsPage() {
   const [reviewComments, setReviewComments] = useState<Record<string, string>>({});
   const [supplementalContextOpen, setSupplementalContextOpen] = useState(false);
   const [supplementalContextTab, setSupplementalContextTab] = useState<'knowledge' | 'materials' | 'files'>('knowledge');
+  const [rightPanelTab, setRightPanelTab] = useState<'skill' | 'outputs' | 'snapshots' | 'review' | 'archive'>('outputs');
   const [snapshotDialogOpen, setSnapshotDialogOpen] = useState(false);
   const [selectedSnapshot, setSelectedSnapshot] = useState<WorkflowStepSnapshot | null>(null);
   const [archivedReviewStepIds, setArchivedReviewStepIds] = useState<string[]>([]);
@@ -339,10 +343,17 @@ export default function WorkflowsPage() {
 
   const getVisibleSteps = (workflow: Workflow) => workflow.steps.filter((step) => !step.isRemoved);
 
+  const normalizeContextSelection = (selection?: Partial<WorkflowContextSelection>): WorkflowContextSelection => ({
+    knowledgeBaseIds: Array.isArray(selection?.knowledgeBaseIds) ? selection.knowledgeBaseIds : [],
+    reviewMaterialIds: Array.isArray(selection?.reviewMaterialIds) ? selection.reviewMaterialIds : [],
+    disabledAutoInjectedStepIds: Array.isArray(selection?.disabledAutoInjectedStepIds)
+      ? selection.disabledAutoInjectedStepIds
+      : [],
+    updated_at: selection?.updated_at,
+  });
+
   const getContextSelection = (workflow: Workflow, stepId?: string): WorkflowContextSelection => (
-    stepId && workflow.contextSelections?.[stepId]
-      ? workflow.contextSelections[stepId]
-      : defaultContextSelection
+    normalizeContextSelection(stepId ? workflow.contextSelections?.[stepId] : defaultContextSelection)
   );
 
   const getStepChatMessages = (workflow: Workflow, stepId?: string): ChatMessage[] => (
@@ -372,6 +383,11 @@ export default function WorkflowsPage() {
     setActiveStepIndex(nextIndex);
     syncWorkflowSupportingState(workflow, nextIndex);
     setChatMessages(getStepChatMessages(workflow, nextStep?.id));
+    setRightPanelTab(
+      nextStep?.output || (nextStep && visibleSteps.some((step) => step.step_index < nextStep.step_index && step.output))
+        ? 'outputs'
+        : 'skill',
+    );
   };
 
   const persistWorkflow = useCallback(async (workflow: Workflow) => {
@@ -621,9 +637,42 @@ export default function WorkflowsPage() {
     return file.note ? `${metadata}\n${file.note}` : metadata;
   };
 
+  const extractMarkdownFence = (content: string) => {
+    const fenced = content.match(/```(?:markdown|md)\s*\n([\s\S]*?)```/i);
+    return fenced?.[1]?.trim();
+  };
+
+  const normalizeSkillOutputDocument = (
+    workflow: Workflow,
+    step: WorkflowStep,
+    assistantContent: string,
+  ) => {
+    const raw = (extractMarkdownFence(assistantContent) || assistantContent).trim();
+    const markerMatch = raw.match(
+      /(?:^|\n)#{1,3}\s*(?:Skill\s*输出文档|输出文档|最终产出|产出物|Deliverable|Output)\s*\n/i,
+    );
+    const body = markerMatch?.index !== undefined && markerMatch.index >= 0
+      ? raw.slice(markerMatch.index).trim()
+      : raw;
+
+    if (/^#\s+\S/.test(body)) {
+      return body;
+    }
+
+    return [
+      `# ${step.name} - Skill 输出文档`,
+      '',
+      `> 工作流：${workflow.name}`,
+      '',
+      body || '本步骤暂无可保存产物内容。',
+    ].join('\n');
+  };
+
   const downloadStepOutput = (stepName: string, output: string) => {
     const fileName = `${activeWorkflow?.name || '工作流'}-${stepName}.md`.replace(/[\\/:*?"<>|]/g, '-');
-    const content = `# ${stepName}\n\n${output}`;
+    const content = /^#\s+\S/.test(output.trim())
+      ? output
+      : `# ${stepName}\n\n${output}`;
     const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -635,9 +684,13 @@ export default function WorkflowsPage() {
 
   const getSavedStepOutputFileId = (stepId: string) => `saved-step-output-${stepId}`;
 
-  const buildStepOutputMarkdown = (workflow: Workflow, step: WorkflowStep) => (
-    `# ${workflow.name}\n\n## ${step.name}\n\n${step.output || ''}`
-  );
+  const buildStepOutputMarkdown = (workflow: Workflow, step: WorkflowStep) => {
+    const output = (step.output || '').trim();
+    if (!output) return `# ${step.name} - Skill 输出文档\n\n> 工作流：${workflow.name}\n\n暂无产物。`;
+    return /^#\s+\S/.test(output)
+      ? output
+      : `# ${workflow.name}\n\n## ${step.name}\n\n${output}`;
+  };
 
   const buildSavedStepOutputFile = (
     workflow: Workflow,
@@ -707,6 +760,12 @@ export default function WorkflowsPage() {
       ? selectedReviewMaterialIds
       : selection.reviewMaterialIds;
     const selectedReviewIds = new Set(reviewMaterialIds);
+    const disabledAutoIds = new Set(selection.disabledAutoInjectedStepIds || []);
+    const autoInjectedStepIds = new Set(
+      workflow.steps
+        .filter((item) => !item.isRemoved && item.step_index < step.step_index && item.output && !disabledAutoIds.has(item.id))
+        .map((item) => item.id),
+    );
 
     const selectedKnowledgeBases = knowledgeBases
       .filter((kb) => knowledgeBaseIds.includes(kb.id))
@@ -714,9 +773,18 @@ export default function WorkflowsPage() {
     const stepContextFiles = (workflow.contextFiles || [])
       .filter((file) => file.stepId === step.id)
       .map((file) => summarizeWorkflowFile(file, 800));
+    const autoInjectedStepMaterials = workflow.steps
+      .filter((item) => !item.isRemoved && item.step_index < step.step_index && item.output && !disabledAutoIds.has(item.id))
+      .map((item) => {
+        const markdown = buildStepOutputMarkdown(workflow, item);
+        return `默认注入：${item.name} Markdown 产物\n${markdown.slice(0, 1200)}${markdown.length > 1200 ? '\n...（已截断）' : ''}`;
+      });
     const selectedStepMaterials = workflow.steps
-      .filter((item) => !item.isRemoved && selectedReviewIds.has(item.id) && item.output)
-      .map((item) => `${item.name}产物\n${item.output?.slice(0, 1200)}${(item.output?.length || 0) > 1200 ? '\n...（已截断）' : ''}`);
+      .filter((item) => !item.isRemoved && selectedReviewIds.has(item.id) && !autoInjectedStepIds.has(item.id) && item.output)
+      .map((item) => {
+        const markdown = buildStepOutputMarkdown(workflow, item);
+        return `${item.name}产物\n${markdown.slice(0, 1200)}${markdown.length > 1200 ? '\n...（已截断）' : ''}`;
+      });
     const selectedUploadedMaterials = (workflow.reviewedOutputFiles || [])
       .filter((file) => selectedReviewIds.has(file.id))
       .map((file) => summarizeWorkflowFile(file, 800));
@@ -733,7 +801,7 @@ export default function WorkflowsPage() {
       stepIndex: step.step_index,
       output,
       contextFiles: [...selectedKnowledgeBases, ...stepContextFiles],
-      reviewedMaterials: [...selectedStepMaterials, ...selectedUploadedMaterials, ...currentStepReviewedFiles],
+      reviewedMaterials: [...autoInjectedStepMaterials, ...selectedStepMaterials, ...selectedUploadedMaterials, ...currentStepReviewedFiles],
       reviewComment: reviewComment || undefined,
       created_at: createdAt,
     };
@@ -749,12 +817,27 @@ export default function WorkflowsPage() {
     const userMessage = chatInput.trim();
     const currentStepContextFiles = uploadedContextFiles.filter((file) => file.stepId === currentStep.id);
     const selectedKnowledgeBases = knowledgeBases.filter((kb) => selectedKnowledgeBaseIds.includes(kb.id));
+    const contextSelection = getContextSelection(workflow, currentStep.id);
+    const disabledAutoInjectedStepIds = new Set(contextSelection.disabledAutoInjectedStepIds || []);
+    const autoInjectedStepOutputs = workflow.steps
+      .filter((step) => !step.isRemoved && step.step_index < currentStep.step_index && step.output && !disabledAutoInjectedStepIds.has(step.id))
+      .map((step) => ({
+        id: step.id,
+        name: step.name,
+        output: buildStepOutputMarkdown(workflow, step),
+      }));
+    const autoInjectedStepOutputIds = new Set(autoInjectedStepOutputs.map((step) => step.id));
     const selectedReviewMaterials = workflow.steps
-      .filter((step) => !step.isRemoved && selectedReviewMaterialIds.includes(step.id) && step.output)
+      .filter((step) => (
+        !step.isRemoved
+        && selectedReviewMaterialIds.includes(step.id)
+        && !autoInjectedStepOutputIds.has(step.id)
+        && step.output
+      ))
       .map((step) => ({
         name: step.name,
         source: '工作流已评审产物',
-        summary: step.output?.slice(0, 400) || '',
+        summary: buildStepOutputMarkdown(workflow, step).slice(0, 1200),
       }));
     const selectedUploadedReviewMaterials = reviewedOutputFiles
       .filter((file) => selectedReviewMaterialIds.includes(file.id))
@@ -764,6 +847,9 @@ export default function WorkflowsPage() {
         summary: summarizeWorkflowFile(file, 1200),
       }));
     const contextSummary = [
+      autoInjectedStepOutputs.length > 0
+        ? `默认注入的前序步骤 Markdown 产物：${autoInjectedStepOutputs.map((step) => step.name).join('、')}。`
+        : '',
       selectedKnowledgeBases.length > 0
         ? `选中的知识库：${selectedKnowledgeBases.map((kb) => `${kb.name}（${kb.description || '无描述'}）`).join('；')}。发送时将按本轮问题检索相关片段。`
         : '',
@@ -789,10 +875,6 @@ export default function WorkflowsPage() {
     setIsStreaming(true);
 
     try {
-      const stepContext = workflow.steps
-        .filter((s) => !s.isRemoved && s.step_index < currentStep.step_index && s.output)
-        .map((s) => ({ step_name: s.name, step_output: s.output }));
-
       const skillDef = skills.find((s) => s.id === currentStep?.skill_id);
 
       const response = await fetch('/api/chat', {
@@ -815,7 +897,10 @@ export default function WorkflowsPage() {
             prompt_template: skillDef.prompt_template,
             skill_md: skillDef.skill_md,
           } : undefined,
-          step_context: stepContext,
+          step_context: autoInjectedStepOutputs.map((step) => ({
+            step_name: step.name,
+            step_output: step.output,
+          })),
           selected_knowledge_bases: selectedKnowledgeBases,
           knowledge_query: userMessage,
           selected_review_materials: [...selectedReviewMaterials, ...selectedUploadedReviewMaterials],
@@ -956,13 +1041,14 @@ export default function WorkflowsPage() {
     const currentStep = getVisibleSteps(activeWorkflow)[activeStepIndex];
     if (!currentStep) return;
 
+    const stepOutputDocument = normalizeSkillOutputDocument(activeWorkflow, currentStep, lastAssistantMsg.content);
     const { workflow: nextWorkflow, nextActiveStepIndex } = completeWorkflowStep(
       activeWorkflow,
       currentStep.id,
-      lastAssistantMsg.content,
+      stepOutputDocument,
     );
     const snapshotCreatedAt = new Date().toISOString();
-    const stepSnapshot = buildStepSnapshot(activeWorkflow, currentStep, lastAssistantMsg.content, snapshotCreatedAt);
+    const stepSnapshot = buildStepSnapshot(activeWorkflow, currentStep, stepOutputDocument, snapshotCreatedAt);
     const workflowWithSnapshot = {
       ...nextWorkflow,
       stepChats: {
@@ -975,6 +1061,7 @@ export default function WorkflowsPage() {
 
     setWorkflows((prev) => prev.map((workflow) => (workflow.id === workflowWithSnapshot.id ? workflowWithSnapshot : workflow)));
     setActiveWorkflow(workflowWithSnapshot);
+    setRightPanelTab('outputs');
     switchActiveStep(workflowWithSnapshot, nextActiveStepIndex);
     await persistWorkflow(workflowWithSnapshot);
   };
@@ -1800,6 +1887,13 @@ export default function WorkflowsPage() {
   const previousSteps = currentStep
     ? visibleWorkflowSteps.filter((step) => step.step_index < currentStep.step_index && step.output)
     : [];
+  const currentContextSelection = currentStep
+    ? getContextSelection(activeWorkflow, currentStep.id)
+    : defaultContextSelection;
+  const disabledAutoInjectedStepIds = currentContextSelection.disabledAutoInjectedStepIds || [];
+  const autoInjectedPreviousSteps = previousSteps.filter((step) => !disabledAutoInjectedStepIds.includes(step.id));
+  const autoInjectedPreviousStepIds = new Set(autoInjectedPreviousSteps.map((step) => step.id));
+  const disabledAutoInjectedPreviousSteps = previousSteps.filter((step) => disabledAutoInjectedStepIds.includes(step.id));
   const reviewMaterials: ReviewMaterial[] = activeWorkflow.steps
     .filter((step) => !step.isRemoved && step.status === 'completed' && step.output)
     .map((step) => ({
@@ -1831,8 +1925,18 @@ export default function WorkflowsPage() {
   const unavailableKnowledgeBaseCount = selectedKnowledgeBaseIds.filter((id) => (
     !knowledgeBases.some((kb) => kb.id === id)
   )).length;
-  const selectedReviewMaterialOptions = reviewMaterials.filter((material) => selectedReviewMaterialIds.includes(material.id));
-  const selectedContextCount = selectedKnowledgeBaseOptions.length + selectedReviewMaterialOptions.length + currentContextFiles.length;
+  const selectedReviewMaterialOptions = reviewMaterials.filter((material) => (
+    selectedReviewMaterialIds.includes(material.id) && !autoInjectedPreviousStepIds.has(material.id)
+  ));
+  const additionalReviewMaterials = reviewMaterials.filter((material) => (
+    !previousSteps.some((step) => step.id === material.id)
+  ));
+  const selectedContextCount = (
+    autoInjectedPreviousSteps.length
+    + selectedKnowledgeBaseOptions.length
+    + selectedReviewMaterialOptions.length
+    + currentContextFiles.length
+  );
   const currentStepSnapshots = currentStep
     ? (activeWorkflow.stepSnapshots || [])
       .filter((snapshot) => snapshot.stepId === currentStep.id)
@@ -1882,6 +1986,18 @@ export default function WorkflowsPage() {
         },
         updated_at: updatedAt,
       };
+    });
+  };
+  const setAutoInjectedStepEnabled = (stepId: string, enabled: boolean) => {
+    if (!currentStep) return;
+    const disabledIds = new Set(disabledAutoInjectedStepIds);
+    if (enabled) {
+      disabledIds.delete(stepId);
+    } else {
+      disabledIds.add(stepId);
+    }
+    updateCurrentContextSelection({
+      disabledAutoInjectedStepIds: Array.from(disabledIds),
     });
   };
   const removeContextFile = (fileId: string) => {
@@ -1964,7 +2080,7 @@ export default function WorkflowsPage() {
       return groups;
     }, {})
   );
-  const renderStepOutputPreview = (step: WorkflowStep) => (
+  const renderStepOutputPreview = (step: WorkflowStep, options: { expanded?: boolean } = {}) => (
     <Card key={step.id} className={`${appCardClassName} mb-2`}>
       <CardContent className="p-3">
         <div className="mb-1 flex min-w-0 items-center justify-between gap-2">
@@ -1981,9 +2097,16 @@ export default function WorkflowsPage() {
             </Button>
           )}
         </div>
-        <p className="mt-1 line-clamp-4 break-words text-xs text-muted-foreground">
-          {compactMarkdownPreview(step.output || '')}
-        </p>
+        {step.output ? (
+          <div className={`mt-3 min-w-0 overflow-hidden ${options.expanded ? '' : 'max-h-56'}`}>
+            <CompactMarkdown
+              content={buildStepOutputMarkdown(activeWorkflow, step)}
+              className="text-xs leading-6 [&_p]:text-xs [&_li]:text-xs [&_table]:text-[11px]"
+            />
+          </div>
+        ) : (
+          <p className="mt-1 break-words text-xs text-muted-foreground">暂无产物。</p>
+        )}
       </CardContent>
     </Card>
   );
@@ -2117,13 +2240,28 @@ export default function WorkflowsPage() {
           <div className="border-b border-border/30 bg-muted/30 px-4 py-2">
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               <BookOpen className="h-3.5 w-3.5" />
-              <span>前序步骤产出已作为上下文输入:</span>
-              {previousSteps.map((s, i) => (
-                <Badge key={s.id} variant="outline" className="text-xs">
+              <span>默认注入前序 Markdown 产物:</span>
+              {autoInjectedPreviousSteps.length > 0 ? autoInjectedPreviousSteps.map((s) => (
+                <Badge key={s.id} variant="outline" className="gap-1.5 text-xs">
+                  <FileText className="h-3 w-3" />
                   {s.name}
-                  {i < previousSteps.length - 1 && ' →'}
+                  <button
+                    type="button"
+                    className="ml-1 text-muted-foreground hover:text-foreground"
+                    onClick={() => setAutoInjectedStepEnabled(s.id, false)}
+                    aria-label={`取消注入 ${s.name}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
                 </Badge>
-              ))}
+              )) : (
+                <Badge variant="secondary" className="text-xs">已全部取消</Badge>
+              )}
+              {disabledAutoInjectedPreviousSteps.length > 0 && (
+                <Badge variant="outline" className="text-xs text-muted-foreground">
+                  已取消 {disabledAutoInjectedPreviousSteps.length} 个
+                </Badge>
+              )}
             </div>
           </div>
         )}
@@ -2263,7 +2401,7 @@ export default function WorkflowsPage() {
                 <div className="min-w-0">
                   <p className="text-sm font-medium">补充上下文</p>
                   <p className="truncate text-xs text-muted-foreground">
-                    已选 {selectedContextCount} 个来源 · 知识库 {selectedKnowledgeBaseOptions.length} · 产物 {selectedReviewMaterialOptions.length} · 文件 {currentContextFiles.length}
+                    本轮注入 {selectedContextCount} 个来源 · 自动产物 {autoInjectedPreviousSteps.length} · 知识库 {selectedKnowledgeBaseOptions.length} · 手动材料 {selectedReviewMaterialOptions.length} · 文件 {currentContextFiles.length}
                   </p>
                 </div>
               </div>
@@ -2322,6 +2460,20 @@ export default function WorkflowsPage() {
                     {selectedContextCount === 0 && unavailableKnowledgeBaseCount === 0 ? (
                       <span className="text-xs text-muted-foreground">未选择补充上下文。</span>
                     ) : null}
+                    {autoInjectedPreviousSteps.map((step) => (
+                      <Badge key={`auto-step-${step.id}`} variant="secondary" className="gap-1.5 bg-primary/10 text-primary">
+                        <FileText className="h-3 w-3" />
+                        {step.name}
+                        <button
+                          type="button"
+                          className="ml-1 text-primary/70 hover:text-primary"
+                          onClick={() => setAutoInjectedStepEnabled(step.id, false)}
+                          aria-label={`取消自动注入 ${step.name}`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ))}
                     {selectedKnowledgeBaseOptions.map((kb) => (
                       <Badge key={`selected-kb-${kb.id}`} variant="secondary" className="gap-1.5">
                         <Database className="h-3 w-3" />
@@ -2456,48 +2608,108 @@ export default function WorkflowsPage() {
                   </TabsContent>
 
                   <TabsContent value="materials" className="mt-3">
-                    {reviewMaterials.length > 0 ? (
-                      <div className="flex flex-col gap-2">
-                        {reviewMaterials.map((material) => {
-                          const selected = selectedReviewMaterialIds.includes(material.id);
-                          return (
-                            <div
-                              key={material.id}
-                              className={`flex items-start justify-between gap-3 rounded-lg border p-3 ${
-                                selected ? 'border-primary/50 bg-primary/10' : 'border-border/50 bg-background/60'
-                              }`}
-                            >
-                              <div className="min-w-0">
-                                <p className="truncate text-xs font-medium">{material.name}</p>
-                                <p className="mt-1 text-[11px] text-muted-foreground">{material.source}</p>
-                                <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{material.summary}</p>
-                              </div>
-                              <Button
-                                type="button"
-                                variant={selected ? 'default' : 'outline'}
-                                size="sm"
-                                className="h-8 shrink-0 text-xs"
-                                onClick={() => {
-                                  const nextIds = selected
-                                    ? selectedReviewMaterialIds.filter((id) => id !== material.id)
-                                    : [...selectedReviewMaterialIds, material.id];
-                                  updateCurrentContextSelection(
-                                    { reviewMaterialIds: nextIds },
-                                    () => setSelectedReviewMaterialIds(nextIds),
-                                  );
-                                }}
-                              >
-                                {selected ? '已选' : '选择'}
-                              </Button>
-                            </div>
-                          );
-                        })}
+                    <div className="flex flex-col gap-3">
+                      <div className="rounded-lg border border-border/50 bg-background/60 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <p className="text-xs font-medium">默认注入前序步骤产物</p>
+                            <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
+                              前序 Skill 输出的 Markdown 文档默认会进入当前步骤上下文，可按步骤关闭。
+                            </p>
+                          </div>
+                          <Badge variant="outline" className="shrink-0 text-[11px]">
+                            {autoInjectedPreviousSteps.length}/{previousSteps.length} 启用
+                          </Badge>
+                        </div>
+                        {previousSteps.length > 0 ? (
+                          <div className="mt-3 flex flex-col gap-2">
+                            {previousSteps.map((step) => {
+                              const enabled = !disabledAutoInjectedStepIds.includes(step.id);
+                              return (
+                                <div
+                                  key={step.id}
+                                  className={`flex items-start justify-between gap-3 rounded-lg border p-3 ${
+                                    enabled ? 'border-primary/50 bg-primary/10' : 'border-border/50 bg-muted/20'
+                                  }`}
+                                >
+                                  <div className="min-w-0">
+                                    <div className="flex min-w-0 items-center gap-2">
+                                      <FileText className="h-3.5 w-3.5 shrink-0 text-primary" />
+                                      <p className="truncate text-xs font-medium">{step.name}</p>
+                                    </div>
+                                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                                      {compactMarkdownPreview(step.output || '', 120)}
+                                    </p>
+                                  </div>
+                                  <Button
+                                    type="button"
+                                    variant={enabled ? 'default' : 'outline'}
+                                    size="sm"
+                                    className="h-8 shrink-0 text-xs"
+                                    onClick={() => setAutoInjectedStepEnabled(step.id, !enabled)}
+                                  >
+                                    {enabled ? '已注入' : '已取消'}
+                                  </Button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="mt-3 rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
+                            当前步骤暂无可自动注入的前序产物。
+                          </div>
+                        )}
                       </div>
-                    ) : (
-                      <div className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
-                        当前工作流暂无已完成产物。步骤完成并保存后，可在这里选择为后续步骤上下文。
+
+                      <div className="rounded-lg border border-border/50 bg-background/60 p-3">
+                        <p className="text-xs font-medium">额外审核材料</p>
+                        <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
+                          这里用于选择非默认链路的产物或本地审核材料。
+                        </p>
+                        {additionalReviewMaterials.length > 0 ? (
+                          <div className="mt-3 flex flex-col gap-2">
+                            {additionalReviewMaterials.map((material) => {
+                              const selected = selectedReviewMaterialIds.includes(material.id);
+                              return (
+                                <div
+                                  key={material.id}
+                                  className={`flex items-start justify-between gap-3 rounded-lg border p-3 ${
+                                    selected ? 'border-primary/50 bg-primary/10' : 'border-border/50 bg-background/60'
+                                  }`}
+                                >
+                                  <div className="min-w-0">
+                                    <p className="truncate text-xs font-medium">{material.name}</p>
+                                    <p className="mt-1 text-[11px] text-muted-foreground">{material.source}</p>
+                                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{material.summary}</p>
+                                  </div>
+                                  <Button
+                                    type="button"
+                                    variant={selected ? 'default' : 'outline'}
+                                    size="sm"
+                                    className="h-8 shrink-0 text-xs"
+                                    onClick={() => {
+                                      const nextIds = selected
+                                        ? selectedReviewMaterialIds.filter((id) => id !== material.id)
+                                        : [...selectedReviewMaterialIds, material.id];
+                                      updateCurrentContextSelection(
+                                        { reviewMaterialIds: nextIds },
+                                        () => setSelectedReviewMaterialIds(nextIds),
+                                      );
+                                    }}
+                                  >
+                                    {selected ? '已选' : '选择'}
+                                  </Button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="mt-3 rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
+                            暂无额外审核材料。步骤产物会默认通过上方链路注入下一步骤，无需手动保存。
+                          </div>
+                        )}
                       </div>
-                    )}
+                    </div>
                   </TabsContent>
 
                   <TabsContent value="files" className="mt-3">
@@ -2574,7 +2786,11 @@ export default function WorkflowsPage() {
 
       {/* Right: Context Panel */}
       <div className="flex max-h-[32rem] min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-border/40 lg:h-full lg:max-h-none lg:w-80 lg:border-l lg:border-t-0">
-        <Tabs defaultValue="skill" className="min-h-0 flex-1 gap-0">
+        <Tabs
+          value={rightPanelTab}
+          onValueChange={(value) => setRightPanelTab(value as typeof rightPanelTab)}
+          className="min-h-0 flex-1 gap-0"
+        >
           <div className="shrink-0 border-b border-border/40 p-4">
             <h3 className="text-sm font-semibold">上下文面板</h3>
             <p className="mt-1 truncate text-xs text-muted-foreground">
@@ -2624,7 +2840,7 @@ export default function WorkflowsPage() {
                     </Badge>
                   </div>
                   {currentStep?.output ? (
-                    renderStepOutputPreview(currentStep)
+                    renderStepOutputPreview(currentStep, { expanded: true })
                   ) : (
                     <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
                       当前步骤确认完成后，会在这里展示本步骤产出。
@@ -2638,7 +2854,7 @@ export default function WorkflowsPage() {
                     <Badge variant="outline" className="shrink-0 text-[11px]">{previousSteps.length} 个</Badge>
                   </div>
                   {previousSteps.length > 0 ? (
-                    previousSteps.map(renderStepOutputPreview)
+                    previousSteps.map((step) => renderStepOutputPreview(step))
                   ) : (
                     <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
                       当前步骤暂无前序产出。
@@ -2652,7 +2868,7 @@ export default function WorkflowsPage() {
                       <h4 className="min-w-0 truncate text-xs font-medium text-muted-foreground">并行任务产出</h4>
                       <Badge variant="outline" className="shrink-0 text-[11px]">{parallelPeerSteps.length} 个</Badge>
                     </div>
-                    {parallelPeerSteps.map(renderStepOutputPreview)}
+                    {parallelPeerSteps.map((step) => renderStepOutputPreview(step))}
                   </div>
                 )}
 
@@ -2683,7 +2899,7 @@ export default function WorkflowsPage() {
                         </Button>
                       </div>
                       <div className="flex flex-col gap-2">
-                        {finalWorkflowOutputSteps.map(renderStepOutputPreview)}
+                        {finalWorkflowOutputSteps.map((step) => renderStepOutputPreview(step))}
                       </div>
                     </div>
                   ) : (
