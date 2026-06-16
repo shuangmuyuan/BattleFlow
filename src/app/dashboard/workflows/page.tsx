@@ -2129,15 +2129,15 @@ export default function WorkflowsPage() {
         )}
 
         {/* Chat Messages */}
-        <ScrollArea className="min-h-0 flex-1 p-4">
+        <ScrollArea className="min-h-0 min-w-0 flex-1 p-4">
           {currentStep?.status === 'completed' && currentStep.output && chatMessages.length === 0 ? (
             /* Show completed step output */
-            <div className="space-y-4">
+            <div className="min-w-0 max-w-full space-y-4 overflow-hidden">
               <div className="flex items-center gap-2 mb-4">
                 <CheckCircle2 className="h-5 w-5 text-emerald-500" />
                 <h3 className="font-semibold">本步骤已完成</h3>
               </div>
-              <div className="min-w-0 rounded-lg border border-border/40 bg-muted/50 p-4">
+              <div className="min-w-0 max-w-full overflow-hidden rounded-lg border border-border/40 bg-muted/50 p-4">
                 <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
                   <h4 className="min-w-0 truncate text-sm font-medium text-primary">{currentStep.name} — 产出物</h4>
                   <div className="flex shrink-0 items-center gap-1">
@@ -2206,14 +2206,14 @@ export default function WorkflowsPage() {
               )}
             </div>
           ) : (
-            <div className="space-y-4">
+            <div className="min-w-0 max-w-full space-y-4 overflow-hidden">
               {chatMessages.map((msg, idx) => (
                 <div
                   key={idx}
-                  className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                  className={`flex min-w-0 max-w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
                   <div
-                    className={`min-w-0 max-w-[min(80%,42rem)] break-words rounded-lg p-3 text-sm ${
+                    className={`min-w-0 max-w-[min(100%,42rem)] overflow-hidden break-words rounded-lg p-3 text-sm md:max-w-[min(80%,42rem)] ${
                       msg.role === 'user'
                         ? 'bg-primary text-primary-foreground'
                         : 'bg-muted/50 border border-border/40'

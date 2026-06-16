@@ -171,7 +171,7 @@ function renderInline(text: string): ReactNode[] {
           href={link[2]}
           target="_blank"
           rel="noreferrer"
-          className="font-medium text-brand underline-offset-2 hover:underline"
+          className="break-words font-medium text-brand underline-offset-2 hover:underline"
         >
           {link[1]}
         </a>,
@@ -180,7 +180,7 @@ function renderInline(text: string): ReactNode[] {
       nodes.push(
         <code
           key={`${token}-${match.index}`}
-          className="rounded bg-muted px-1 py-0.5 font-mono text-[0.9em] text-foreground"
+          className="break-words rounded bg-muted px-1 py-0.5 font-mono text-[0.9em] text-foreground"
         >
           {token.slice(1, -1)}
         </code>,
@@ -226,13 +226,13 @@ export function CompactMarkdown({
   }
 
   return (
-    <div className={cn('space-y-3 text-sm leading-7 text-foreground', className)}>
+    <div className={cn('min-w-0 max-w-full space-y-3 overflow-hidden text-sm leading-7 text-foreground', className)}>
       {blocks.map((block, index) => {
         if (block.type === 'heading') {
           return (
             <div
               key={`heading-${index}`}
-              className="mt-4 first:mt-0 rounded-md bg-muted/45 px-3 py-2 text-sm font-semibold text-foreground"
+              className="mt-4 min-w-0 max-w-full break-words first:mt-0 rounded-md bg-muted/45 px-3 py-2 text-sm font-semibold text-foreground"
             >
               {renderInline(block.text)}
             </div>
@@ -253,12 +253,12 @@ export function CompactMarkdown({
             <ListTag
               key={`list-${index}`}
               className={cn(
-                'space-y-1 pl-5 text-sm text-foreground/90',
+                'min-w-0 max-w-full space-y-1 pl-5 text-sm text-foreground/90',
                 block.ordered ? 'list-decimal' : 'list-disc',
               )}
             >
               {block.items.map((item, itemIndex) => (
-                <li key={`${item}-${itemIndex}`} className="pl-1">
+                <li key={`${item}-${itemIndex}`} className="min-w-0 break-words pl-1">
                   {renderInline(item)}
                 </li>
               ))}
@@ -270,7 +270,7 @@ export function CompactMarkdown({
           return (
             <blockquote
               key={`quote-${index}`}
-              className="border-l-2 border-brand/60 bg-muted/30 px-3 py-2 text-sm text-muted-foreground"
+              className="min-w-0 max-w-full break-words border-l-2 border-brand/60 bg-muted/30 px-3 py-2 text-sm text-muted-foreground"
             >
               {renderMultiline(block.lines)}
             </blockquote>
@@ -281,7 +281,7 @@ export function CompactMarkdown({
           return (
             <pre
               key={`code-${index}`}
-              className="max-w-full overflow-x-auto rounded-lg border border-border/60 bg-muted/40 p-3 font-mono text-xs leading-6 text-foreground/85"
+              className="min-w-0 max-w-full overflow-x-auto whitespace-pre rounded-lg border border-border/60 bg-muted/40 p-3 font-mono text-xs leading-6 text-foreground/85"
             >
               {block.code}
             </pre>
@@ -291,12 +291,12 @@ export function CompactMarkdown({
         if (block.type === 'table') {
           const [header, ...rows] = block.rows;
           return (
-            <div key={`table-${index}`} className="overflow-x-auto rounded-lg border border-border/60">
-              <table className="w-full min-w-max border-collapse text-left text-xs">
+            <div key={`table-${index}`} className="min-w-0 max-w-full overflow-x-auto rounded-lg border border-border/60">
+              <table className="w-full min-w-full table-fixed border-collapse text-left text-xs">
                 <thead className="bg-muted/50 text-foreground">
                   <tr>
                     {header.map((cell, cellIndex) => (
-                      <th key={`${cell}-${cellIndex}`} className="border-b border-border/60 px-3 py-2 font-semibold">
+                      <th key={`${cell}-${cellIndex}`} className="break-words border-b border-border/60 px-3 py-2 font-semibold">
                         {renderInline(cell)}
                       </th>
                     ))}
@@ -306,7 +306,7 @@ export function CompactMarkdown({
                   {rows.map((row, rowIndex) => (
                     <tr key={`row-${rowIndex}`} className="border-t border-border/40">
                       {row.map((cell, cellIndex) => (
-                        <td key={`${cell}-${cellIndex}`} className="px-3 py-2 align-top text-foreground/85">
+                        <td key={`${cell}-${cellIndex}`} className="break-words px-3 py-2 align-top text-foreground/85">
                           {renderInline(cell)}
                         </td>
                       ))}
