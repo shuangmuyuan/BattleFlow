@@ -2216,7 +2216,7 @@ export default function WorkflowsPage() {
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-auto lg:flex-row lg:overflow-hidden">
       {/* Left: Pipeline Panel */}
-      <div className="flex max-h-80 min-h-0 w-full shrink-0 flex-col border-b border-border/40 lg:max-h-none lg:w-80 lg:border-b-0 lg:border-r">
+      <div className="flex max-h-80 min-h-0 w-full shrink-0 flex-col border-b border-border/40 lg:max-h-none lg:w-64 lg:border-b-0 lg:border-r xl:w-80">
         <div className="border-b border-border/40 p-4">
           <Button variant="ghost" size="sm" onClick={() => { setActiveWorkflow(null); setActiveStepIndex(-1); setChatMessages([]); }}>
             ← 返回列表
@@ -2900,11 +2900,11 @@ export default function WorkflowsPage() {
       </div>
 
       {/* Right: Context Panel */}
-      <div className="flex max-h-[32rem] min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-border/40 lg:h-full lg:max-h-none lg:w-80 lg:border-l lg:border-t-0">
+      <div className="flex max-h-[32rem] min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-border/40 lg:h-full lg:max-h-none lg:w-72 lg:border-l lg:border-t-0 xl:w-80">
         <Tabs
           value={rightPanelTab}
           onValueChange={(value) => setRightPanelTab(value as typeof rightPanelTab)}
-          className="min-h-0 flex-1 gap-0"
+          className="min-h-0 flex-1 gap-0 overflow-hidden"
         >
           <div className="shrink-0 border-b border-border/40 p-4">
             <h3 className="text-sm font-semibold">上下文面板</h3>
@@ -2920,32 +2920,29 @@ export default function WorkflowsPage() {
           </div>
 
           <TabsContent value="skill" className="min-h-0 flex-1 overflow-hidden">
-            <ScrollArea className="h-full">
-              <div className="flex min-w-0 flex-col gap-4 p-4">
-                {currentSkill ? (
-                  <Card className={appCardClassName}>
-                    <CardContent className="p-3">
-                      <p className="text-sm font-medium">{currentSkill.name}</p>
-                      <p className="mt-2 break-words text-xs leading-5 text-muted-foreground">{currentSkill.description}</p>
-                      <div className="mt-3 flex flex-wrap gap-1">
-                        {currentSkill.tools.map((tool) => (
-                          <Badge key={tool} variant="secondary" className="text-xs">{tool}</Badge>
-                        ))}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ) : (
-                  <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
-                    选择一个步骤后查看 Skill 信息。
-                  </p>
-                )}
-              </div>
-            </ScrollArea>
+            <div className="flex h-full min-w-0 flex-col gap-4 overflow-y-auto p-4">
+              {currentSkill ? (
+                <Card className={appCardClassName}>
+                  <CardContent className="p-3">
+                    <p className="text-sm font-medium">{currentSkill.name}</p>
+                    <p className="mt-2 break-words text-xs leading-5 text-muted-foreground">{currentSkill.description}</p>
+                    <div className="mt-3 flex flex-wrap gap-1">
+                      {currentSkill.tools.map((tool) => (
+                        <Badge key={tool} variant="secondary" className="text-xs">{tool}</Badge>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : (
+                <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
+                  选择一个步骤后查看 Skill 信息。
+                </p>
+              )}
+            </div>
           </TabsContent>
 
           <TabsContent value="outputs" className="min-h-0 flex-1 overflow-hidden">
-            <ScrollArea className="h-full">
-              <div className="flex min-w-0 flex-col gap-4 p-4">
+            <div className="flex h-full min-w-0 flex-col gap-4 overflow-y-auto p-4">
                 <div className="min-w-0">
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <h4 className="min-w-0 truncate text-xs font-medium text-muted-foreground">当前步骤产出</h4>
@@ -3022,13 +3019,11 @@ export default function WorkflowsPage() {
                     </p>
                   )}
                 </div>
-              </div>
-            </ScrollArea>
+            </div>
           </TabsContent>
 
           <TabsContent value="review" className="min-h-0 flex-1 overflow-hidden">
-            <ScrollArea className="h-full">
-              <div className="flex min-w-0 flex-col gap-3 p-4">
+            <div className="flex h-full min-w-0 flex-col gap-3 overflow-y-auto p-4">
                 {currentStep && (
                   <>
                     <div className="flex min-w-0 items-center justify-between gap-2">
@@ -3109,13 +3104,11 @@ export default function WorkflowsPage() {
                     </Card>
                   </>
                 )}
-              </div>
-            </ScrollArea>
+            </div>
           </TabsContent>
 
           <TabsContent value="archive" className="min-h-0 flex-1 overflow-hidden">
-            <ScrollArea className="h-full">
-              <div className="flex min-w-0 flex-col gap-3 p-4">
+            <div className="flex h-full min-w-0 flex-col gap-3 overflow-y-auto p-4">
                 <Card className={appCardClassName}>
                   <CardContent className="flex flex-col gap-3 p-3">
                     <div className="min-w-0">
@@ -3180,8 +3173,7 @@ export default function WorkflowsPage() {
                     </CardContent>
                   </Card>
                 )}
-              </div>
-            </ScrollArea>
+            </div>
           </TabsContent>
         </Tabs>
       </div>
