@@ -896,7 +896,7 @@ export default function WorkflowsPage() {
             role: m.role,
             content: m.content,
           })),
-          agent_provider: 'claude-cli',
+          agent_provider: 'claude-code-cli',
           model_id: 'doubao-seed-2-0-pro-260215',
           skill_definition: skillDef ? {
             name: skillDef.name,

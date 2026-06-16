@@ -1,6 +1,7 @@
-import { spawn } from 'node:child_process';
 import { NextRequest } from 'next/server';
 import { LLMClient, Config, HeaderUtils, KnowledgeClient } from 'coze-coding-dev-sdk';
+import { streamClaudeCodeCliTurn } from '@/lib/agent-adapters/claude-code-cli';
+import type { AgentEvent, AgentProvider } from '@/lib/agent-adapters/types';
 
 export const runtime = 'nodejs';
 
@@ -290,63 +291,17 @@ function buildSystemPrompt(body: Record<string, unknown>) {
   return systemPrompt;
 }
 
-function buildConversationPrompt(messages: ChatMessage[]) {
-  return messages
-    .filter((message) => message.role !== 'system')
-    .map((message) => `${message.role === 'assistant' ? 'Assistant' : 'User'}:\n${message.content}`)
-    .join('\n\n');
-}
-
-function streamClaudeCli(request: NextRequest, messages: ChatMessage[], systemPrompt: string) {
+function streamAgentEventsAsSse(agentStream: ReadableStream<AgentEvent>) {
   const encoder = new TextEncoder();
-  const model = process.env.CLAUDE_MODEL || 'sonnet';
-  const maxBudgetUsd = process.env.CLAUDE_MAX_BUDGET_USD || '1.00';
-  const cwd = process.env.CLAUDE_WORKSPACE_DIR || process.cwd();
-  const prompt = buildConversationPrompt(messages);
-
-  const args = [
-    '-p',
-    '--safe-mode',
-    '--no-session-persistence',
-    '--verbose',
-    '--output-format',
-    'stream-json',
-    '--include-partial-messages',
-    '--model',
-    model,
-    '--max-budget-usd',
-    maxBudgetUsd,
-    '--tools',
-    '',
-    '--permission-mode',
-    'dontAsk',
-    '--system-prompt',
-    systemPrompt,
-    prompt,
-  ];
-
-  let child: ReturnType<typeof spawn> | null = null;
-  let streamClosed = false;
 
   const readable = new ReadableStream({
-    start(controller) {
-      child = spawn('claude', args, {
-        cwd,
-        env: {
-          ...process.env,
-          CI: '1',
-        },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-
-      let stdoutBuffer = '';
-      let stderrBuffer = '';
-      let sawContentDelta = false;
-      let finalResult = '';
+    async start(controller) {
+      const reader = agentStream.getReader();
+      let closed = false;
 
       const closeWith = (payload: Record<string, unknown>) => {
-        if (streamClosed) return;
-        streamClosed = true;
+        if (closed) return;
+        closed = true;
         try {
           controller.enqueue(encoder.encode(sse(payload)));
         } catch {
@@ -359,75 +314,58 @@ function streamClaudeCli(request: NextRequest, messages: ChatMessage[], systemPr
         }
       };
 
-      const emitContent = (content: string) => {
-        if (!content || streamClosed) return;
-        sawContentDelta = true;
+      const emit = (payload: Record<string, unknown>) => {
+        if (closed) return;
         try {
-          controller.enqueue(encoder.encode(sse({ content })));
+          controller.enqueue(encoder.encode(sse(payload)));
         } catch {
-          streamClosed = true;
+          closed = true;
         }
       };
 
-      const handleLine = (line: string) => {
-        if (!line.trim()) return;
-        try {
-          const event = JSON.parse(line) as Record<string, unknown>;
-          if (event.type === 'stream_event') {
-            const streamEvent = event.event as Record<string, unknown> | undefined;
-            const delta = streamEvent?.delta as Record<string, unknown> | undefined;
-            if (streamEvent?.type === 'content_block_delta' && typeof delta?.text === 'string') {
-              emitContent(delta.text);
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!value) continue;
+          if (value.type === 'assistant_message') {
+            emit({ content: value.text });
+          } else if (value.type === 'session_status') {
+            emit({
+              event: 'session_status',
+              status: value.status,
+              session_id: value.sessionId,
+              done: value.status === 'done',
+            });
+            if (value.status === 'done') {
+              closeWith({ done: true });
+              return;
             }
+          } else if (value.type === 'usage') {
+            emit({
+              event: 'usage',
+              input_tokens: value.inputTokens,
+              output_tokens: value.outputTokens,
+              cost_usd: value.costUsd,
+              model: value.model,
+            });
+          } else if (value.type === 'terminal_output') {
+            emit({
+              event: 'terminal_output',
+              stream: value.stream,
+              text: value.text,
+            });
+          } else if (value.type === 'error') {
+            closeWith({ error: value.error });
+            return;
           }
-          if (event.type === 'result') {
-            if (typeof event.result === 'string') finalResult = event.result;
-            if (event.is_error) {
-              closeWith({ error: event.result || 'Claude CLI request failed' });
-            }
-          }
-        } catch {
-          stderrBuffer += `${line}\n`;
-        }
-      };
-
-      child.stdout?.on('data', (chunk: Buffer) => {
-        stdoutBuffer += chunk.toString('utf8');
-        const lines = stdoutBuffer.split(/\r?\n/);
-        stdoutBuffer = lines.pop() || '';
-        for (const line of lines) handleLine(line);
-      });
-
-      child.stderr?.on('data', (chunk: Buffer) => {
-        stderrBuffer += chunk.toString('utf8');
-        if (stderrBuffer.length > 4000) stderrBuffer = stderrBuffer.slice(-4000);
-      });
-
-      child.on('error', (error) => {
-        closeWith({ error: `Claude CLI unavailable: ${error.message}` });
-      });
-
-      child.on('close', (code) => {
-        if (stdoutBuffer.trim()) handleLine(stdoutBuffer);
-        if (streamClosed) return;
-        if (code && code !== 0) {
-          closeWith({ error: stderrBuffer.trim() || `Claude CLI exited with code ${code}` });
-          return;
-        }
-        if (!sawContentDelta && finalResult) {
-          emitContent(finalResult);
         }
         closeWith({ done: true });
-      });
-
-      request.signal.addEventListener('abort', () => {
-        streamClosed = true;
-        child?.kill('SIGTERM');
-      });
-    },
-    cancel() {
-      streamClosed = true;
-      child?.kill('SIGTERM');
+      } catch (error) {
+        closeWith({ error: error instanceof Error ? error.message : 'Agent stream interrupted' });
+      } finally {
+        reader.releaseLock();
+      }
     },
   });
 
@@ -439,6 +377,14 @@ function streamClaudeCli(request: NextRequest, messages: ChatMessage[], systemPr
       'Transfer-Encoding': 'chunked',
     },
   });
+}
+
+function streamClaudeCodeCli(request: NextRequest, messages: ChatMessage[], systemPrompt: string) {
+  return streamAgentEventsAsSse(streamClaudeCodeCliTurn({
+    messages,
+    systemPrompt,
+    signal: request.signal,
+  }));
 }
 
 function streamCozeSdk(request: NextRequest, messages: ChatMessage[], systemPrompt: string, modelId?: string) {
@@ -500,13 +446,13 @@ export async function POST(request: NextRequest) {
       ...body,
       knowledge_retrievals: knowledgeRetrievals,
     });
-    const provider = String(body.agent_provider || process.env.CHAT_AGENT_PROVIDER || 'claude-cli');
+    const provider = String(body.agent_provider || process.env.CHAT_AGENT_PROVIDER || 'claude-code-cli') as AgentProvider;
     if (provider === 'coze-sdk') {
       const modelId = typeof body.model_id === 'string' ? body.model_id : undefined;
       return streamCozeSdk(request, messages, systemPrompt, modelId);
     }
 
-    return streamClaudeCli(request, messages, systemPrompt);
+    return streamClaudeCodeCli(request, messages, systemPrompt);
   } catch (error) {
     console.error('Chat API error:', error);
     return new Response(JSON.stringify({ error: 'Chat failed' }), {
