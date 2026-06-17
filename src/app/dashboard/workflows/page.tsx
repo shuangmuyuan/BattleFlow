@@ -1515,13 +1515,13 @@ export default function WorkflowsPage() {
       return (
         <Card
           key={wf.id}
-          className={`flex min-h-56 min-w-0 flex-col overflow-hidden ${appCardClassName}`}
+          className={`flex min-h-48 min-w-0 flex-col gap-0 overflow-hidden py-0 ${appCardClassName}`}
         >
-          <CardHeader className="flex min-w-0 flex-col gap-3 pb-3">
+          <CardHeader className="flex min-w-0 flex-col gap-2 px-4 pb-2 pt-4">
             <div className="flex min-w-0 items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <CardTitle className="line-clamp-2 text-base leading-snug">{wf.name}</CardTitle>
-                <p className="mt-2 line-clamp-2 min-h-10 text-sm text-muted-foreground">
+                <p className="mt-1.5 line-clamp-2 min-h-8 text-sm text-muted-foreground">
                   {wf.description || '未填写工作流说明'}
                 </p>
               </div>
@@ -1571,7 +1571,7 @@ export default function WorkflowsPage() {
               </Button>
             </div>
           </CardHeader>
-          <CardContent className="mt-auto min-w-0 overflow-hidden">
+          <CardContent className="mt-auto min-w-0 overflow-hidden px-4 pb-4">
             <div className="flex max-w-full flex-nowrap items-center overflow-hidden">
               {progressItems.map((step, idx) => (
                 <div key={step.id} className="flex shrink-0 items-center">
@@ -1643,9 +1643,9 @@ export default function WorkflowsPage() {
         )}
 
         {!openedWorkspace ? (
-          <div className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
-            <div className="mx-auto flex w-full max-w-6xl flex-col gap-5">
-              <div className="flex justify-end border-b border-border/40 pb-4">
+          <div className="min-h-0 flex-1 overflow-auto px-4 py-3 md:px-5 md:py-4">
+            <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-3">
+              <div className="flex justify-end border-b border-border/40 pb-2">
                 <StatusBadge tone="neutral" className="w-fit text-xs">
                   共 {workspaces.length} 个目录
                 </StatusBadge>
@@ -1665,8 +1665,8 @@ export default function WorkflowsPage() {
                   )}
                 />
               ) : (
-                <div className="max-h-[45dvh] overflow-y-auto pr-1">
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                <div className="max-h-[calc(100dvh-260px)] min-h-0 overflow-y-auto pr-2">
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                     {workspaces.map((workspace) => {
                       const workspaceWorkflowList = workflows.filter((workflow) => workflow.workspaceId === workspace.id);
                       const count = workspaceWorkflowList.length;
@@ -1683,13 +1683,13 @@ export default function WorkflowsPage() {
                       return (
                         <Card
                           key={workspace.id}
-                          className={`min-w-0 overflow-hidden ${appCardClassName}`}
+                          className={`min-w-0 gap-0 overflow-hidden py-0 ${appCardClassName}`}
                         >
-                          <CardContent className="flex h-full flex-col gap-4 p-4">
+                          <CardContent className="flex h-full flex-col gap-3 p-3.5">
                             <div className="flex min-w-0 items-start justify-between gap-3">
                               <div className="min-w-0">
                                 <h3 className="truncate text-base font-semibold">{workspace.name}</h3>
-                                <p className="mt-1 line-clamp-2 min-h-10 text-sm text-muted-foreground">
+                                <p className="mt-1 line-clamp-2 min-h-8 text-sm text-muted-foreground">
                                   {workspace.description || '未填写目录说明'}
                                 </p>
                               </div>
@@ -1729,27 +1729,27 @@ export default function WorkflowsPage() {
                             </div>
 
                             <div className="grid grid-cols-3 overflow-hidden rounded-lg border border-border/50 bg-muted/20 text-center text-xs">
-                              <div className="min-w-0 border-r border-border/50 p-2">
+                              <div className="min-w-0 border-r border-border/50 px-2 py-1.5">
                                 <p className="font-semibold">{count}</p>
                                 <p className="mt-0.5 text-muted-foreground">全部</p>
                               </div>
-                              <div className="min-w-0 border-r border-border/50 p-2">
+                              <div className="min-w-0 border-r border-border/50 px-2 py-1.5">
                                 <p className="font-semibold text-primary">{inProgressCount}</p>
                                 <p className="mt-0.5 text-muted-foreground">进行中</p>
                               </div>
-                              <div className="min-w-0 p-2">
+                              <div className="min-w-0 px-2 py-1.5">
                                 <p className="font-semibold text-emerald-500">{completedCount}</p>
                                 <p className="mt-0.5 text-muted-foreground">已完成</p>
                               </div>
                             </div>
 
-                            <div className="mt-auto flex flex-col gap-3">
+                            <div className="mt-auto flex flex-col gap-2">
                               <p className="truncate text-xs text-muted-foreground">
                                 最近更新：{formatSnapshotTime(latestUpdatedAt)}
                               </p>
                               <div className="flex items-center gap-2">
                                 <Button
-                                  className="min-w-0 flex-1 gap-2"
+                                  className="h-9 min-w-0 flex-1 gap-2"
                                   onClick={() => openWorkspaceSpace(workspace.id)}
                                 >
                                   进入空间
@@ -1767,9 +1767,9 @@ export default function WorkflowsPage() {
             </div>
           </div>
         ) : (
-          <div className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
-            <div className="mx-auto flex w-full max-w-6xl flex-col gap-5">
-              <div className="flex flex-col gap-3 border-b border-border/40 pb-4 sm:flex-row sm:items-end sm:justify-between">
+          <div className="min-h-0 flex-1 overflow-auto px-4 py-3 md:px-5 md:py-4">
+            <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-3">
+              <div className="flex flex-col gap-2 border-b border-border/40 pb-2 sm:flex-row sm:items-end sm:justify-between">
                 <div className="min-w-0">
                   <p className="text-xs text-muted-foreground">工作目录 / {openedWorkspace.name}</p>
                   <h2 className="mt-1 text-base font-semibold">工作流空间</h2>
@@ -1782,29 +1782,29 @@ export default function WorkflowsPage() {
                 </StatusBadge>
               </div>
 
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-                <Card className={appCardClassName}>
-                  <CardContent className="p-4">
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <Card className={`gap-0 py-0 ${appCardClassName}`}>
+                  <CardContent className="p-3">
                     <p className="text-xs text-muted-foreground">全部工作流</p>
-                    <p className="mt-2 text-2xl font-semibold">{workspaceWorkflows.length}</p>
+                    <p className="mt-1 text-xl font-semibold">{workspaceWorkflows.length}</p>
                   </CardContent>
                 </Card>
-                <Card className={appCardClassName}>
-                  <CardContent className="p-4">
+                <Card className={`gap-0 py-0 ${appCardClassName}`}>
+                  <CardContent className="p-3">
                     <p className="text-xs text-muted-foreground">进行中</p>
-                    <p className="mt-2 text-2xl font-semibold text-primary">{inProgressWorkflowCount}</p>
+                    <p className="mt-1 text-xl font-semibold text-primary">{inProgressWorkflowCount}</p>
                   </CardContent>
                 </Card>
-                <Card className={appCardClassName}>
-                  <CardContent className="p-4">
+                <Card className={`gap-0 py-0 ${appCardClassName}`}>
+                  <CardContent className="p-3">
                     <p className="text-xs text-muted-foreground">已完成</p>
-                    <p className="mt-2 text-2xl font-semibold text-emerald-500">{completedWorkflowCount}</p>
+                    <p className="mt-1 text-xl font-semibold text-emerald-500">{completedWorkflowCount}</p>
                   </CardContent>
                 </Card>
-                <Card className={appCardClassName}>
-                  <CardContent className="p-4">
+                <Card className={`gap-0 py-0 ${appCardClassName}`}>
+                  <CardContent className="p-3">
                     <p className="text-xs text-muted-foreground">启用步骤</p>
-                    <p className="mt-2 text-2xl font-semibold">{totalEnabledStepCount}</p>
+                    <p className="mt-1 text-xl font-semibold">{totalEnabledStepCount}</p>
                   </CardContent>
                 </Card>
               </div>
@@ -1823,7 +1823,7 @@ export default function WorkflowsPage() {
                   )}
                 />
               ) : (
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                   {workspaceWorkflows.map((workflow) => renderWorkflowCard(workflow))}
                 </div>
               )}

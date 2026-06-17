@@ -37,7 +37,7 @@ const layoutContracts = [
     file: 'src/app/dashboard/workflows/page.tsx',
     requiredTokenSets: [
       ['flex', 'h-full', 'min-h-0', 'flex-col'],
-      ['max-h-[45dvh]', 'overflow-y-auto'],
+      ['max-h-[calc(100dvh-260px)]', 'overflow-y-auto'],
       ['min-h-0', 'flex-1', 'overflow-auto'],
       ['grid-cols-1', 'sm:grid-cols-2'],
     ],
