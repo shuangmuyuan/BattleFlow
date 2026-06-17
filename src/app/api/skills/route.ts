@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   archiveSkill,
   approveSkillReview,
+  createWorkflowSkillReview,
   getSkill,
   importSkillFromGit,
   importSkillFromPath,
@@ -159,6 +160,33 @@ export async function POST(request: NextRequest) {
       if (!id) return jsonError('id is required', 400);
       const note = String(body.note || '').trim();
       const skill = await requestSkillReview(id, note);
+      return jsonOk({ skill });
+    }
+
+    if (action === 'submit_workflow_draft') {
+      const draft = body.draft && typeof body.draft === 'object' ? body.draft : null;
+      if (!draft) return jsonError('draft is required', 400);
+      const skill = await createWorkflowSkillReview({
+        workflowId: String(draft.workflowId || '').trim(),
+        workflowName: String(draft.workflowName || '').trim(),
+        stepId: String(draft.stepId || '').trim(),
+        stepName: String(draft.stepName || '').trim(),
+        draftId: String(draft.id || draft.draftId || '').trim(),
+        baseSkillId: String(draft.baseSkillId || '').trim(),
+        baseSkillVersion: typeof draft.baseSkillVersion === 'string' ? draft.baseSkillVersion : undefined,
+        name: String(draft.name || '').trim(),
+        description: String(draft.description || '').trim(),
+        methodology: String(draft.methodology || ''),
+        tools: Array.isArray(draft.tools) ? draft.tools.filter((item: unknown): item is string => typeof item === 'string') : [],
+        outputs: draft.outputs && typeof draft.outputs === 'object' && !Array.isArray(draft.outputs) ? draft.outputs : {},
+        checklist: Array.isArray(draft.checklist) ? draft.checklist.filter((item: unknown): item is string => typeof item === 'string') : [],
+        tags: Array.isArray(draft.tags) ? draft.tags.filter((item: unknown): item is string => typeof item === 'string') : [],
+        prompt_template: typeof draft.prompt_template === 'string' ? draft.prompt_template : undefined,
+        skill_md: typeof draft.skill_md === 'string' ? draft.skill_md : undefined,
+        change_summary: typeof draft.change_summary === 'string' ? draft.change_summary : undefined,
+        validation_note: typeof draft.validation_note === 'string' ? draft.validation_note : undefined,
+        note: typeof body.note === 'string' ? body.note : undefined,
+      });
       return jsonOk({ skill });
     }
 

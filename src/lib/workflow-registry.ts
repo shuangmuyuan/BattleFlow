@@ -82,6 +82,29 @@ export interface WorkflowChatMessageRecord {
   content: string;
 }
 
+export interface WorkflowSkillDraftRecord {
+  id: string;
+  stepId: string;
+  baseSkillId: string;
+  baseSkillVersion?: string;
+  name: string;
+  description: string;
+  methodology: string;
+  tools: string[];
+  outputs: Record<string, unknown>;
+  checklist: string[];
+  tags: string[];
+  prompt_template?: string;
+  skill_md: string;
+  change_summary: string;
+  validation_note?: string;
+  enabled: boolean;
+  status: 'draft' | 'submitted';
+  submittedSkillId?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface WorkflowRecord {
   id: string;
   workspaceId: string;
@@ -96,6 +119,7 @@ export interface WorkflowRecord {
   contextSelections: Record<string, WorkflowContextSelectionRecord>;
   stepSnapshots: WorkflowStepSnapshotRecord[];
   stepChats: Record<string, WorkflowChatMessageRecord[]>;
+  skillDrafts: Record<string, WorkflowSkillDraftRecord>;
   created_at: string;
   updated_at: string;
 }
@@ -308,6 +332,47 @@ function normalizeStepChats(value: unknown): Record<string, WorkflowChatMessageR
   );
 }
 
+function normalizeUnknownRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function normalizeSkillDrafts(value: unknown): Record<string, WorkflowSkillDraftRecord> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const now = nowIso();
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, Partial<WorkflowSkillDraftRecord>>)
+      .filter(([, draft]) => Boolean(draft) && typeof draft === 'object' && !Array.isArray(draft))
+      .map(([stepId, draft]) => [
+        stepId,
+        {
+          id: draft.id || uniqueId('skill-draft', draft.name || stepId),
+          stepId: draft.stepId || stepId,
+          baseSkillId: draft.baseSkillId || '',
+          baseSkillVersion: typeof draft.baseSkillVersion === 'string' ? draft.baseSkillVersion : undefined,
+          name: draft.name || '未命名 Skill 草稿',
+          description: draft.description || '',
+          methodology: draft.methodology || '',
+          tools: normalizeStringArray(draft.tools),
+          outputs: normalizeUnknownRecord(draft.outputs),
+          checklist: normalizeStringArray(draft.checklist),
+          tags: normalizeStringArray(draft.tags),
+          prompt_template: typeof draft.prompt_template === 'string' ? draft.prompt_template : undefined,
+          skill_md: draft.skill_md || '',
+          change_summary: draft.change_summary || '工作流内调优草稿。',
+          validation_note: typeof draft.validation_note === 'string' ? draft.validation_note : undefined,
+          enabled: Boolean(draft.enabled),
+          status: draft.status === 'submitted' ? 'submitted' : 'draft',
+          submittedSkillId: typeof draft.submittedSkillId === 'string' ? draft.submittedSkillId : undefined,
+          created_at: draft.created_at || now,
+          updated_at: draft.updated_at || now,
+        },
+      ]),
+  );
+}
+
 function deriveWorkflowStatus(workflow: WorkflowRecord): WorkflowStatus {
   const activeSteps = workflow.steps.filter((step) => !step.isRemoved);
   if (activeSteps.length === 0) return 'draft';
@@ -345,6 +410,7 @@ function normalizeWorkflow(workflow: Partial<WorkflowRecord>): WorkflowRecord {
       ? workflow.stepSnapshots.map((snapshot, index) => normalizeStepSnapshot(snapshot, index, workflow.id || ''))
       : [],
     stepChats: normalizeStepChats(workflow.stepChats),
+    skillDrafts: normalizeSkillDrafts(workflow.skillDrafts),
     created_at: workflow.created_at || now,
     updated_at: now,
   };

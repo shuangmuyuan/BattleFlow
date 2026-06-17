@@ -70,6 +70,28 @@ interface ImportOptions {
   changelogNote?: string;
 }
 
+export interface WorkflowSkillReviewInput {
+  workflowId: string;
+  workflowName: string;
+  stepId: string;
+  stepName: string;
+  draftId: string;
+  baseSkillId: string;
+  baseSkillVersion?: string;
+  name: string;
+  description: string;
+  methodology: string;
+  tools?: string[];
+  outputs?: Record<string, unknown>;
+  checklist?: string[];
+  tags?: string[];
+  prompt_template?: string;
+  skill_md?: string;
+  change_summary?: string;
+  validation_note?: string;
+  note?: string;
+}
+
 const cwd = process.cwd();
 const registryRoot = process.env.SKILL_REGISTRY_DIR || path.join(cwd, 'data', 'skill-registry');
 const indexPath = path.join(registryRoot, 'index.json');
@@ -799,6 +821,83 @@ export async function requestSkillReview(id: string, submittedNote = '') {
   };
 
   return upsertSkill(reviewSkill, source.versions[0]?.package_path);
+}
+
+export async function createWorkflowSkillReview(input: WorkflowSkillReviewInput) {
+  const baseSkill = input.baseSkillId ? await getSkill(input.baseSkillId) : null;
+  const timestamp = nowIso();
+  const version = input.baseSkillVersion || baseSkill?.version || '1.0.0';
+  const skillId = buildReviewId(`${input.baseSkillId || slugify(input.name)}-workflow`);
+  const changeSummary = input.change_summary?.trim() || '工作流内对 Skill 进行调优，提交团队审核。';
+  const submittedNote = [
+    input.note?.trim(),
+    `来源工作流：${input.workflowName || input.workflowId}`,
+    `验证步骤：${input.stepName || input.stepId}`,
+    input.validation_note?.trim() ? `验证说明：${input.validation_note.trim()}` : '',
+    changeSummary ? `修改摘要：${changeSummary}` : '',
+  ].filter(Boolean).join('\n');
+  const definition = {
+    methodology: input.methodology || baseSkill?.methodology || '',
+    tools: input.tools || baseSkill?.tools || [],
+    outputs: input.outputs || baseSkill?.outputs || {},
+    checklist: input.checklist || baseSkill?.checklist || [],
+    prompt_template: input.prompt_template || baseSkill?.prompt_template || '',
+  };
+  const meta = {
+    id: skillId,
+    name: input.name || baseSkill?.name || '工作流 Skill 调优草稿',
+    description: input.description || baseSkill?.description || '',
+    version,
+    author: 'BattleFlow Workflow',
+    tags: Array.from(new Set(['workflow-tuning', ...(input.tags || baseSkill?.tags || [])])),
+    scope: 'team',
+    source_type: 'local',
+    source_uri: `workflow://${input.workflowId}/${input.stepId}/${input.draftId}`,
+    definition,
+  };
+  const skillMd = input.skill_md?.trim() || baseSkill?.skill_md || `# ${meta.name}\n\n${meta.description}`;
+
+  const reviewSkill: SkillRecord = {
+    id: skillId,
+    name: meta.name,
+    description: meta.description,
+    version,
+    author: meta.author,
+    tags: meta.tags,
+    source_type: 'local',
+    source_uri: meta.source_uri,
+    scope: 'team',
+    status: 'pending_review',
+    methodology: definition.methodology,
+    tools: definition.tools,
+    outputs: definition.outputs,
+    checklist: definition.checklist,
+    prompt_template: definition.prompt_template,
+    skill_md: skillMd,
+    meta_json: meta,
+    changelog: changeSummary,
+    attachments: [],
+    created_at: timestamp,
+    updated_at: timestamp,
+    versions: [
+      {
+        version,
+        updated_at: timestamp,
+        changelog: changeSummary,
+        skill_md: skillMd,
+        meta_json: meta,
+      },
+    ],
+    review: {
+      source_skill_id: input.baseSkillId,
+      source_version: version,
+      submitted_at: timestamp,
+      submitted_note: submittedNote || undefined,
+    },
+    is_active: true,
+  };
+
+  return upsertSkill(reviewSkill);
 }
 
 async function updateReviewDecision(id: string, decision: 'approved' | 'rejected', reviewNote = '') {

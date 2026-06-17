@@ -69,6 +69,7 @@ interface Skill {
   outputs: Record<string, unknown>;
   checklist: string[];
   tags: string[];
+  version?: string;
   prompt_template?: string;
   skill_md?: string;
   scope?: 'personal' | 'team' | 'official';
@@ -158,6 +159,29 @@ interface WorkflowContextSelection {
   updated_at?: string;
 }
 
+interface WorkflowSkillDraft {
+  id: string;
+  stepId: string;
+  baseSkillId: string;
+  baseSkillVersion?: string;
+  name: string;
+  description: string;
+  methodology: string;
+  tools: string[];
+  outputs: Record<string, unknown>;
+  checklist: string[];
+  tags: string[];
+  prompt_template?: string;
+  skill_md: string;
+  change_summary: string;
+  validation_note?: string;
+  enabled: boolean;
+  status: 'draft' | 'submitted';
+  submittedSkillId?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 interface Workflow {
   id: string;
   workspaceId: string;
@@ -172,6 +196,7 @@ interface Workflow {
   contextSelections?: Record<string, WorkflowContextSelection>;
   stepSnapshots?: WorkflowStepSnapshot[];
   stepChats?: Record<string, ChatMessage[]>;
+  skillDrafts?: Record<string, WorkflowSkillDraft>;
   created_at?: string;
   updated_at?: string;
 }
@@ -354,7 +379,10 @@ export default function WorkflowsPage() {
   const [reviewComments, setReviewComments] = useState<Record<string, string>>({});
   const [supplementalContextOpen, setSupplementalContextOpen] = useState(false);
   const [supplementalContextTab, setSupplementalContextTab] = useState<'knowledge' | 'materials' | 'files'>('knowledge');
-  const [rightPanelTab, setRightPanelTab] = useState<'skill' | 'outputs' | 'review' | 'archive'>('outputs');
+  const [rightPanelTab, setRightPanelTab] = useState<'skill' | 'tuning' | 'outputs' | 'review' | 'archive'>('outputs');
+  const [skillTuningInstruction, setSkillTuningInstruction] = useState('');
+  const [skillTuningMessage, setSkillTuningMessage] = useState('');
+  const [skillTuningSubmitting, setSkillTuningSubmitting] = useState(false);
   const [expandedOutputIds, setExpandedOutputIds] = useState<Record<string, boolean>>({});
   const [archivedReviewStepIds, setArchivedReviewStepIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -734,6 +762,124 @@ export default function WorkflowsPage() {
       : `# ${workflow.name}\n\n## ${step.name}\n\n${output}`;
   };
 
+  const getWorkflowSkillDraft = useCallback((workflow?: Workflow | null, stepId?: string) => (
+    stepId ? workflow?.skillDrafts?.[stepId] : undefined
+  ), []);
+
+  const getEffectiveSkillForStep = useCallback((workflow?: Workflow | null, step?: WorkflowStep): Skill | undefined => {
+    if (!workflow || !step) return undefined;
+    const baseSkill = skills.find((skill) => skill.id === step.skill_id);
+    const draft = getWorkflowSkillDraft(workflow, step.id);
+
+    if (!draft?.enabled) return baseSkill;
+
+    return {
+      ...(baseSkill || {
+        id: draft.baseSkillId,
+        tags: [],
+        scope: 'personal' as const,
+        status: 'imported' as const,
+      }),
+      id: `${draft.baseSkillId}__draft__${draft.id}`,
+      name: `${draft.name}（调优草稿）`,
+      description: draft.description,
+      methodology: draft.methodology,
+      tools: draft.tools,
+      outputs: draft.outputs,
+      checklist: draft.checklist,
+      tags: draft.tags,
+      prompt_template: draft.prompt_template,
+      skill_md: draft.skill_md,
+      scope: 'personal',
+      status: 'imported',
+    };
+  }, [getWorkflowSkillDraft, skills]);
+
+  const composeWorkflowSkillDraft = (
+    workflow: Workflow,
+    step: WorkflowStep,
+    baseSkill: Skill,
+    instruction: string,
+    existingDraft?: WorkflowSkillDraft,
+  ): WorkflowSkillDraft => {
+    const now = new Date().toISOString();
+    const tuningInstruction = instruction.trim() || '根据当前工作流验证反馈，优化输出结构、约束说明和验收标准。';
+    const recentChatSummary = chatMessages.length > 0
+      ? chatMessages.slice(-6).map((message) => (
+        `- ${message.role === 'user' ? '用户' : 'AI'}：${compactMarkdownPreview(message.content, 240)}`
+      )).join('\n')
+      : '暂无对话摘要。';
+    const outputSummary = step.output
+      ? compactMarkdownPreview(step.output, 600)
+      : '当前节点暂无已确认产物，草稿将基于对话和调优要求验证。';
+    const baseSkillMd = baseSkill.skill_md?.trim() || `# ${baseSkill.name}\n\n${baseSkill.description}`;
+    const changeSummary = [
+      `调优要求：${tuningInstruction}`,
+      '验证方式：在当前工作流节点启用草稿后继续对话，观察输出是否符合预期。',
+    ].join('\n');
+    const draftSection = [
+      '---',
+      '## BattleFlow 工作流调优草案',
+      '',
+      `- 工作流：${workflow.name}`,
+      `- 步骤：${step.name}`,
+      `- 基线 Skill：${baseSkill.name}${baseSkill.version ? ` v${baseSkill.version}` : ''}`,
+      `- 调优要求：${tuningInstruction}`,
+      '',
+      '### 当前验证上下文摘要',
+      '',
+      outputSummary,
+      '',
+      '### 最近对话摘要',
+      '',
+      recentChatSummary,
+      '',
+      '### 执行要求',
+      '',
+      '- 保留基线 Skill 的核心方法论，除非调优要求明确改变。',
+      '- 输出必须沉淀为可交付 Markdown 文档，而不是只给对话回复。',
+      '- 需要在回复中显式覆盖调优要求，并说明哪些假设仍待验证。',
+      '- 若输入不足，先列出缺口，再给出可推进的草案版本。',
+    ].join('\n');
+
+    return {
+      id: existingDraft?.id || `skill-draft-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+      stepId: step.id,
+      baseSkillId: step.skill_id,
+      baseSkillVersion: baseSkill.version,
+      name: baseSkill.name,
+      description: baseSkill.description,
+      methodology: [
+        baseSkill.methodology,
+        '',
+        '【工作流调优要求】',
+        tuningInstruction,
+      ].filter(Boolean).join('\n'),
+      tools: baseSkill.tools,
+      outputs: baseSkill.outputs,
+      checklist: Array.from(new Set([
+        ...baseSkill.checklist,
+        '输出已体现工作流调优要求',
+        '可作为 Markdown 产物被下一步骤默认注入',
+      ])),
+      tags: Array.from(new Set(['workflow-tuning', ...(baseSkill.tags || [])])),
+      prompt_template: [
+        baseSkill.prompt_template || '',
+        '',
+        '[BattleFlow 工作流调优要求]',
+        tuningInstruction,
+        '请基于当前工作流上下文验证此调优草稿，并输出可沉淀的 Markdown 文档。',
+      ].filter(Boolean).join('\n'),
+      skill_md: `${baseSkillMd}\n\n${draftSection}`,
+      change_summary: changeSummary,
+      validation_note: `已在工作流「${workflow.name}」的「${step.name}」节点生成调优草稿，可启用后直接对话验证。`,
+      enabled: true,
+      status: 'draft',
+      created_at: existingDraft?.created_at || now,
+      updated_at: now,
+    };
+  };
+
   const buildSavedStepOutputFile = (
     workflow: Workflow,
     step: WorkflowStep,
@@ -918,7 +1064,7 @@ export default function WorkflowsPage() {
     setIsStreaming(true);
 
     try {
-      const skillDef = skills.find((s) => s.id === currentStep?.skill_id);
+      const skillDef = getEffectiveSkillForStep(workflow, currentStep);
 
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -1015,7 +1161,7 @@ export default function WorkflowsPage() {
     activeStepIndex,
     saveStepChatMessages,
     persistWorkflow,
-    skills,
+    getEffectiveSkillForStep,
     knowledgeBases,
     selectedKnowledgeBaseIds,
     selectedReviewMaterialIds,
@@ -1295,6 +1441,7 @@ export default function WorkflowsPage() {
       })),
       stepSnapshots: [],
       stepChats: {},
+      skillDrafts: {},
     };
 
     setWorkflows((prev) => [clonedWorkflow, ...prev]);
@@ -2065,7 +2212,10 @@ export default function WorkflowsPage() {
   // Active workflow view - Pipeline + Chat
   const visibleWorkflowSteps = getVisibleSteps(activeWorkflow);
   const currentStep = visibleWorkflowSteps[activeStepIndex] || visibleWorkflowSteps[0];
-  const currentSkill = skills.find((s) => s.id === currentStep?.skill_id);
+  const baseCurrentSkill = skills.find((s) => s.id === currentStep?.skill_id);
+  const currentSkillDraft = getWorkflowSkillDraft(activeWorkflow, currentStep?.id);
+  const currentSkill = getEffectiveSkillForStep(activeWorkflow, currentStep);
+  const isCurrentSkillDraftEnabled = Boolean(currentSkillDraft?.enabled);
   const previousSteps = currentStep
     ? visibleWorkflowSteps.filter((step) => step.step_index < currentStep.step_index && step.output)
     : [];
@@ -2247,6 +2397,106 @@ export default function WorkflowsPage() {
         : [...(workflow.archivedReviewStepIds || []), stepId],
       updated_at: updatedAt,
     }));
+  };
+  const handleGenerateSkillDraft = () => {
+    if (!activeWorkflow || !currentStep || !baseCurrentSkill) return;
+
+    const draft = composeWorkflowSkillDraft(
+      activeWorkflow,
+      currentStep,
+      baseCurrentSkill,
+      skillTuningInstruction,
+      currentSkillDraft,
+    );
+    const updatedAt = new Date().toISOString();
+
+    setSkillTuningMessage('已生成并启用调优草稿，下一轮对话会使用草稿 Skill。');
+    updateActiveWorkflow((workflow) => ({
+      ...workflow,
+      skillDrafts: {
+        ...(workflow.skillDrafts || {}),
+        [currentStep.id]: draft,
+      },
+      updated_at: updatedAt,
+    }));
+  };
+  const setCurrentSkillDraftEnabled = (enabled: boolean) => {
+    if (!currentStep) return;
+    const updatedAt = new Date().toISOString();
+    updateActiveWorkflow((workflow) => {
+      const draft = workflow.skillDrafts?.[currentStep.id];
+      if (!draft) return workflow;
+      return {
+        ...workflow,
+        skillDrafts: {
+          ...(workflow.skillDrafts || {}),
+          [currentStep.id]: {
+            ...draft,
+            enabled,
+            updated_at: updatedAt,
+          },
+        },
+        updated_at: updatedAt,
+      };
+    });
+    setSkillTuningMessage(enabled ? '已启用草稿验证。' : '已停用草稿，当前节点将恢复使用基线 Skill。');
+  };
+  const handleSubmitSkillDraft = async () => {
+    if (!activeWorkflow || !currentStep) return;
+    const draft = getWorkflowSkillDraft(activeWorkflow, currentStep.id);
+    if (!draft || skillTuningSubmitting) return;
+
+    setSkillTuningSubmitting(true);
+    setSkillTuningMessage('');
+
+    try {
+      const response = await fetch('/api/skills', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'submit_workflow_draft',
+          draft: {
+            ...draft,
+            workflowId: activeWorkflow.id,
+            workflowName: activeWorkflow.name,
+            stepName: currentStep.name,
+          },
+          note: [
+            '由工作流节点内的对话调优提交。',
+            draft.validation_note || '',
+            draft.change_summary || '',
+          ].filter(Boolean).join('\n'),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '提交 Skill 修改请求失败');
+
+      const submittedSkillId = data.skill?.id as string | undefined;
+      const updatedAt = new Date().toISOString();
+      updateActiveWorkflow((workflow) => {
+        const currentDraft = workflow.skillDrafts?.[currentStep.id] || draft;
+        return {
+          ...workflow,
+          skillDrafts: {
+            ...(workflow.skillDrafts || {}),
+            [currentStep.id]: {
+              ...currentDraft,
+              status: 'submitted',
+              submittedSkillId,
+              enabled: true,
+              updated_at: updatedAt,
+            },
+          },
+          updated_at: updatedAt,
+        };
+      });
+      setSkillTuningMessage('已提交团队审核，可到 Skill 仓库查看待审核记录。');
+    } catch (error) {
+      console.error('Submit workflow skill draft error:', error);
+      setSkillTuningMessage(error instanceof Error ? error.message : '提交 Skill 修改请求失败');
+    } finally {
+      setSkillTuningSubmitting(false);
+    }
   };
   const saveCurrentStepOutput = () => {
     if (!activeWorkflow || !currentStep?.output) return;
@@ -3054,8 +3304,9 @@ export default function WorkflowsPage() {
             <p className="mt-1 truncate text-xs text-muted-foreground">
               {currentStep?.name || '未选择步骤'}
             </p>
-            <TabsList className="mt-3 grid h-8 w-full grid-cols-4">
+            <TabsList className="mt-3 grid h-8 w-full grid-cols-5">
               <TabsTrigger value="skill" className="text-xs">Skill</TabsTrigger>
+              <TabsTrigger value="tuning" className="text-xs">调优</TabsTrigger>
               <TabsTrigger value="outputs" className="text-xs">产出</TabsTrigger>
               <TabsTrigger value="review" className="text-xs">审核</TabsTrigger>
               <TabsTrigger value="archive" className="text-xs">沉淀</TabsTrigger>
@@ -3067,7 +3318,12 @@ export default function WorkflowsPage() {
               {currentSkill ? (
                 <Card className={appCardClassName}>
                   <CardContent className="p-3">
-                    <p className="text-sm font-medium">{currentSkill.name}</p>
+                    <div className="flex min-w-0 items-center justify-between gap-2">
+                      <p className="min-w-0 truncate text-sm font-medium">{currentSkill.name}</p>
+                      {isCurrentSkillDraftEnabled && (
+                        <Badge variant="secondary" className="shrink-0 text-[11px]">草稿验证</Badge>
+                      )}
+                    </div>
                     <p className="mt-2 break-words text-xs leading-5 text-muted-foreground">{currentSkill.description}</p>
                     <div className="mt-3 flex flex-wrap gap-1">
                       {currentSkill.tools.map((tool) => (
@@ -3079,6 +3335,116 @@ export default function WorkflowsPage() {
               ) : (
                 <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
                   选择一个步骤后查看 Skill 信息。
+                </p>
+              )}
+            </div>
+          </TabsContent>
+
+          <TabsContent value="tuning" className="min-h-0 flex-1 overflow-hidden">
+            <div className="flex h-full min-w-0 flex-col gap-3 overflow-y-auto p-4">
+              {baseCurrentSkill && currentStep ? (
+                <>
+                  <Card className={appCardClassName}>
+                    <CardContent className="flex flex-col gap-3 p-3">
+                      <div className="flex min-w-0 items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium">对话式 Skill 调优</p>
+                          <p className="mt-1 break-words text-[11px] leading-5 text-muted-foreground">
+                            基于当前节点的对话、产物和你的修改要求生成草稿。启用后，本节点下一轮对话会使用草稿 Skill。
+                          </p>
+                        </div>
+                        <Badge variant={isCurrentSkillDraftEnabled ? 'default' : 'outline'} className="shrink-0 text-[11px]">
+                          {isCurrentSkillDraftEnabled ? '验证中' : '未启用'}
+                        </Badge>
+                      </div>
+                      <textarea
+                        className="min-h-28 w-full rounded-md border border-border/60 bg-background/60 px-3 py-2 text-xs leading-5 outline-none placeholder:text-muted-foreground focus:border-brand/50"
+                        placeholder="写下你想怎么改这个 Skill，例如：输出先给结论和风险，再给详细拆解；减少寒暄；增加验收标准和输入缺口说明。"
+                        value={skillTuningInstruction}
+                        onChange={(event) => setSkillTuningInstruction(event.target.value)}
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 w-full gap-1.5 text-xs"
+                        onClick={handleGenerateSkillDraft}
+                      >
+                        <Sparkles className="h-3.5 w-3.5" />
+                        {currentSkillDraft ? '更新调优草稿' : '生成调优草稿'}
+                      </Button>
+                    </CardContent>
+                  </Card>
+
+                  {currentSkillDraft ? (
+                    <Card className={appCardClassName}>
+                      <CardContent className="flex flex-col gap-3 p-3">
+                        <div className="min-w-0">
+                          <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
+                            <p className="min-w-0 truncate text-xs font-medium">草稿摘要</p>
+                            <Badge variant={currentSkillDraft.status === 'submitted' ? 'secondary' : 'outline'} className="shrink-0 text-[11px]">
+                              {currentSkillDraft.status === 'submitted' ? '已提交' : '草稿'}
+                            </Badge>
+                          </div>
+                          <p className="whitespace-pre-wrap break-words rounded-md bg-muted/45 p-2 text-[11px] leading-5 text-muted-foreground">
+                            {currentSkillDraft.change_summary}
+                          </p>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-[11px]">
+                          <div className="rounded-md border border-border/60 bg-background/60 p-2">
+                            <p className="text-muted-foreground">基线 Skill</p>
+                            <p className="mt-1 truncate font-medium">{baseCurrentSkill.name}</p>
+                          </div>
+                          <div className="rounded-md border border-border/60 bg-background/60 p-2">
+                            <p className="text-muted-foreground">验证版本</p>
+                            <p className="mt-1 truncate font-medium">{currentSkillDraft.name}</p>
+                          </div>
+                        </div>
+                        <div className="flex flex-col gap-2">
+                          <Button
+                            variant={isCurrentSkillDraftEnabled ? 'secondary' : 'outline'}
+                            size="sm"
+                            className="h-8 w-full gap-1.5 text-xs"
+                            onClick={() => setCurrentSkillDraftEnabled(!isCurrentSkillDraftEnabled)}
+                          >
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                            {isCurrentSkillDraftEnabled ? '停用草稿验证' : '启用草稿验证'}
+                          </Button>
+                          <Button
+                            size="sm"
+                            className="h-8 w-full gap-1.5 text-xs"
+                            disabled={skillTuningSubmitting}
+                            onClick={() => void handleSubmitSkillDraft()}
+                          >
+                            {skillTuningSubmitting ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <ClipboardCheck className="h-3.5 w-3.5" />
+                            )}
+                            提交修改请求
+                          </Button>
+                        </div>
+                        {currentSkillDraft.submittedSkillId && (
+                          <p className="break-words rounded-md border border-border/60 bg-muted/30 p-2 text-[11px] text-muted-foreground">
+                            审核记录：{currentSkillDraft.submittedSkillId}
+                          </p>
+                        )}
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs leading-5 text-muted-foreground">
+                      还没有调优草稿。生成后可以先在当前节点验证，再提交给 Skill Owner 审核。
+                    </p>
+                  )}
+
+                  {skillTuningMessage && (
+                    <Alert className="border-border/60 bg-muted/30">
+                      <AlertDescription className="text-xs">{skillTuningMessage}</AlertDescription>
+                    </Alert>
+                  )}
+                </>
+              ) : (
+                <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
+                  选择一个工作流步骤后，可以基于该节点 Skill 生成调优草稿。
                 </p>
               )}
             </div>
