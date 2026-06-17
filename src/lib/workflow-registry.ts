@@ -97,7 +97,11 @@ export interface WorkflowSkillDraftRecord {
   prompt_template?: string;
   skill_md: string;
   change_summary: string;
+  change_items?: string[];
   validation_note?: string;
+  quality_gates?: string[];
+  source_context_summary?: string;
+  generator?: 'claude-code-cli';
   enabled: boolean;
   status: 'draft' | 'submitted';
   submittedSkillId?: string;
@@ -362,7 +366,11 @@ function normalizeSkillDrafts(value: unknown): Record<string, WorkflowSkillDraft
           prompt_template: typeof draft.prompt_template === 'string' ? draft.prompt_template : undefined,
           skill_md: draft.skill_md || '',
           change_summary: draft.change_summary || '工作流内调优草稿。',
+          change_items: normalizeStringArray(draft.change_items),
           validation_note: typeof draft.validation_note === 'string' ? draft.validation_note : undefined,
+          quality_gates: normalizeStringArray(draft.quality_gates),
+          source_context_summary: typeof draft.source_context_summary === 'string' ? draft.source_context_summary : undefined,
+          generator: draft.generator === 'claude-code-cli' ? 'claude-code-cli' : undefined,
           enabled: Boolean(draft.enabled),
           status: draft.status === 'submitted' ? 'submitted' : 'draft',
           submittedSkillId: typeof draft.submittedSkillId === 'string' ? draft.submittedSkillId : undefined,

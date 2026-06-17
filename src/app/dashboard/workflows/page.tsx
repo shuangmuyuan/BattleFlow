@@ -9,6 +9,8 @@ import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Textarea } from '@/components/ui/textarea';
+import { Switch } from '@/components/ui/switch';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -58,6 +60,8 @@ import {
   ChevronDown,
   FileText,
   MoreHorizontal,
+  GitCompareArrows,
+  ShieldCheck,
 } from 'lucide-react';
 
 interface Skill {
@@ -174,7 +178,11 @@ interface WorkflowSkillDraft {
   prompt_template?: string;
   skill_md: string;
   change_summary: string;
+  change_items?: string[];
   validation_note?: string;
+  quality_gates?: string[];
+  source_context_summary?: string;
+  generator?: 'claude-code-cli';
   enabled: boolean;
   status: 'draft' | 'submitted';
   submittedSkillId?: string;
@@ -382,6 +390,7 @@ export default function WorkflowsPage() {
   const [rightPanelTab, setRightPanelTab] = useState<'skill' | 'tuning' | 'outputs' | 'review' | 'archive'>('outputs');
   const [skillTuningInstruction, setSkillTuningInstruction] = useState('');
   const [skillTuningMessage, setSkillTuningMessage] = useState('');
+  const [skillTuningGenerating, setSkillTuningGenerating] = useState(false);
   const [skillTuningSubmitting, setSkillTuningSubmitting] = useState(false);
   const [expandedOutputIds, setExpandedOutputIds] = useState<Record<string, boolean>>({});
   const [archivedReviewStepIds, setArchivedReviewStepIds] = useState<string[]>([]);
@@ -795,88 +804,20 @@ export default function WorkflowsPage() {
     };
   }, [getWorkflowSkillDraft, skills]);
 
-  const composeWorkflowSkillDraft = (
-    workflow: Workflow,
-    step: WorkflowStep,
-    baseSkill: Skill,
-    instruction: string,
-    existingDraft?: WorkflowSkillDraft,
-  ): WorkflowSkillDraft => {
-    const now = new Date().toISOString();
-    const tuningInstruction = instruction.trim() || '根据当前工作流验证反馈，优化输出结构、约束说明和验收标准。';
-    const recentChatSummary = chatMessages.length > 0
-      ? chatMessages.slice(-6).map((message) => (
-        `- ${message.role === 'user' ? '用户' : 'AI'}：${compactMarkdownPreview(message.content, 240)}`
-      )).join('\n')
-      : '暂无对话摘要。';
-    const outputSummary = step.output
-      ? compactMarkdownPreview(step.output, 600)
-      : '当前节点暂无已确认产物，草稿将基于对话和调优要求验证。';
-    const baseSkillMd = baseSkill.skill_md?.trim() || `# ${baseSkill.name}\n\n${baseSkill.description}`;
-    const changeSummary = [
-      `调优要求：${tuningInstruction}`,
-      '验证方式：在当前工作流节点启用草稿后继续对话，观察输出是否符合预期。',
-    ].join('\n');
-    const draftSection = [
-      '---',
-      '## BattleFlow 工作流调优草案',
-      '',
-      `- 工作流：${workflow.name}`,
-      `- 步骤：${step.name}`,
-      `- 基线 Skill：${baseSkill.name}${baseSkill.version ? ` v${baseSkill.version}` : ''}`,
-      `- 调优要求：${tuningInstruction}`,
-      '',
-      '### 当前验证上下文摘要',
-      '',
-      outputSummary,
-      '',
-      '### 最近对话摘要',
-      '',
-      recentChatSummary,
-      '',
-      '### 执行要求',
-      '',
-      '- 保留基线 Skill 的核心方法论，除非调优要求明确改变。',
-      '- 输出必须沉淀为可交付 Markdown 文档，而不是只给对话回复。',
-      '- 需要在回复中显式覆盖调优要求，并说明哪些假设仍待验证。',
-      '- 若输入不足，先列出缺口，再给出可推进的草案版本。',
-    ].join('\n');
+  const getSkillDraftDiffSummary = (baseSkill?: Skill, draft?: WorkflowSkillDraft) => {
+    const baseLines = (baseSkill?.skill_md || '').split('\n').map((line) => line.trim()).filter(Boolean);
+    const draftLines = (draft?.skill_md || '').split('\n').map((line) => line.trim()).filter(Boolean);
+    const baseLineSet = new Set(baseLines);
+    const draftLineSet = new Set(draftLines);
+    const addedLines = draftLines.filter((line) => !baseLineSet.has(line));
+    const removedLines = baseLines.filter((line) => !draftLineSet.has(line));
 
     return {
-      id: existingDraft?.id || `skill-draft-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
-      stepId: step.id,
-      baseSkillId: step.skill_id,
-      baseSkillVersion: baseSkill.version,
-      name: baseSkill.name,
-      description: baseSkill.description,
-      methodology: [
-        baseSkill.methodology,
-        '',
-        '【工作流调优要求】',
-        tuningInstruction,
-      ].filter(Boolean).join('\n'),
-      tools: baseSkill.tools,
-      outputs: baseSkill.outputs,
-      checklist: Array.from(new Set([
-        ...baseSkill.checklist,
-        '输出已体现工作流调优要求',
-        '可作为 Markdown 产物被下一步骤默认注入',
-      ])),
-      tags: Array.from(new Set(['workflow-tuning', ...(baseSkill.tags || [])])),
-      prompt_template: [
-        baseSkill.prompt_template || '',
-        '',
-        '[BattleFlow 工作流调优要求]',
-        tuningInstruction,
-        '请基于当前工作流上下文验证此调优草稿，并输出可沉淀的 Markdown 文档。',
-      ].filter(Boolean).join('\n'),
-      skill_md: `${baseSkillMd}\n\n${draftSection}`,
-      change_summary: changeSummary,
-      validation_note: `已在工作流「${workflow.name}」的「${step.name}」节点生成调优草稿，可启用后直接对话验证。`,
-      enabled: true,
-      status: 'draft',
-      created_at: existingDraft?.created_at || now,
-      updated_at: now,
+      addedCount: addedLines.length,
+      removedCount: removedLines.length,
+      addedPreview: addedLines.slice(0, 4),
+      removedPreview: removedLines.slice(0, 3),
+      promptChanged: Boolean((baseSkill?.prompt_template || '').trim() !== (draft?.prompt_template || '').trim()),
     };
   };
 
@@ -2216,6 +2157,7 @@ export default function WorkflowsPage() {
   const currentSkillDraft = getWorkflowSkillDraft(activeWorkflow, currentStep?.id);
   const currentSkill = getEffectiveSkillForStep(activeWorkflow, currentStep);
   const isCurrentSkillDraftEnabled = Boolean(currentSkillDraft?.enabled);
+  const currentSkillDraftDiff = getSkillDraftDiffSummary(baseCurrentSkill, currentSkillDraft);
   const previousSteps = currentStep
     ? visibleWorkflowSteps.filter((step) => step.step_index < currentStep.step_index && step.output)
     : [];
@@ -2398,27 +2340,68 @@ export default function WorkflowsPage() {
       updated_at: updatedAt,
     }));
   };
-  const handleGenerateSkillDraft = () => {
+  const handleGenerateSkillDraft = async () => {
     if (!activeWorkflow || !currentStep || !baseCurrentSkill) return;
+    const instruction = skillTuningInstruction.trim();
+    if (!instruction) {
+      setSkillTuningMessage('请先输入要调整的目标。');
+      return;
+    }
 
-    const draft = composeWorkflowSkillDraft(
-      activeWorkflow,
-      currentStep,
-      baseCurrentSkill,
-      skillTuningInstruction,
-      currentSkillDraft,
-    );
-    const updatedAt = new Date().toISOString();
+    setSkillTuningGenerating(true);
+    setSkillTuningMessage('');
 
-    setSkillTuningMessage('已生成并启用调优草稿，下一轮对话会使用草稿 Skill。');
-    updateActiveWorkflow((workflow) => ({
-      ...workflow,
-      skillDrafts: {
-        ...(workflow.skillDrafts || {}),
-        [currentStep.id]: draft,
-      },
-      updated_at: updatedAt,
-    }));
+    try {
+      const previousOutputs = activeWorkflow.steps
+        .filter((step) => !step.isRemoved && step.step_index < currentStep.step_index && step.output)
+        .map((step) => ({
+          name: step.name,
+          output: buildStepOutputMarkdown(activeWorkflow, step),
+        }));
+      const response = await fetch('/api/skills/tune', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workflowId: activeWorkflow.id,
+          workflowName: activeWorkflow.name,
+          stepId: currentStep.id,
+          stepName: currentStep.name,
+          baseSkillId: currentStep.skill_id,
+          instruction,
+          currentOutput: currentStep.output || '',
+          previousOutputs,
+          recentMessages: chatMessages.slice(-8),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '生成 Skill 草稿失败');
+
+      const draft = data.draft as WorkflowSkillDraft;
+      const updatedAt = new Date().toISOString();
+
+      updateActiveWorkflow((workflow) => ({
+        ...workflow,
+        skillDrafts: {
+          ...(workflow.skillDrafts || {}),
+          [currentStep.id]: {
+            ...draft,
+            stepId: currentStep.id,
+            baseSkillId: currentStep.skill_id,
+            enabled: true,
+            status: 'draft',
+            created_at: currentSkillDraft?.created_at || draft.created_at || updatedAt,
+            updated_at: updatedAt,
+          },
+        },
+        updated_at: updatedAt,
+      }));
+      setSkillTuningMessage('草稿已生成并启用验证。');
+    } catch (error) {
+      console.error('Generate workflow skill draft error:', error);
+      setSkillTuningMessage(error instanceof Error ? error.message : '生成 Skill 草稿失败');
+    } finally {
+      setSkillTuningGenerating(false);
+    }
   };
   const setCurrentSkillDraftEnabled = (enabled: boolean) => {
     if (!currentStep) return;
@@ -3346,94 +3329,162 @@ export default function WorkflowsPage() {
                 <>
                   <Card className={appCardClassName}>
                     <CardContent className="flex flex-col gap-3 p-3">
-                      <div className="flex min-w-0 items-start justify-between gap-2">
+                      <div className="flex min-w-0 items-center justify-between gap-2">
                         <div className="min-w-0">
-                          <p className="text-xs font-medium">对话式 Skill 调优</p>
-                          <p className="mt-1 break-words text-[11px] leading-5 text-muted-foreground">
-                            基于当前节点的对话、产物和你的修改要求生成草稿。启用后，本节点下一轮对话会使用草稿 Skill。
-                          </p>
+                          <p className="text-xs font-medium">调优请求</p>
+                          <p className="mt-1 truncate text-[11px] text-muted-foreground">{baseCurrentSkill.name}</p>
                         </div>
-                        <Badge variant={isCurrentSkillDraftEnabled ? 'default' : 'outline'} className="shrink-0 text-[11px]">
-                          {isCurrentSkillDraftEnabled ? '验证中' : '未启用'}
+                        <Badge variant="outline" className="shrink-0 gap-1 text-[11px]">
+                          <Sparkles className="h-3 w-3" />
+                          Claude CLI
                         </Badge>
                       </div>
-                      <textarea
-                        className="min-h-28 w-full rounded-md border border-border/60 bg-background/60 px-3 py-2 text-xs leading-5 outline-none placeholder:text-muted-foreground focus:border-brand/50"
-                        placeholder="写下你想怎么改这个 Skill，例如：输出先给结论和风险，再给详细拆解；减少寒暄；增加验收标准和输入缺口说明。"
+                      <Textarea
+                        className="min-h-28 resize-none text-xs leading-5"
+                        placeholder="输入修改目标，例如：输出先给结论和风险，再给拆解；减少寒暄；补充验收标准和输入缺口。"
                         value={skillTuningInstruction}
                         onChange={(event) => setSkillTuningInstruction(event.target.value)}
                       />
                       <Button
-                        variant="outline"
                         size="sm"
                         className="h-8 w-full gap-1.5 text-xs"
-                        onClick={handleGenerateSkillDraft}
+                        disabled={skillTuningGenerating || !skillTuningInstruction.trim()}
+                        onClick={() => void handleGenerateSkillDraft()}
                       >
-                        <Sparkles className="h-3.5 w-3.5" />
-                        {currentSkillDraft ? '更新调优草稿' : '生成调优草稿'}
+                        {skillTuningGenerating ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Sparkles className="h-3.5 w-3.5" />
+                        )}
+                        {skillTuningGenerating ? '生成中' : currentSkillDraft ? '重新生成草稿' : '生成草稿'}
                       </Button>
                     </CardContent>
                   </Card>
 
                   {currentSkillDraft ? (
-                    <Card className={appCardClassName}>
-                      <CardContent className="flex flex-col gap-3 p-3">
-                        <div className="min-w-0">
-                          <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
-                            <p className="min-w-0 truncate text-xs font-medium">草稿摘要</p>
-                            <Badge variant={currentSkillDraft.status === 'submitted' ? 'secondary' : 'outline'} className="shrink-0 text-[11px]">
-                              {currentSkillDraft.status === 'submitted' ? '已提交' : '草稿'}
+                    <>
+                      <Card className={appCardClassName}>
+                        <CardContent className="flex flex-col gap-3 p-3">
+                          <div className="flex min-w-0 items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="truncate text-xs font-medium">调优草稿</p>
+                              <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                                {currentSkillDraft.generator === 'claude-code-cli' ? 'Claude Code CLI' : '未知生成器'} · {new Date(currentSkillDraft.updated_at).toLocaleString('zh-CN')}
+                              </p>
+                            </div>
+                            <Badge variant={currentSkillDraft.status === 'submitted' ? 'secondary' : isCurrentSkillDraftEnabled ? 'default' : 'outline'} className="shrink-0 text-[11px]">
+                              {currentSkillDraft.status === 'submitted' ? '已提交' : isCurrentSkillDraftEnabled ? '验证中' : '草稿'}
                             </Badge>
                           </div>
-                          <p className="whitespace-pre-wrap break-words rounded-md bg-muted/45 p-2 text-[11px] leading-5 text-muted-foreground">
-                            {currentSkillDraft.change_summary}
-                          </p>
-                        </div>
-                        <div className="grid grid-cols-2 gap-2 text-[11px]">
-                          <div className="rounded-md border border-border/60 bg-background/60 p-2">
-                            <p className="text-muted-foreground">基线 Skill</p>
-                            <p className="mt-1 truncate font-medium">{baseCurrentSkill.name}</p>
+                          <div className="rounded-lg border border-border/60 bg-muted/25 p-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="truncate text-[11px] font-medium">启用到当前节点</p>
+                                <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                                  {isCurrentSkillDraftEnabled ? '当前对话使用调优草稿' : '当前对话使用基线 Skill'}
+                                </p>
+                              </div>
+                              <Switch
+                                checked={isCurrentSkillDraftEnabled}
+                                onCheckedChange={setCurrentSkillDraftEnabled}
+                                aria-label="启用调优草稿"
+                              />
+                            </div>
                           </div>
-                          <div className="rounded-md border border-border/60 bg-background/60 p-2">
-                            <p className="text-muted-foreground">验证版本</p>
-                            <p className="mt-1 truncate font-medium">{currentSkillDraft.name}</p>
+                          <div className="space-y-2">
+                            {(currentSkillDraft.change_items?.length ? currentSkillDraft.change_items : [currentSkillDraft.change_summary])
+                              .slice(0, 5)
+                              .map((item, index) => (
+                                <div key={`${item}-${index}`} className="flex gap-2 rounded-md bg-muted/25 px-2.5 py-2 text-[11px] leading-5">
+                                  <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-medium text-primary">
+                                    {index + 1}
+                                  </span>
+                                  <span className="min-w-0 break-words text-muted-foreground">{item}</span>
+                                </div>
+                              ))}
                           </div>
-                        </div>
-                        <div className="flex flex-col gap-2">
-                          <Button
-                            variant={isCurrentSkillDraftEnabled ? 'secondary' : 'outline'}
-                            size="sm"
-                            className="h-8 w-full gap-1.5 text-xs"
-                            onClick={() => setCurrentSkillDraftEnabled(!isCurrentSkillDraftEnabled)}
-                          >
-                            <CheckCircle2 className="h-3.5 w-3.5" />
-                            {isCurrentSkillDraftEnabled ? '停用草稿验证' : '启用草稿验证'}
-                          </Button>
-                          <Button
-                            size="sm"
-                            className="h-8 w-full gap-1.5 text-xs"
-                            disabled={skillTuningSubmitting}
-                            onClick={() => void handleSubmitSkillDraft()}
-                          >
-                            {skillTuningSubmitting ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <ClipboardCheck className="h-3.5 w-3.5" />
+                        </CardContent>
+                      </Card>
+
+                      <Card className={appCardClassName}>
+                        <CardContent className="flex flex-col gap-3 p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="flex items-center gap-1.5 text-xs font-medium">
+                              <GitCompareArrows className="h-3.5 w-3.5 text-primary" />
+                              差异预览
+                            </p>
+                            <div className="flex shrink-0 items-center gap-1">
+                              <Badge variant="outline" className="text-[10px]">+{currentSkillDraftDiff.addedCount}</Badge>
+                              <Badge variant="outline" className="text-[10px]">-{currentSkillDraftDiff.removedCount}</Badge>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 text-[11px]">
+                            <div className="rounded-md border border-border/60 bg-background/50 p-2">
+                              <p className="text-muted-foreground">基线</p>
+                              <p className="mt-1 truncate font-medium">{baseCurrentSkill.name}</p>
+                            </div>
+                            <div className="rounded-md border border-border/60 bg-background/50 p-2">
+                              <p className="text-muted-foreground">草稿</p>
+                              <p className="mt-1 truncate font-medium">{currentSkillDraft.name}</p>
+                            </div>
+                          </div>
+                          <div className="space-y-1.5">
+                            {currentSkillDraftDiff.addedPreview.length > 0 ? currentSkillDraftDiff.addedPreview.map((line, index) => (
+                              <p key={`${line}-${index}`} className="truncate rounded bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-700 dark:text-emerald-300">
+                                + {line}
+                              </p>
+                            )) : (
+                              <p className="rounded border border-dashed border-border/60 px-2 py-2 text-[11px] text-muted-foreground">暂无新增行预览</p>
                             )}
-                            提交修改请求
-                          </Button>
-                        </div>
+                          </div>
+                          {currentSkillDraftDiff.promptChanged && (
+                            <Badge variant="secondary" className="w-fit text-[11px]">Prompt Template 已更新</Badge>
+                          )}
+                        </CardContent>
+                      </Card>
+
+                      {currentSkillDraft.quality_gates && currentSkillDraft.quality_gates.length > 0 && (
+                        <Card className={appCardClassName}>
+                          <CardContent className="flex flex-col gap-2 p-3">
+                            <p className="flex items-center gap-1.5 text-xs font-medium">
+                              <ShieldCheck className="h-3.5 w-3.5 text-primary" />
+                              验证门禁
+                            </p>
+                            {currentSkillDraft.quality_gates.slice(0, 4).map((gate, index) => (
+                              <div key={`${gate}-${index}`} className="flex gap-2 text-[11px] leading-5 text-muted-foreground">
+                                <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+                                <span className="min-w-0 break-words">{gate}</span>
+                              </div>
+                            ))}
+                          </CardContent>
+                        </Card>
+                      )}
+
+                      <div className="flex flex-col gap-2">
+                        <Button
+                          size="sm"
+                          className="h-8 w-full gap-1.5 text-xs"
+                          disabled={skillTuningSubmitting || skillTuningGenerating}
+                          onClick={() => void handleSubmitSkillDraft()}
+                        >
+                          {skillTuningSubmitting ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <ClipboardCheck className="h-3.5 w-3.5" />
+                          )}
+                          {currentSkillDraft.status === 'submitted' ? '重新提交修改请求' : '提交修改请求'}
+                        </Button>
                         {currentSkillDraft.submittedSkillId && (
-                          <p className="break-words rounded-md border border-border/60 bg-muted/30 p-2 text-[11px] text-muted-foreground">
+                          <div className="truncate rounded-md border border-border/60 bg-muted/25 px-2.5 py-2 text-[11px] text-muted-foreground">
                             审核记录：{currentSkillDraft.submittedSkillId}
-                          </p>
+                          </div>
                         )}
-                      </CardContent>
-                    </Card>
+                      </div>
+                    </>
                   ) : (
-                    <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs leading-5 text-muted-foreground">
-                      还没有调优草稿。生成后可以先在当前节点验证，再提交给 Skill Owner 审核。
-                    </p>
+                    <Card className={appCardClassName}>
+                      <CardContent className="p-3 text-[11px] text-muted-foreground">暂无草稿</CardContent>
+                    </Card>
                   )}
 
                   {skillTuningMessage && (
@@ -3444,7 +3495,7 @@ export default function WorkflowsPage() {
                 </>
               ) : (
                 <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
-                  选择一个工作流步骤后，可以基于该节点 Skill 生成调优草稿。
+                  选择一个步骤后查看调优状态。
                 </p>
               )}
             </div>
