@@ -1,65 +1,121 @@
-# 项目上下文
+# BattleFlow Agent Guide
 
-### 版本技术栈
+This is the canonical entry point for AI agents working in this repository. Read it before editing code, docs, skills, or runtime configuration.
 
-- **Framework**: Next.js 16 (App Router)
-- **Core**: React 19
-- **Language**: TypeScript 5
-- **UI 组件**: shadcn/ui (基于 Radix UI)
-- **Styling**: Tailwind CSS 4
+## Repository Purpose
 
-## 目录结构
+BattleFlow is a Next.js product-planning workspace for AI-native teams. It turns repeatable product planning methods into Skills, lets teams import and review those Skills, and composes them into workflows that produce research, requirement breakdowns, reviewed outputs, and PRD material.
 
-```
-├── public/                 # 静态资源
-├── scripts/                # 构建与启动脚本
-│   ├── build.sh            # 构建脚本
-│   ├── dev.sh              # 开发环境启动脚本
-│   ├── prepare.sh          # 预处理脚本
-│   └── start.sh            # 生产环境启动脚本
+## Documentation Index
+
+| File | Purpose |
+| --- | --- |
+| [docs/README.md](docs/README.md) | Documentation hub and recommended reading order. |
+| [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md) | Non-technical product intent, users, capabilities, and non-goals. |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System structure, runtime flow, storage, and integration boundaries. |
+| [docs/STANDARDS.md](docs/STANDARDS.md) | Coding, TypeScript, React, Next.js, styling, and review standards. |
+| [docs/TESTING_GUIDE.md](docs/TESTING_GUIDE.md) | Current validation gates and proposed automated test convention. |
+| [docs/DEVELOPMENT_COMMANDS.md](docs/DEVELOPMENT_COMMANDS.md) | Real commands for install, development, validation, build, and deploy. |
+| [docs/SECURITY.md](docs/SECURITY.md) | Secrets, auth, data, imports, file-system, and agent safety posture. |
+| [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | Performance-sensitive paths and budgets for the app and runtime. |
+| [docs/DESIGN.md](docs/DESIGN.md) | Visual UI design system: tokens, component patterns, responsive rules, and agent guidance. |
+| [docs/AI_AGENT_ONBOARDING.md](docs/AI_AGENT_ONBOARDING.md) | First-session checklist for agents new to BattleFlow. |
+| [docs/AI_AGENT_COLLAB.md](docs/AI_AGENT_COLLAB.md) | Handoff, ownership, conflict avoidance, and DWP collaboration rules. |
+| [DESIGN.md](DESIGN.md) | Original visual direction note preserved as design source material. |
+
+## Repository Structure
+
+```text
+.
 ├── src/
-│   ├── app/                # 页面路由与布局
-│   ├── components/ui/      # Shadcn UI 组件库
-│   ├── hooks/              # 自定义 Hooks
-│   ├── lib/                # 工具库
-│   │   └── utils.ts        # 通用工具函数 (cn)
-│   └── server.ts           # 自定义服务端入口
-├── next.config.ts          # Next.js 配置
-├── package.json            # 项目依赖管理
-└── tsconfig.json           # TypeScript 配置
+│   ├── app/                    # Next.js App Router pages, layouts, and route handlers
+│   │   ├── api/                # Node route handlers for chat, skills, workflows, PRD, config
+│   │   └── dashboard/          # Authenticated product workspace pages
+│   ├── components/
+│   │   ├── battleflow/         # Product-specific UI primitives and markdown rendering
+│   │   └── ui/                 # shadcn/ui components based on Radix UI
+│   ├── hooks/                  # Client hooks such as theme and mobile detection
+│   ├── lib/                    # File-backed registries, agent adapters, Supabase config helpers
+│   ├── storage/                # Supabase client and Drizzle schema definitions
+│   └── server.ts               # Custom Node HTTP entrypoint for Next.js
+├── skills/official/            # Seeded BattleFlow product-planning Skills
+├── scripts/                    # Build, dev, start, and validation scripts
+├── public/                     # Static assets
+├── docs/                       # AI-first documentation hub
+├── .agents/                    # Cross-agent skills, commands, agents, and catalogs
+├── .dwp/                       # Gitignored Deep Work Plan state
+└── tmp/                        # Gitignored scratch space
 ```
 
-- 项目文件（如 app 目录、pages 目录、components 等）默认初始化到 `src/` 目录下。
+## Quick Commands
 
-## 包管理规范
+Use `pnpm` only. Do not use `npm` or `yarn` for dependency or script execution in this repository.
 
-**仅允许使用 pnpm** 作为包管理器，**严禁使用 npm 或 yarn**。
-**常用命令**：
-- 安装依赖：`pnpm add <package>`
-- 安装开发依赖：`pnpm add -D <package>`
-- 安装所有依赖：`pnpm install`
-- 移除依赖：`pnpm remove <package>`
+| Task | Command | Notes |
+| --- | --- | --- |
+| Install dependencies | `pnpm install` | Honors `pnpm-lock.yaml` and the `preinstall` guard. |
+| Start development server | `pnpm dev` | Runs `scripts/dev.sh`; default port is `5000` unless `DEPLOY_RUN_PORT` or `PORT` is set. |
+| Type-check | `pnpm ts-check` | Runs `tsc -p tsconfig.json`. |
+| Lint for build | `pnpm lint:build` | Runs `eslint . --quiet`. |
+| Overlay boundary check | `pnpm check:overlays` | Verifies viewport-safe overlay component contracts. |
+| Responsive layout check | `pnpm check:responsive` | Verifies required responsive layout class contracts. |
+| Full validation gate | `pnpm validate` | Runs type-check, lint, overlay, and responsive checks in parallel. |
+| Production build | `pnpm build` | Installs dependencies, runs `next build`, then bundles `src/server.ts` with `tsup`. |
+| Production start | `COZE_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start` | Runs `dist/server.js`; requires a prior build. |
 
-## 开发规范
+## Mandatory Rules
 
-### 编码规范
+- Language: code, comments, docs, agent files, and commit messages MUST be in English from this point forward. Existing Chinese UI copy and seeded product Skill content may remain until intentionally localized.
+- Commits: use Conventional Commits, `type(scope): description`. Recent repository history already follows this pattern.
+- Package management: use pnpm only. Never add `package-lock.json`, `yarn.lock`, or npm/yarn commands.
+- TypeScript: write with `strict` in mind. Avoid implicit `any`, avoid `as any`, type event objects and error handling, and remove unused imports.
+- React hydration: do not use `typeof window`, `Date.now()`, `Math.random()`, locale formatting, or browser-only state directly in JSX render paths. Put client-only dynamic data behind `'use client'`, `useEffect`, and state.
+- Next.js metadata: do not use a raw `<head>` tag. Use App Router metadata APIs; use `globals.css` or `next/font` for fonts and third-party CSS.
+- Next config paths: never hardcode absolute paths in `next.config.ts`; use dynamic roots such as `process.cwd()`, `import.meta.dirname`, or `path.resolve(...)`.
+- UI system: default to shadcn/ui components from `src/components/ui/`, lucide-react icons, Tailwind CSS 4 tokens, and the existing BattleFlow design direction in `DESIGN.md`.
+- Overlay safety: business code must not import raw Radix overlay primitives directly. Use the bounded components in `src/components/ui/`.
+- Validation: run `pnpm validate` before considering a code or UI change complete. Run `pnpm build` for server/runtime, dependency, or deployment-impacting changes.
+- Testing gap: this repo currently has validation scripts but no unit/component/e2e test runner. Behavior changes should either add focused tests if a runner is introduced or document the manual verification performed.
+- Secrets: never commit `.env*`, Supabase service role keys, Anthropic/Claude credentials, Coze credentials, imported private Skill packages, or runtime registry data under `data/`.
+- Runtime data: `data/skill-registry/`, `data/workflows/`, `.dwp/`, and `tmp/` are working state, not product source.
+- Repository boundaries: this is an individual repository. Do not treat it as an orchestrator hub and do not commit unrelated sibling repository changes from here.
+- Progress reporting: for multi-step work, keep the user informed after significant phases. Do not block engineering work on status reporting if the reporting channel is unavailable.
 
-- 默认按 TypeScript `strict` 心智写代码；优先复用当前作用域已声明的变量、函数、类型和导入，禁止引用未声明标识符或拼错变量名。
-- 禁止隐式 `any` 和 `as any`；函数参数、返回值、解构项、事件对象、`catch` 错误在使用前应有明确类型或先完成类型收窄，并清理未使用的变量和导入。
+## Deep Work Plan Commands
 
-### next.config 配置规范
+Thin command files live under `.agents/commands/` and delegate to `.agents/skills/deepworkplan`.
 
-- 配置的路径不要写死绝对路径，必须使用 path.resolve(__dirname, ...)、import.meta.dirname 或 process.cwd() 动态拼接。
+| Command | Purpose |
+| --- | --- |
+| `/dwp-create` | Create a refined Deep Work Plan draft. |
+| `/dwp-execute` | Execute an approved plan task by task. |
+| `/dwp-refine` | Revise a draft or existing plan while preserving completed work. |
+| `/dwp-resume` | Resume the first incomplete task in an interrupted plan. |
+| `/dwp-status` | Report plan status without making changes. |
+| `/dwp-verify` | Check repository and plan conformance. |
+| `/design-system` | Refresh `docs/DESIGN.md` through the DWP design-system addon. |
+| `/skill-create` | Author or update a repo-specific skill. |
+| `/agent-create` | Author or update a repo-specific agent persona. |
 
-### Hydration 问题防范
+## Module Guides
 
-1. 严禁在 JSX 渲染逻辑中直接使用 typeof window、Date.now()、Math.random() 等动态数据。**必须使用 'use client' 并配合 useEffect + useState 确保动态内容仅在客户端挂载后渲染**；同时严禁非法 HTML 嵌套（如 <p> 嵌套 <div>）。
-2. **禁止使用 head 标签**，优先使用 metadata，详见文档：https://nextjs.org/docs/app/api-reference/functions/generate-metadata
-   1. 三方 CSS、字体等资源可在 `globals.css` 中顶部通过 `@import` 引入或使用 next/font
-   2. preload, preconnect, dns-prefetch 通过 ReactDOM 的 preload、preconnect、dns-prefetch 方法引入
-   3. json-ld 可阅读 https://nextjs.org/docs/app/guides/json-ld
+Read the module README closest to the files you touch:
 
-## UI 设计与组件规范 (UI & Styling Standards)
+- [src/app/README.md](src/app/README.md)
+- [src/app/api/README.md](src/app/api/README.md)
+- [src/app/dashboard/README.md](src/app/dashboard/README.md)
+- [src/components/README.md](src/components/README.md)
+- [src/lib/README.md](src/lib/README.md)
+- [src/storage/README.md](src/storage/README.md)
+- [scripts/README.md](scripts/README.md)
+- [skills/official/README.md](skills/official/README.md)
 
-- 模板默认预装核心组件库 `shadcn/ui`，位于`src/components/ui/`目录下
-- Next.js 项目**必须默认**采用 shadcn/ui 组件、风格和规范，**除非用户指定用其他的组件和规范。**
+## Review Gates
+
+Before finishing work, report:
+
+1. Files changed and why.
+2. Validation commands run and their results.
+3. Any checks not run, with the reason.
+4. Security impact: secrets, auth, imports, file-system writes, and user-provided content.
+5. Follow-up gaps, especially missing automated tests when behavior changed.

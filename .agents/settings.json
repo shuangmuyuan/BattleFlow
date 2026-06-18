@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "repository": "BattleFlow",
+  "agentRoot": ".agents",
+  "modelTiers": {
+    "light": "mechanical edits, catalog sync, simple doc updates",
+    "standard": "default for implementation, UI, API, and test work",
+    "heavy": "architecture, security review, complex DWP planning"
+  },
+  "permissions": {
+    "packageManager": "pnpm",
+    "allowNetworkByDefault": false,
+    "runtimeDataDirs": ["data/skill-registry", "data/workflows", ".dwp", "tmp"],
+    "validationCommand": "pnpm validate"
+  },
+  "dwp": {
+    "skillPath": ".agents/skills/deepworkplan",
+    "plansDir": ".dwp/plans",
+    "draftsDir": ".dwp/drafts"
+  }
+}
+

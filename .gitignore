@@ -159,3 +159,7 @@ Desktop.ini
 # Misc
 .coze-logs
 .preview
+
+# Deep Work Plan working state
+.dwp/
+tmp/

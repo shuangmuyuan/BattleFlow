@@ -1,0 +1,80 @@
+# Architecture
+
+## Runtime Shape
+
+BattleFlow is a Next.js 16 App Router application with a custom Node HTTP server:
+
+- `src/server.ts` creates the HTTP server, prepares the Next app, and delegates every request to Next.
+- `scripts/dev.sh` runs the server through `tsx watch`.
+- `scripts/build.sh` runs `next build` and bundles `src/server.ts` into `dist/server.js` with `tsup`.
+- `scripts/start.sh` runs the bundled production server.
+
+The repository is an individual application repo, not a monorepo and not an orchestrator hub.
+
+## Major Areas
+
+| Area | Responsibility |
+| --- | --- |
+| `src/app` | App Router entry points, layouts, dashboard pages, login page, API route handlers, metadata, robots. |
+| `src/components/ui` | shadcn/ui primitives and bounded Radix wrappers. |
+| `src/components/battleflow` | Product-level UI helpers such as page headers, cards, empty states, and compact Markdown rendering. |
+| `src/lib` | File-backed registries, workflow registry, agent adapters, Skill tuning, Supabase config injection, utilities. |
+| `src/storage` | Supabase client creation and Drizzle schema definitions. |
+| `skills/official` | Seeded product-planning Skills used to initialize the Skill registry. |
+| `scripts` | Development, build, production start, and static layout validation. |
+
+## Data and State
+
+BattleFlow currently has two storage styles:
+
+1. File-backed runtime registries:
+   - `SKILL_REGISTRY_DIR` defaults to `data/skill-registry`.
+   - `WORKFLOW_REGISTRY_DIR` defaults to `data/workflows`.
+   - Both directories are gitignored runtime state.
+2. Supabase-backed data model:
+   - `src/storage/database/shared/schema.ts` defines organizations, members, Skills, workflows, steps, snapshots, milestones, knowledge bases, and PRD documents.
+   - `src/storage/database/supabase-client.ts` creates server clients with anon or service-role keys depending on available env.
+   - Browser auth uses injected public Supabase config from `src/lib/supabase-config-inject.tsx` and `src/lib/supabase-browser.ts`.
+
+Agents must preserve the distinction between source files and runtime registry data.
+
+## API Routes
+
+All API handlers use App Router route handlers under `src/app/api`.
+
+- `/api/skills` manages Skill list/detail/download/import/review/rollback/archive.
+- `/api/skills/tune` generates workflow Skill tuning drafts through the Claude Code CLI.
+- `/api/workflows` manages file-backed workspaces and workflows.
+- `/api/workflows/snapshots` manages workflow step snapshots.
+- `/api/workflows/milestones` manages milestones.
+- `/api/chat` streams product-planning chat responses with knowledge and workflow context.
+- `/api/agent-runtime` reports Claude Code CLI adapter availability.
+- `/api/supabase-config` exposes browser-safe Supabase config.
+- `/api/prd` reads and writes PRD documents through Supabase.
+- `/api/knowledge` handles knowledge data for the dashboard.
+
+Route handlers that access the file system or spawn CLI processes must keep `runtime = 'nodejs'`.
+
+## Agent Runtime Boundary
+
+The Claude Code CLI adapter lives in `src/lib/agent-adapters/claude-code-cli.ts`.
+
+- It checks CLI availability with `claude --version`.
+- It streams JSON events from `claude -p`.
+- It defaults to safe mode, no session persistence, no tools, and a configurable budget.
+- It uses `CLAUDE_COMMAND`, `CLAUDE_MODEL`, `CLAUDE_MAX_BUDGET_USD`, and `CLAUDE_WORKSPACE_DIR`.
+
+Do not grant CLI tools or broaden permissions without a security review.
+
+## UI Architecture
+
+The dashboard has a fixed viewport shell in `src/app/dashboard/layout.tsx`:
+
+- desktop sidebar with collapsible navigation;
+- mobile horizontal navigation;
+- bounded main scroll regions;
+- theme toggle using `useTheme`;
+- optional Supabase auth user display.
+
+Pages must own their scroll regions and avoid body-level layout drift. The static validation scripts enforce required class tokens for this.
+
