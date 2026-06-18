@@ -82,6 +82,23 @@ export interface WorkflowChatMessageRecord {
   content: string;
 }
 
+const CLAUDE_RUNTIME_SKILL_MISFIRE_MARKERS = [
+  '/<skill-name>',
+  'system-reminder',
+  'available-skills',
+  '可用 Skill 列表',
+  '可用的 Skill',
+  '已注册的可用 Skill',
+  '没有看到任何已注册',
+  '无法猜测或自行发明技能名称',
+];
+
+function isClaudeRuntimeSkillMisfireMessage(message: Partial<WorkflowChatMessageRecord>) {
+  if (message.role !== 'assistant') return false;
+  const content = message.content || '';
+  return CLAUDE_RUNTIME_SKILL_MISFIRE_MARKERS.some((marker) => content.includes(marker));
+}
+
 export interface WorkflowSkillDraftRecord {
   id: string;
   stepId: string;
@@ -327,6 +344,7 @@ function normalizeStepChats(value: unknown): Record<string, WorkflowChatMessageR
             && (message as Partial<WorkflowChatMessageRecord>).role !== undefined
             && typeof (message as Partial<WorkflowChatMessageRecord>).content === 'string'
           ))
+          .filter((message) => !isClaudeRuntimeSkillMisfireMessage(message))
           .map((message) => ({
             role: message.role === 'assistant' ? 'assistant' : 'user',
             content: message.content || '',

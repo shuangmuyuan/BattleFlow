@@ -217,6 +217,25 @@ interface ChatMessage {
 type ChatPersistenceStatus = 'idle' | 'streaming' | 'saving' | 'saved' | 'failed';
 
 const chatErrorFallbackContent = '抱歉，对话出现了问题，请重试。';
+const claudeRuntimeSkillMisfireMarkers = [
+  '/<skill-name>',
+  'system-reminder',
+  'available-skills',
+  '可用 Skill 列表',
+  '可用的 Skill',
+  '已注册的可用 Skill',
+  '没有看到任何已注册',
+  '无法猜测或自行发明技能名称',
+];
+
+function isClaudeRuntimeSkillMisfireMessage(message: ChatMessage) {
+  if (message.role !== 'assistant') return false;
+  return claudeRuntimeSkillMisfireMarkers.some((marker) => message.content.includes(marker));
+}
+
+function sanitizeChatMessages(messages: ChatMessage[]) {
+  return messages.filter((message) => !isClaudeRuntimeSkillMisfireMessage(message));
+}
 
 function getLastAssistantMessage(messages: ChatMessage[]) {
   return [...messages].reverse().find((message) => message.role === 'assistant');
@@ -419,7 +438,7 @@ export default function WorkflowsPage() {
 
   const getStepChatMessages = (workflow: Workflow, stepId?: string): ChatMessage[] => (
     stepId && Array.isArray(workflow.stepChats?.[stepId])
-      ? workflow.stepChats[stepId]
+      ? sanitizeChatMessages(workflow.stepChats[stepId])
       : []
   );
 
@@ -512,12 +531,13 @@ export default function WorkflowsPage() {
     messages: ChatMessage[],
     options: { persist?: boolean } = {},
   ) => {
+    const nextMessages = sanitizeChatMessages(messages);
     const updatedAt = new Date().toISOString();
     const buildNextWorkflow = (source: Workflow): Workflow => ({
       ...source,
       stepChats: {
         ...(source.stepChats || {}),
-        [stepId]: messages,
+        [stepId]: nextMessages,
       },
       updated_at: updatedAt,
     });
@@ -1197,11 +1217,12 @@ export default function WorkflowsPage() {
       );
       const snapshotCreatedAt = new Date().toISOString();
       const stepSnapshot = buildStepSnapshot(activeWorkflow, currentStep, stepOutputDocument, snapshotCreatedAt);
+      const sanitizedStepChats = sanitizeChatMessages(chatMessages);
       const workflowWithSnapshot = {
         ...nextWorkflow,
         stepChats: {
           ...(nextWorkflow.stepChats || {}),
-          [currentStep.id]: chatMessages,
+          [currentStep.id]: sanitizedStepChats,
         },
         stepSnapshots: [stepSnapshot, ...(nextWorkflow.stepSnapshots || [])],
         updated_at: snapshotCreatedAt,

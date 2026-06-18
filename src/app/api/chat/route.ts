@@ -67,6 +67,17 @@ interface UploadedFileContext {
   note?: string;
 }
 
+const CLAUDE_RUNTIME_SKILL_MISFIRE_MARKERS = [
+  '/<skill-name>',
+  'system-reminder',
+  'available-skills',
+  '可用 Skill 列表',
+  '可用的 Skill',
+  '已注册的可用 Skill',
+  '没有看到任何已注册',
+  '无法猜测或自行发明技能名称',
+];
+
 function sse(payload: Record<string, unknown>) {
   return `data: ${JSON.stringify(payload)}\n\n`;
 }
@@ -90,6 +101,34 @@ function getNumber(value: unknown) {
 
 function truncateForPrompt(value: string, maxLength: number) {
   return value.length > maxLength ? `${value.slice(0, maxLength)}\n...（已截断）` : value;
+}
+
+function isClaudeRuntimeSkillMisfire(message: ChatMessage) {
+  if (message.role !== 'assistant') return false;
+  return CLAUDE_RUNTIME_SKILL_MISFIRE_MARKERS.some((marker) => message.content.includes(marker));
+}
+
+function normalizeBattleFlowSkillReferences(content: string) {
+  return content
+    .replace(/当前\s*Skill/g, '当前 BattleFlow 方法框架')
+    .replace(/当前\s*skill/gi, '当前 BattleFlow 方法框架')
+    .replace(/this\s+Skill/gi, 'this BattleFlow method package')
+    .replace(/current\s+Skill/gi, 'current BattleFlow method package')
+    .replace(/按\s*Skill\s*的要求/g, '按 BattleFlow 方法框架的要求')
+    .replace(/按当前\s*技能/g, '按当前 BattleFlow 方法框架')
+    .replace(/当前技能/g, '当前 BattleFlow 方法框架');
+}
+
+function prepareMessagesForClaudeCodeCli(messages: ChatMessage[], hasWorkflowMethodPackage: boolean) {
+  if (!hasWorkflowMethodPackage) return messages;
+
+  return messages
+    .filter((message) => !isClaudeRuntimeSkillMisfire(message))
+    .map((message) => (
+      message.role === 'user'
+        ? { ...message, content: normalizeBattleFlowSkillReferences(message.content) }
+        : message
+    ));
 }
 
 function getChunkContent(chunk: Record<string, unknown>) {
@@ -211,9 +250,18 @@ function buildSystemPrompt(body: Record<string, unknown>) {
   let systemPrompt = 'You are an expert product planning assistant. You help product planners create professional, well-structured requirement documents through collaborative dialogue.';
 
   if (skillDefinition) {
-    systemPrompt += `\n\n## Current Skill: ${skillDefinition.name || 'Unknown'}\n`;
+    systemPrompt += `\n\n## BattleFlow Workflow Method Binding\n${[
+      `The workflow has already selected the active BattleFlow method package: ${skillDefinition.name || 'Unknown'}.`,
+      'User references to the current method package, current workflow capability, or current step rules mean the BattleFlow method package described below.',
+      'Do not interpret those references as a request to activate, list, or choose Claude Code or Codex runtime capabilities.',
+      'Do not ask the user to provide a slash command or a capability name. Do not mention registered runtime capability lists or unavailable runtime capabilities.',
+      'When the user asks to follow the current method package requirements, directly apply the methodology, prompt template, checklist, and output structure below.',
+      'If an earlier assistant message asked the user to choose a runtime capability, treat it as an obsolete misinterpretation and continue with this active BattleFlow method package.',
+    ].map((item) => `- ${item}`).join('\n')}\n`;
+
+    systemPrompt += `\n\n## Active BattleFlow Method Package: ${skillDefinition.name || 'Unknown'}\n`;
     if (skillDefinition.description) {
-      systemPrompt += `\n### Skill Description\n${skillDefinition.description}\n`;
+      systemPrompt += `\n### Capability Description\n${skillDefinition.description}\n`;
     }
     if (skillDefinition.methodology) {
       systemPrompt += `\n### Methodology\n${skillDefinition.methodology}\n`;
@@ -225,14 +273,14 @@ function buildSystemPrompt(body: Record<string, unknown>) {
       systemPrompt += `\n### Quality Checklist\n${skillDefinition.checklist.map((item, index) => `${index + 1}. ${item}`).join('\n')}\n`;
     }
     if (skillDefinition.tools && skillDefinition.tools.length > 0) {
-      systemPrompt += `\n### Declared Skill Tools\n${skillDefinition.tools.join(', ')}\n`;
+      systemPrompt += `\n### Declared Planning Capabilities\n${skillDefinition.tools.join(', ')}\n`;
       systemPrompt += 'These tool names describe intended capabilities only. Do not claim you actually executed external tools unless the platform provides tool results in context.\n';
     }
     if (skillDefinition.prompt_template) {
       systemPrompt += `\n### Prompt Template\n${skillDefinition.prompt_template}\n`;
     }
     if (skillDefinition.skill_md) {
-      systemPrompt += `\n### Full Skill Instructions\n${skillDefinition.skill_md}\n`;
+      systemPrompt += `\n### Full Method Instructions\n${skillDefinition.skill_md}\n`;
     }
   }
 
@@ -285,8 +333,9 @@ function buildSystemPrompt(body: Record<string, unknown>) {
     }
   }
 
-  systemPrompt += '\n\n## Instructions\n- Provide structured, professional output\n- If this is a methodology-driven skill, follow the methodology steps\n- Reference context from previous steps when relevant\n- Be thorough but concise\n- Use markdown formatting for better readability';
-  systemPrompt += '\n- When a step is ready to be confirmed, make the durable deliverable a standalone Markdown document that can be saved as this skill step output. Avoid making the saved deliverable depend on conversational wording such as greetings or follow-up chatter.';
+  systemPrompt += '\n\n## Instructions\n- Provide structured, professional output\n- If this is a methodology-driven workflow capability, follow the methodology steps\n- Reference context from previous steps when relevant\n- Be thorough but concise\n- Use markdown formatting for better readability';
+  systemPrompt += '\n- Never ask the user to choose a Claude Code or Codex runtime capability. The BattleFlow workflow step has already supplied the active method package when one is available.';
+  systemPrompt += '\n- When a step is ready to be confirmed, make the durable deliverable a standalone Markdown document that can be saved as this workflow step output. Avoid making the saved deliverable depend on conversational wording such as greetings or follow-up chatter.';
 
   return systemPrompt;
 }
@@ -452,7 +501,8 @@ export async function POST(request: NextRequest) {
       return streamCozeSdk(request, messages, systemPrompt, modelId);
     }
 
-    return streamClaudeCodeCli(request, messages, systemPrompt);
+    const claudeMessages = prepareMessagesForClaudeCodeCli(messages, Boolean(body.skill_definition));
+    return streamClaudeCodeCli(request, claudeMessages, systemPrompt);
   } catch (error) {
     console.error('Chat API error:', error);
     return new Response(JSON.stringify({ error: 'Chat failed' }), {
