@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { LLMClient, Config, HeaderUtils, KnowledgeClient } from 'coze-coding-dev-sdk';
 import { streamClaudeCodeCliTurn } from '@/lib/agent-adapters/claude-code-cli';
 import type { AgentEvent, AgentProvider } from '@/lib/agent-adapters/types';
+import { cleanExecutableSkillText } from '@/lib/workflow-skill-draft';
 
 export const runtime = 'nodejs';
 
@@ -21,6 +22,7 @@ interface SkillDefinition {
   tools?: string[];
   prompt_template?: string;
   skill_md?: string;
+  tuning_request?: string;
 }
 
 interface StepContext {
@@ -110,13 +112,13 @@ function isClaudeRuntimeSkillMisfire(message: ChatMessage) {
 
 function normalizeBattleFlowSkillReferences(content: string) {
   return content
-    .replace(/当前\s*Skill/g, '当前 BattleFlow 方法框架')
-    .replace(/当前\s*skill/gi, '当前 BattleFlow 方法框架')
-    .replace(/this\s+Skill/gi, 'this BattleFlow method package')
-    .replace(/current\s+Skill/gi, 'current BattleFlow method package')
-    .replace(/按\s*Skill\s*的要求/g, '按 BattleFlow 方法框架的要求')
-    .replace(/按当前\s*技能/g, '按当前 BattleFlow 方法框架')
-    .replace(/当前技能/g, '当前 BattleFlow 方法框架');
+    .replace(/当前\s*Skill/g, '当前工作流节点方法说明')
+    .replace(/当前\s*skill/gi, '当前工作流节点方法说明')
+    .replace(/this\s+Skill/gi, 'this workflow step instruction')
+    .replace(/current\s+Skill/gi, 'current workflow step instruction')
+    .replace(/按\s*Skill\s*的要求/g, '按当前工作流节点方法说明的要求')
+    .replace(/按当前\s*技能/g, '按当前工作流节点方法说明')
+    .replace(/当前技能/g, '当前工作流节点方法说明');
 }
 
 function prepareMessagesForClaudeCodeCli(messages: ChatMessage[], hasWorkflowMethodPackage: boolean) {
@@ -234,7 +236,15 @@ async function retrieveKnowledgeContext(
 }
 
 function buildSystemPrompt(body: Record<string, unknown>) {
-  const skillDefinition = body.skill_definition as SkillDefinition | undefined;
+  const rawSkillDefinition = body.skill_definition as SkillDefinition | undefined;
+  const skillDefinition = rawSkillDefinition
+    ? {
+      ...rawSkillDefinition,
+      methodology: cleanExecutableSkillText(rawSkillDefinition.methodology, '', rawSkillDefinition.tuning_request),
+      prompt_template: cleanExecutableSkillText(rawSkillDefinition.prompt_template, '', rawSkillDefinition.tuning_request),
+      skill_md: cleanExecutableSkillText(rawSkillDefinition.skill_md, '', rawSkillDefinition.tuning_request),
+    }
+    : undefined;
   const stepContext = Array.isArray(body.step_context) ? body.step_context as StepContext[] : [];
   const selectedKnowledgeBases = Array.isArray(body.selected_knowledge_bases)
     ? body.selected_knowledge_bases as KnowledgeBaseContext[]

@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { cleanExecutableSkillText } from './workflow-skill-draft';
 
 const execFile = promisify(execFileCallback);
 
@@ -87,6 +88,7 @@ export interface WorkflowSkillReviewInput {
   tags?: string[];
   prompt_template?: string;
   skill_md?: string;
+  tuning_request?: string;
   change_summary?: string;
   validation_note?: string;
   note?: string;
@@ -833,15 +835,16 @@ export async function createWorkflowSkillReview(input: WorkflowSkillReviewInput)
     input.note?.trim(),
     `来源工作流：${input.workflowName || input.workflowId}`,
     `验证步骤：${input.stepName || input.stepId}`,
+    input.tuning_request?.trim() ? `调优意图：${input.tuning_request.trim()}` : '',
     input.validation_note?.trim() ? `验证说明：${input.validation_note.trim()}` : '',
     changeSummary ? `修改摘要：${changeSummary}` : '',
   ].filter(Boolean).join('\n');
   const definition = {
-    methodology: input.methodology || baseSkill?.methodology || '',
+    methodology: cleanExecutableSkillText(input.methodology, baseSkill?.methodology || '', input.tuning_request),
     tools: input.tools || baseSkill?.tools || [],
     outputs: input.outputs || baseSkill?.outputs || {},
     checklist: input.checklist || baseSkill?.checklist || [],
-    prompt_template: input.prompt_template || baseSkill?.prompt_template || '',
+    prompt_template: cleanExecutableSkillText(input.prompt_template, baseSkill?.prompt_template || '', input.tuning_request),
   };
   const meta = {
     id: skillId,
@@ -855,7 +858,11 @@ export async function createWorkflowSkillReview(input: WorkflowSkillReviewInput)
     source_uri: `workflow://${input.workflowId}/${input.stepId}/${input.draftId}`,
     definition,
   };
-  const skillMd = input.skill_md?.trim() || baseSkill?.skill_md || `# ${meta.name}\n\n${meta.description}`;
+  const skillMd = cleanExecutableSkillText(
+    input.skill_md,
+    baseSkill?.skill_md || `# ${meta.name}\n\n${meta.description}`,
+    input.tuning_request,
+  );
 
   const reviewSkill: SkillRecord = {
     id: skillId,

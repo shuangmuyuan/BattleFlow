@@ -27,6 +27,7 @@ import {
   CompactMarkdown,
   compactMarkdownPreview,
 } from '@/components/battleflow/compact-markdown';
+import { cleanExecutableSkillText } from '@/lib/workflow-skill-draft';
 import {
   Dialog,
   DialogContent,
@@ -76,6 +77,7 @@ interface Skill {
   version?: string;
   prompt_template?: string;
   skill_md?: string;
+  tuning_request?: string;
   scope?: 'personal' | 'team' | 'official';
   status?: 'imported' | 'pending_review' | 'published' | 'rejected' | 'archived';
   updated_at?: string;
@@ -177,6 +179,7 @@ interface WorkflowSkillDraft {
   tags: string[];
   prompt_template?: string;
   skill_md: string;
+  tuning_request?: string;
   change_summary: string;
   change_items?: string[];
   validation_note?: string;
@@ -812,13 +815,14 @@ export default function WorkflowsPage() {
       id: `${draft.baseSkillId}__draft__${draft.id}`,
       name: `${draft.name}（调优草稿）`,
       description: draft.description,
-      methodology: draft.methodology,
       tools: draft.tools,
       outputs: draft.outputs,
       checklist: draft.checklist,
       tags: draft.tags,
-      prompt_template: draft.prompt_template,
-      skill_md: draft.skill_md,
+      methodology: cleanExecutableSkillText(draft.methodology, baseSkill?.methodology || '', draft.tuning_request),
+      prompt_template: cleanExecutableSkillText(draft.prompt_template, baseSkill?.prompt_template || '', draft.tuning_request),
+      skill_md: cleanExecutableSkillText(draft.skill_md, baseSkill?.skill_md || '', draft.tuning_request),
+      tuning_request: draft.tuning_request,
       scope: 'personal',
       status: 'imported',
     };
@@ -1046,6 +1050,7 @@ export default function WorkflowsPage() {
             tools: skillDef.tools,
             prompt_template: skillDef.prompt_template,
             skill_md: skillDef.skill_md,
+            tuning_request: 'tuning_request' in skillDef ? skillDef.tuning_request : undefined,
           } : undefined,
           step_context: autoInjectedStepOutputs.map((step) => ({
             step_name: step.name,
@@ -3412,6 +3417,14 @@ export default function WorkflowsPage() {
                               />
                             </div>
                           </div>
+                          {currentSkillDraft.tuning_request && (
+                            <div className="rounded-lg border border-border/60 bg-background/60 p-3">
+                              <p className="text-[11px] font-medium">调优意图</p>
+                              <p className="mt-1 line-clamp-3 text-[11px] leading-5 text-muted-foreground">
+                                {currentSkillDraft.tuning_request}
+                              </p>
+                            </div>
+                          )}
                           <div className="space-y-2">
                             {(currentSkillDraft.change_items?.length ? currentSkillDraft.change_items : [currentSkillDraft.change_summary])
                               .slice(0, 5)

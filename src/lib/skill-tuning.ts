@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { SkillRecord } from './skill-registry';
+import { cleanExecutableSkillText } from './workflow-skill-draft';
 
 interface ClaudeCodeStreamEvent {
   type?: string;
@@ -51,6 +52,7 @@ export interface GeneratedWorkflowSkillDraft {
   tags: string[];
   prompt_template?: string;
   skill_md: string;
+  tuning_request: string;
   change_summary: string;
   change_items: string[];
   validation_note?: string;
@@ -73,6 +75,7 @@ interface RawGeneratedDraft {
   tags?: unknown;
   prompt_template?: unknown;
   skill_md?: unknown;
+  tuning_request?: unknown;
   change_summary?: unknown;
   change_items?: unknown;
   validation_note?: unknown;
@@ -186,6 +189,7 @@ function extractGeneratedDraft(text: string): RawGeneratedDraft {
       tags: parseSectionList(extractSectionValue(sections, 'TAGS')),
       prompt_template: extractSectionValue(sections, 'PROMPT_TEMPLATE'),
       skill_md: extractSectionValue(sections, 'SKILL_MD'),
+      tuning_request: extractSectionValue(sections, 'TUNING_REQUEST'),
       change_summary: extractSectionValue(sections, 'CHANGE_SUMMARY'),
       change_items: parseSectionList(extractSectionValue(sections, 'CHANGE_ITEMS')),
       validation_note: extractSectionValue(sections, 'VALIDATION_NOTE'),
@@ -353,10 +357,12 @@ function buildPrompt(input: GenerateWorkflowSkillDraftInput) {
     '要求：',
     '1. 保留基线 Skill 的核心身份和适用边界，只针对用户调优目标做必要修改。',
     '2. 输出必须能直接作为 Skill 使用，包含完整 skill_md 和 prompt_template。',
-    '3. 不要编造工具能力；tools 默认沿用基线，只有在调优目标明确要求时才调整。',
-    '4. change_items 应该是 3-6 条面向审核人的具体变更点。',
-    '5. quality_gates 应该是验证这个草稿是否生效的检查点。',
-    '6. 只返回下方固定分区格式，不要 Markdown 代码块，不要解释文字。',
+    '3. 严格隔离“调优请求”和“执行态 Skill 定义”：调优请求只放入 TUNING_REQUEST / CHANGE_SUMMARY / CHANGE_ITEMS，不得复制到 METHODOLOGY、PROMPT_TEMPLATE、SKILL_MD。',
+    '4. METHODOLOGY、PROMPT_TEMPLATE、SKILL_MD 必须像正式团队 Skill 一样描述执行方法，不要出现“分析当前 Skill”“调优目标”“验证此调优草稿”“工作流调优要求”等元话语。',
+    '5. 不要编造工具能力；tools 默认沿用基线，只有在调优目标明确要求时才调整。',
+    '6. change_items 应该是 3-6 条面向审核人的具体变更点。',
+    '7. quality_gates 应该是验证这个草稿是否生效的检查点。',
+    '8. 只返回下方固定分区格式，不要 Markdown 代码块，不要解释文字。',
     '',
     '固定分区格式：',
     '=== NAME ===',
@@ -377,6 +383,8 @@ function buildPrompt(input: GenerateWorkflowSkillDraftInput) {
     '完整提示词模板',
     '=== SKILL_MD ===',
     '完整 SKILL.md 内容',
+    '=== TUNING_REQUEST ===',
+    '用户原始调优请求，仅作为元数据',
     '=== CHANGE_SUMMARY ===',
     '一段审核摘要',
     '=== CHANGE_ITEMS ===',
@@ -430,10 +438,20 @@ export async function generateWorkflowSkillDraft(input: GenerateWorkflowSkillDra
   }
   const now = new Date().toISOString();
   const baseSkill = input.baseSkill;
-  const skillMd = asString(rawDraft.skill_md, baseSkill.skill_md);
+  const tuningRequest = asString(rawDraft.tuning_request, instruction) || instruction;
+  const skillMd = cleanExecutableSkillText(asString(rawDraft.skill_md, baseSkill.skill_md), baseSkill.skill_md, tuningRequest);
   if (!skillMd.trim()) throw new Error('Generated draft is missing skill_md');
 
-  const promptTemplate = asString(rawDraft.prompt_template, baseSkill.prompt_template || '');
+  const promptTemplate = cleanExecutableSkillText(
+    asString(rawDraft.prompt_template, baseSkill.prompt_template || ''),
+    baseSkill.prompt_template || '',
+    tuningRequest,
+  );
+  const methodology = cleanExecutableSkillText(
+    asString(rawDraft.methodology, baseSkill.methodology),
+    baseSkill.methodology,
+    tuningRequest,
+  );
   const changeItems = asStringArray(rawDraft.change_items, []);
   const qualityGates = asStringArray(rawDraft.quality_gates, []);
   const checklist = Array.from(new Set([
@@ -452,13 +470,14 @@ export async function generateWorkflowSkillDraft(input: GenerateWorkflowSkillDra
     baseSkillVersion: baseSkill.version,
     name: asString(rawDraft.name, baseSkill.name),
     description: asString(rawDraft.description, baseSkill.description),
-    methodology: asString(rawDraft.methodology, baseSkill.methodology),
+    methodology,
     tools: asStringArray(rawDraft.tools, baseSkill.tools),
     outputs: asRecord(rawDraft.outputs, baseSkill.outputs),
     checklist,
     tags,
     prompt_template: promptTemplate || undefined,
     skill_md: skillMd,
+    tuning_request: tuningRequest,
     change_summary: asString(rawDraft.change_summary, changeItems.join('\n') || instruction),
     change_items: changeItems.length > 0 ? changeItems : [instruction],
     validation_note: asString(rawDraft.validation_note, `在工作流「${input.workflowName}」的「${input.stepName}」节点验证。`),

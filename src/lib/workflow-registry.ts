@@ -1,5 +1,6 @@
 import { promises as fs } from 'fs';
 import path from 'path';
+import { cleanExecutableSkillText } from './workflow-skill-draft';
 
 export type WorkflowStatus = 'draft' | 'in_progress' | 'completed';
 export type WorkflowStepStatus = 'pending' | 'in_progress' | 'completed';
@@ -113,6 +114,7 @@ export interface WorkflowSkillDraftRecord {
   tags: string[];
   prompt_template?: string;
   skill_md: string;
+  tuning_request?: string;
   change_summary: string;
   change_items?: string[];
   validation_note?: string;
@@ -376,13 +378,16 @@ function normalizeSkillDrafts(value: unknown): Record<string, WorkflowSkillDraft
           baseSkillVersion: typeof draft.baseSkillVersion === 'string' ? draft.baseSkillVersion : undefined,
           name: draft.name || '未命名 Skill 草稿',
           description: draft.description || '',
-          methodology: draft.methodology || '',
+          methodology: cleanExecutableSkillText(draft.methodology, '', draft.tuning_request),
           tools: normalizeStringArray(draft.tools),
           outputs: normalizeUnknownRecord(draft.outputs),
           checklist: normalizeStringArray(draft.checklist),
           tags: normalizeStringArray(draft.tags),
-          prompt_template: typeof draft.prompt_template === 'string' ? draft.prompt_template : undefined,
-          skill_md: draft.skill_md || '',
+          prompt_template: typeof draft.prompt_template === 'string'
+            ? cleanExecutableSkillText(draft.prompt_template, '', draft.tuning_request)
+            : undefined,
+          skill_md: cleanExecutableSkillText(draft.skill_md, '', draft.tuning_request),
+          tuning_request: typeof draft.tuning_request === 'string' ? draft.tuning_request : undefined,
           change_summary: draft.change_summary || '工作流内调优草稿。',
           change_items: normalizeStringArray(draft.change_items),
           validation_note: typeof draft.validation_note === 'string' ? draft.validation_note : undefined,

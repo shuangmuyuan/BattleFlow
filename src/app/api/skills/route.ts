@@ -183,6 +183,7 @@ export async function POST(request: NextRequest) {
         tags: Array.isArray(draft.tags) ? draft.tags.filter((item: unknown): item is string => typeof item === 'string') : [],
         prompt_template: typeof draft.prompt_template === 'string' ? draft.prompt_template : undefined,
         skill_md: typeof draft.skill_md === 'string' ? draft.skill_md : undefined,
+        tuning_request: typeof draft.tuning_request === 'string' ? draft.tuning_request : undefined,
         change_summary: typeof draft.change_summary === 'string' ? draft.change_summary : undefined,
         validation_note: typeof draft.validation_note === 'string' ? draft.validation_note : undefined,
         note: typeof body.note === 'string' ? body.note : undefined,
