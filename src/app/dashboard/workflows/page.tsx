@@ -15,6 +15,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
@@ -35,6 +36,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import {
   Plus,
   Play,
@@ -218,6 +229,9 @@ interface ChatMessage {
 }
 
 type ChatPersistenceStatus = 'idle' | 'streaming' | 'saving' | 'saved' | 'failed';
+type DeleteTarget =
+  | { type: 'workspace'; id: string; name: string; workflowCount: number }
+  | { type: 'workflow'; id: string; name: string; workspaceId: string };
 
 const chatErrorFallbackContent = '抱歉，对话出现了问题，请重试。';
 const claudeRuntimeSkillMisfireMarkers = [
@@ -392,6 +406,8 @@ export default function WorkflowsPage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
+  const [isDeletingTarget, setIsDeletingTarget] = useState(false);
   const [editingWorkflowId, setEditingWorkflowId] = useState<string | null>(null);
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
   const [newWorkspaceDesc, setNewWorkspaceDesc] = useState('');
@@ -1352,9 +1368,6 @@ export default function WorkflowsPage() {
   };
 
   const handleDeleteWorkspace = async (workspaceId: string) => {
-    const workflowCount = workflows.filter((workflow) => workflow.workspaceId === workspaceId).length;
-    if (workflowCount > 0 || workspaces.length <= 1) return;
-
     try {
       setErrorMessage('');
       const response = await fetch('/api/workflows', {
@@ -1365,6 +1378,17 @@ export default function WorkflowsPage() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || '删除工作目录失败');
 
+      const deletedWorkflowIds = new Set(
+        workflows
+          .filter((workflow) => workflow.workspaceId === workspaceId)
+          .map((workflow) => workflow.id),
+      );
+      setWorkflows((prev) => prev.filter((workflow) => workflow.workspaceId !== workspaceId));
+      if (activeWorkflow && deletedWorkflowIds.has(activeWorkflow.id)) {
+        setActiveWorkflow(null);
+        setActiveStepIndex(-1);
+        setChatMessages([]);
+      }
       setWorkspaces((prev) => {
         const next = prev.filter((workspace) => workspace.id !== workspaceId);
         if (activeWorkspaceId === workspaceId) {
@@ -1378,6 +1402,43 @@ export default function WorkflowsPage() {
     } catch (error) {
       console.error('Delete workspace error:', error);
       setErrorMessage(error instanceof Error ? error.message : '删除工作目录失败');
+    }
+  };
+
+  const handleDeleteWorkflow = async (workflowId: string) => {
+    try {
+      setErrorMessage('');
+      const response = await fetch(`/api/workflows?id=${encodeURIComponent(workflowId)}`, {
+        method: 'DELETE',
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '删除工作流失败');
+
+      setWorkflows((prev) => prev.filter((workflow) => workflow.id !== workflowId));
+      if (activeWorkflow?.id === workflowId) {
+        setActiveWorkflow(null);
+        setActiveStepIndex(-1);
+        setChatMessages([]);
+      }
+    } catch (error) {
+      console.error('Delete workflow error:', error);
+      setErrorMessage(error instanceof Error ? error.message : '删除工作流失败');
+    }
+  };
+
+  const handleConfirmDeleteTarget = async () => {
+    if (!deleteTarget || isDeletingTarget) return;
+
+    setIsDeletingTarget(true);
+    try {
+      if (deleteTarget.type === 'workspace') {
+        await handleDeleteWorkspace(deleteTarget.id);
+      } else {
+        await handleDeleteWorkflow(deleteTarget.id);
+      }
+      setDeleteTarget(null);
+    } finally {
+      setIsDeletingTarget(false);
     }
   };
 
@@ -1551,12 +1612,58 @@ export default function WorkflowsPage() {
                   {wf.description || '未填写工作流说明'}
                 </p>
               </div>
-              <StatusBadge
-                className="shrink-0"
-                tone={wf.status === 'completed' ? 'success' : wf.status === 'in_progress' ? 'brand' : 'neutral'}
-              >
-                {wf.status === 'completed' ? '已完成' : wf.status === 'in_progress' ? '进行中' : '草稿'}
-              </StatusBadge>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <StatusBadge
+                  tone={wf.status === 'completed' ? 'success' : wf.status === 'in_progress' ? 'brand' : 'neutral'}
+                >
+                  {wf.status === 'completed' ? '已完成' : wf.status === 'in_progress' ? '进行中' : '草稿'}
+                </StatusBadge>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 text-muted-foreground"
+                      aria-label={`${wf.name} 更多操作`}
+                    >
+                      <MoreHorizontal className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-40">
+                    <DropdownMenuItem
+                      onSelect={() => openWorkflow(wf)}
+                    >
+                      <Play className="h-4 w-4" />
+                      进入工作流
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={() => handleOpenEditWorkflow(wf)}
+                    >
+                      <Pencil className="h-4 w-4" />
+                      编辑信息
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={() => handleCloneWorkflow(wf)}
+                    >
+                      <Copy className="h-4 w-4" />
+                      克隆工作流
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      variant="destructive"
+                      onSelect={() => setDeleteTarget({
+                        type: 'workflow',
+                        id: wf.id,
+                        name: wf.name,
+                        workspaceId: wf.workspaceId,
+                      })}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      删除工作流
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
             </div>
             <div className="grid grid-cols-3 gap-2">
               <Button
@@ -1698,10 +1805,6 @@ export default function WorkflowsPage() {
                       const count = workspaceWorkflowList.length;
                       const inProgressCount = workspaceWorkflowList.filter((workflow) => workflow.status === 'in_progress').length;
                       const completedCount = workspaceWorkflowList.filter((workflow) => workflow.status === 'completed').length;
-                      const canDeleteWorkspace = count === 0 && workspaces.length > 1;
-                      const deleteDisabledReason = count > 0
-                        ? '已有流程，不能删除'
-                        : '至少保留一个目录';
                       const latestUpdatedAt = [workspace.updated_at, ...workspaceWorkflowList.map((workflow) => workflow.updated_at)]
                         .filter(Boolean)
                         .sort((a, b) => String(b).localeCompare(String(a)))[0];
@@ -1735,20 +1838,18 @@ export default function WorkflowsPage() {
                                     </Button>
                                   </DropdownMenuTrigger>
                                   <DropdownMenuContent align="end" className="w-44">
-                                    {canDeleteWorkspace ? (
-                                      <DropdownMenuItem
-                                        variant="destructive"
-                                        onSelect={() => handleDeleteWorkspace(workspace.id)}
-                                      >
-                                        <Trash2 className="h-4 w-4" />
-                                        删除目录
-                                      </DropdownMenuItem>
-                                    ) : (
-                                      <DropdownMenuItem disabled>
-                                        <Trash2 className="h-4 w-4" />
-                                        {deleteDisabledReason}
-                                      </DropdownMenuItem>
-                                    )}
+                                    <DropdownMenuItem
+                                      variant="destructive"
+                                      onSelect={() => setDeleteTarget({
+                                        type: 'workspace',
+                                        id: workspace.id,
+                                        name: workspace.name,
+                                        workflowCount: count,
+                                      })}
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                      删除目录
+                                    </DropdownMenuItem>
                                   </DropdownMenuContent>
                                 </DropdownMenu>
                               </div>
@@ -2172,6 +2273,57 @@ export default function WorkflowsPage() {
             )}
           </DialogContent>
         </Dialog>
+
+        <AlertDialog
+          open={Boolean(deleteTarget)}
+          onOpenChange={(open) => {
+            if (!open && !isDeletingTarget) setDeleteTarget(null);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {deleteTarget?.type === 'workspace' ? '删除工作目录' : '删除工作流'}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {deleteTarget?.type === 'workspace' ? (
+                  <>
+                    将删除「{deleteTarget.name}」目录
+                    {deleteTarget.workflowCount > 0 ? `，并同时删除其中 ${deleteTarget.workflowCount} 个工作流` : ''}
+                    。该操作会移除相关步骤、对话记录、产物和调优草稿，删除后不可恢复。
+                  </>
+                ) : (
+                  <>
+                    将删除「{deleteTarget?.name}」工作流。该操作会移除相关步骤、对话记录、产物和调优草稿，删除后不可恢复。
+                  </>
+                )}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isDeletingTarget}>取消</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                disabled={isDeletingTarget}
+                onClick={(event) => {
+                  event.preventDefault();
+                  void handleConfirmDeleteTarget();
+                }}
+              >
+                {isDeletingTarget ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    删除中
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4" />
+                    确认删除
+                  </>
+                )}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     );
   }

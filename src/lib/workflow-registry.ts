@@ -510,12 +510,12 @@ export async function createWorkspace(input: { name: string; description?: strin
 
 export async function deleteWorkspace(id: string) {
   const store = await readStore();
-  const workflowCount = store.workflows.filter((workflow) => workflow.workspaceId === id).length;
-  if (workflowCount > 0) throw new Error('Workspace has workflows and cannot be deleted');
   const nextWorkspaces = store.workspaces.filter((workspace) => workspace.id !== id);
   if (nextWorkspaces.length === store.workspaces.length) throw new Error(`Workspace not found: ${id}`);
-  await writeStore({ ...store, workspaces: nextWorkspaces });
-  return { success: true };
+  const nextWorkflows = store.workflows.filter((workflow) => workflow.workspaceId !== id);
+  const deletedWorkflowCount = store.workflows.length - nextWorkflows.length;
+  await writeStore({ ...store, workspaces: nextWorkspaces, workflows: nextWorkflows });
+  return { success: true, deletedWorkflowCount };
 }
 
 export async function createWorkflow(input: CreateWorkflowInput) {
