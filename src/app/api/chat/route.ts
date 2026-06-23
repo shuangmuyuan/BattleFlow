@@ -80,6 +80,9 @@ const CLAUDE_RUNTIME_SKILL_MISFIRE_MARKERS = [
   '无法猜测或自行发明技能名称',
 ];
 
+const MAX_UPLOADED_FILE_PROMPT_CHARS = 16_000;
+const MAX_TOTAL_UPLOADED_FILES_PROMPT_CHARS = 36_000;
+
 function sse(payload: Record<string, unknown>) {
   return `data: ${JSON.stringify(payload)}\n\n`;
 }
@@ -103,6 +106,27 @@ function getNumber(value: unknown) {
 
 function truncateForPrompt(value: string, maxLength: number) {
   return value.length > maxLength ? `${value.slice(0, maxLength)}\n...（已截断）` : value;
+}
+
+function slicePromptTextWithMiddleOmission(value: string, maxLength: number) {
+  if (value.length <= maxLength) {
+    return { text: value, truncated: false };
+  }
+
+  const headLength = Math.floor(maxLength * 0.72);
+  const tailLength = Math.max(maxLength - headLength, 0);
+  const omitted = value.length - headLength - tailLength;
+
+  return {
+    text: [
+      value.slice(0, headLength),
+      '',
+      `...（中间省略 ${omitted.toLocaleString('zh-CN')} 字符；如需完整文件，请拆分关键段落后重新上传）...`,
+      '',
+      tailLength > 0 ? value.slice(-tailLength) : '',
+    ].filter(Boolean).join('\n'),
+    truncated: true,
+  };
 }
 
 function isClaudeRuntimeSkillMisfire(message: ChatMessage) {
@@ -333,10 +357,25 @@ function buildSystemPrompt(body: Record<string, unknown>) {
 
   if (uploadedFiles.length > 0) {
     systemPrompt += '\n\n## Uploaded Context Files\n';
+    let remainingUploadedFileBudget = MAX_TOTAL_UPLOADED_FILES_PROMPT_CHARS;
     for (const file of uploadedFiles) {
       systemPrompt += `\n### ${file.name || '未命名文件'}\n类型：${file.type || 'unknown'}；大小：${file.size || 0} bytes\n`;
       if (file.contentKind === 'text' && file.content) {
-        systemPrompt += `${file.content}\n`;
+        if (remainingUploadedFileBudget <= 0) {
+          systemPrompt += `本轮上传文件正文已达到 ${MAX_TOTAL_UPLOADED_FILES_PROMPT_CHARS.toLocaleString('zh-CN')} 字符预算，当前文件仅保留元信息。\n`;
+          continue;
+        }
+
+        const fileBudget = Math.min(MAX_UPLOADED_FILE_PROMPT_CHARS, remainingUploadedFileBudget);
+        const sliced = slicePromptTextWithMiddleOmission(file.content, fileBudget);
+        systemPrompt += `${sliced.text}\n`;
+        if (sliced.truncated || file.note) {
+          systemPrompt += `\n注：${[
+            sliced.truncated ? `该文件正文已按 ${fileBudget.toLocaleString('zh-CN')} 字符预算截取。` : '',
+            file.note || '',
+          ].filter(Boolean).join(' ')}\n`;
+        }
+        remainingUploadedFileBudget -= sliced.text.length;
       } else if (file.note) {
         systemPrompt += `${file.note}\n`;
       }

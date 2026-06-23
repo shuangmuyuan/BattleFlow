@@ -234,6 +234,7 @@ type DeleteTarget =
   | { type: 'workflow'; id: string; name: string; workspaceId: string };
 
 const chatErrorFallbackContent = '抱歉，对话出现了问题，请重试。';
+const chatErrorFallbackPrefix = '抱歉，对话出现了问题';
 const claudeRuntimeSkillMisfireMarkers = [
   '/<skill-name>',
   'system-reminder',
@@ -262,7 +263,13 @@ function hasConfirmableAssistantMessage(messages: ChatMessage[]) {
   const lastAssistantMessage = getLastAssistantMessage(messages);
   const content = lastAssistantMessage?.content.trim() || '';
 
-  return content.length > 0 && content !== chatErrorFallbackContent;
+  return content.length > 0 && !content.startsWith(chatErrorFallbackPrefix);
+}
+
+function getChatErrorContent(error: unknown) {
+  const message = error instanceof Error ? error.message.trim() : '';
+  if (!message || message === 'Chat request failed') return chatErrorFallbackContent;
+  return `${chatErrorFallbackPrefix}：${message}。`;
 }
 
 interface KnowledgeBaseOption {
@@ -341,7 +348,7 @@ const defaultContextSelection: WorkflowContextSelection = {
   disabledAutoInjectedStepIds: [],
 };
 
-const maxTextContextChars = 120_000;
+const maxTextContextChars = 32_000;
 const maxPreviewImageBytes = 800_000;
 
 function isReadableTextFile(file: File) {
@@ -800,6 +807,93 @@ export default function WorkflowsPage() {
     URL.revokeObjectURL(url);
   };
 
+  const downloadMarkdownDocument = (fileNameBase: string, content: string) => {
+    const fileName = `${fileNameBase || 'Skill 输出文档'}.md`.replace(/[\\/:*?"<>|]/g, '-');
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const getMarkdownDocumentTitle = (content: string, fallback: string) => {
+    const heading = content.match(/^\s*#{1,3}\s+(.+)$/m)?.[1]?.trim();
+    if (heading) return heading.slice(0, 64);
+
+    const firstLine = content
+      .split('\n')
+      .map((line) => line.replace(/^[>\s#*-]+/, '').trim())
+      .find(Boolean);
+
+    return (firstLine || fallback).slice(0, 64);
+  };
+
+  const isAssistantDocumentLike = (content: string) => {
+    const value = content.trim();
+    if (value.length < 900) return false;
+    return (
+      /^#{1,3}\s+\S/m.test(value)
+      || /\n\|[^|\n]+\|[^|\n]+\|\n\|[\s:|-]+\|/.test(value)
+      || /(输出文档|最终产出|分析报告|需求说明书|规格说明书|Markdown 文档)/.test(value)
+    );
+  };
+
+  const renderAssistantDocumentCard = (content: string, messageIndex: number) => {
+    const documentContent = activeWorkflow && currentStep
+      ? normalizeSkillOutputDocument(activeWorkflow, currentStep, content)
+      : content.trim();
+    const title = getMarkdownDocumentTitle(documentContent, `${currentStep?.name || '当前步骤'} - Skill 输出文档`);
+
+    return (
+      <div
+        key={`assistant-document-${messageIndex}`}
+        className="w-full min-w-0 max-w-[min(100%,44rem)] overflow-hidden rounded-xl border border-border/50 bg-card shadow-sm"
+      >
+        <div className="flex min-w-0 items-center justify-between gap-3 border-b border-border/50 bg-muted/25 px-3 py-2.5">
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <FileText className="h-4 w-4" />
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold">{title}</p>
+              <p className="text-[11px] text-muted-foreground">
+                Markdown 文档 · {documentContent.length.toLocaleString('zh-CN')} 字符
+              </p>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0"
+              title="复制 Markdown"
+              onClick={() => navigator.clipboard.writeText(documentContent)}
+            >
+              <Copy className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0"
+              title="下载 Markdown"
+              onClick={() => downloadMarkdownDocument(title, documentContent)}
+            >
+              <Download className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </div>
+        <div className="max-h-[34rem] min-w-0 overflow-y-auto p-4">
+          <CompactMarkdown
+            content={documentContent}
+            className="text-sm leading-6 [&_h2]:text-sm [&_h3]:text-xs [&_table]:text-[11px]"
+          />
+        </div>
+      </div>
+    );
+  };
+
   const getSavedStepOutputFileId = (stepId: string) => `saved-step-output-${stepId}`;
 
   const buildStepOutputMarkdown = (workflow: Workflow, step: WorkflowStep) => {
@@ -1125,7 +1219,7 @@ export default function WorkflowsPage() {
       console.error('Chat error:', error);
       const errorMessages: ChatMessage[] = [
         ...visibleMessages,
-        { role: 'assistant', content: chatErrorFallbackContent },
+        { role: 'assistant', content: getChatErrorContent(error) },
       ];
       setChatMessages(errorMessages);
       const workflowWithErrorMessages = saveStepChatMessages(workflow, currentStep.id, errorMessages, { persist: false });
@@ -3029,26 +3123,34 @@ export default function WorkflowsPage() {
             </div>
           ) : (
             <div className="min-w-0 max-w-full space-y-4 overflow-hidden">
-              {chatMessages.map((msg, idx) => (
-                <div
-                  key={idx}
-                  className={`flex min-w-0 max-w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
+              {chatMessages.map((msg, idx) => {
+                const renderDocumentCard = msg.role === 'assistant' && isAssistantDocumentLike(msg.content);
+
+                return (
                   <div
-                    className={`min-w-0 max-w-[min(100%,42rem)] overflow-hidden break-words rounded-lg p-3 text-sm md:max-w-[min(80%,42rem)] ${
-                      msg.role === 'user'
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-muted/50 border border-border/40'
-                    }`}
+                    key={idx}
+                    className={`flex min-w-0 max-w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                   >
-                    {msg.role === 'assistant' ? (
-                      <CompactMarkdown content={msg.content} />
+                    {renderDocumentCard ? (
+                      renderAssistantDocumentCard(msg.content, idx)
                     ) : (
-                      <div className="whitespace-pre-wrap">{msg.content}</div>
+                      <div
+                        className={`min-w-0 max-w-[min(100%,42rem)] overflow-hidden break-words rounded-lg p-3 text-sm md:max-w-[min(80%,42rem)] ${
+                          msg.role === 'user'
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-muted/50 border border-border/40'
+                        }`}
+                      >
+                        {msg.role === 'assistant' ? (
+                          <CompactMarkdown content={msg.content} />
+                        ) : (
+                          <div className="whitespace-pre-wrap">{msg.content}</div>
+                        )}
+                      </div>
                     )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
               {isStreaming && (
                 <div className="flex justify-start">
                   <div className="bg-muted/50 border border-border/40 rounded-lg p-3">

@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import { promises as fs } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import type { AgentEvent, AgentRuntimeStatus, AgentTurnInput } from './types';
 
 interface ClaudeCodeStreamEvent {
@@ -149,7 +152,7 @@ export async function checkClaudeCodeCliRuntime(): Promise<AgentRuntimeStatus> {
 export function streamClaudeCodeCliTurn(input: AgentTurnInput) {
   const command = getClaudeCommand();
   const prompt = buildConversationPrompt(input.messages);
-  const args = [
+  const baseArgs = [
     '-p',
     '--safe-mode',
     '--no-session-persistence',
@@ -165,16 +168,22 @@ export function streamClaudeCodeCliTurn(input: AgentTurnInput) {
     '',
     '--permission-mode',
     'dontAsk',
-    '--system-prompt',
-    input.systemPrompt,
-    prompt,
+    '--input-format',
+    'text',
   ];
 
   let child: ReturnType<typeof spawn> | null = null;
+  let promptTempDir: string | null = null;
   let streamClosed = false;
 
   return new ReadableStream<AgentEvent>({
-    start(controller) {
+    async start(controller) {
+      const cleanupPromptFile = () => {
+        if (!promptTempDir) return;
+        void fs.rm(promptTempDir, { recursive: true, force: true });
+        promptTempDir = null;
+      };
+
       const closeWith = (event: AgentEvent) => {
         if (streamClosed) return;
         streamClosed = true;
@@ -188,6 +197,7 @@ export function streamClaudeCodeCliTurn(input: AgentTurnInput) {
         } catch {
           // Ignore duplicate close attempts from child process shutdown races.
         }
+        cleanupPromptFile();
       };
 
       const emit = (event: AgentEvent) => {
@@ -199,14 +209,27 @@ export function streamClaudeCodeCliTurn(input: AgentTurnInput) {
         }
       };
 
-      child = spawn(command, args, {
-        cwd: getClaudeWorkspaceDir(),
-        env: {
-          ...process.env,
-          CI: '1',
-        },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+      try {
+        promptTempDir = await fs.mkdtemp(path.join(tmpdir(), 'battleflow-claude-'));
+        const systemPromptPath = path.join(promptTempDir, 'system-prompt.md');
+        await fs.writeFile(systemPromptPath, input.systemPrompt, 'utf8');
+
+        child = spawn(command, [...baseArgs, '--system-prompt-file', systemPromptPath], {
+          cwd: getClaudeWorkspaceDir(),
+          env: {
+            ...process.env,
+            CI: '1',
+          },
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        child.stdin?.end(prompt);
+      } catch (error) {
+        closeWith({
+          type: 'error',
+          error: error instanceof Error ? error.message : 'Failed to start Claude Code CLI',
+        });
+        return;
+      }
 
       emit({ type: 'session_status', status: 'starting' });
 
@@ -270,6 +293,7 @@ export function streamClaudeCodeCliTurn(input: AgentTurnInput) {
 
       child.on('close', (code) => {
         if (stdoutBuffer.trim()) handleLine(stdoutBuffer);
+        cleanupPromptFile();
         if (streamClosed) return;
         if (code && code !== 0) {
           closeWith({ type: 'error', error: stderrBuffer.trim() || `Claude Code CLI exited with code ${code}` });
@@ -284,11 +308,16 @@ export function streamClaudeCodeCliTurn(input: AgentTurnInput) {
       input.signal?.addEventListener('abort', () => {
         streamClosed = true;
         child?.kill('SIGTERM');
+        cleanupPromptFile();
       });
     },
     cancel() {
       streamClosed = true;
       child?.kill('SIGTERM');
+      if (promptTempDir) {
+        void fs.rm(promptTempDir, { recursive: true, force: true });
+        promptTempDir = null;
+      }
     },
   });
 }
