@@ -331,7 +331,7 @@ function getWorkflowExecutionGroups(steps: WorkflowStep[]): WorkflowExecutionGro
     if (runMode === 'parallel') {
       parallelGroupCounter += 1;
       groups.push({
-        id: step.parallelGroupId || `parallel-${parallelGroupCounter}`,
+        id: `parallel-${step.parallelGroupId || parallelGroupCounter}-${groups.length}`,
         runMode,
         stepIndex: step.step_index,
         steps: [step],
@@ -376,10 +376,10 @@ function normalizeWorkflowExecutionPlan(workflow: Workflow, updatedAt = new Date
     }
 
     const parallelGroupId = group.runMode === 'parallel'
-      ? group.steps[0]?.parallelGroupId || `parallel-${workflow.id}-${parallelGroupCounter}`
+      ? `parallel-${workflow.id}-${parallelGroupCounter}`
       : undefined;
     const parallelGroupName = group.runMode === 'parallel'
-      ? group.steps[0]?.parallelGroupName || `并行任务组 ${parallelGroupCounter}`
+      ? `并行任务组 ${parallelGroupCounter}`
       : undefined;
 
     return group.steps.map((step) => {
@@ -1813,11 +1813,18 @@ export default function WorkflowsPage() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || '创建工作流失败');
 
-      const createdWorkflow = normalizeWorkflowExecutionPlan(data.workflow as Workflow);
+      const rawCreatedWorkflow = data.workflow as Workflow;
+      const createdWorkflow = normalizeWorkflowExecutionPlan(
+        rawCreatedWorkflow,
+        rawCreatedWorkflow.updated_at || new Date().toISOString(),
+      );
       setWorkflows((prev) => [createdWorkflow, ...prev]);
       setActiveWorkflow(createdWorkflow);
       setActiveStepIndex(0);
       setChatMessages([]);
+      if (hasWorkflowExecutionPlanChanged(rawCreatedWorkflow, createdWorkflow)) {
+        void persistWorkflow(createdWorkflow);
+      }
       setCreateDialogOpen(false);
       setNewWorkflowName('');
       setNewWorkflowDesc('');
@@ -2861,10 +2868,13 @@ export default function WorkflowsPage() {
         summary: `${file.name}，${file.type || 'unknown'}，${formatFileSize(file.size)}`,
       }))
     );
-  const parallelPeerSteps = currentStep?.parallelGroupId
-    ? visibleWorkflowSteps.filter(
-        (step) => step.parallelGroupId === currentStep.parallelGroupId && step.id !== currentStep.id && step.output
-      )
+  const currentExecutionGroup = currentStep
+    ? getWorkflowExecutionGroups(visibleWorkflowSteps).find((group) => (
+      group.steps.some((step) => step.id === currentStep.id)
+    ))
+    : undefined;
+  const parallelPeerSteps = currentExecutionGroup?.runMode === 'parallel'
+    ? currentExecutionGroup.steps.filter((step) => step.id !== currentStep?.id && step.output)
     : [];
   const currentReviewedOutputFiles = currentStep
     ? reviewedOutputFiles.filter((file) => file.stepId === currentStep.id)
@@ -3194,7 +3204,7 @@ export default function WorkflowsPage() {
       updated_at: updatedAt,
     }));
   };
-  const workflowStepGroups = getWorkflowExecutionGroups(visibleWorkflowSteps).map((group) => group.steps);
+  const workflowStepGroups = getWorkflowExecutionGroups(visibleWorkflowSteps);
   const toggleOutputExpanded = (stepId: string) => {
     setExpandedOutputIds((prev) => ({
       ...prev,
@@ -3291,28 +3301,29 @@ export default function WorkflowsPage() {
         <ScrollArea className="min-h-0 flex-1">
           <div className="flex flex-col gap-3 p-4">
             {workflowStepGroups.map((group) => {
-              const isParallelGroup = group.length > 1;
-              const groupCompletedCount = group.filter((step) => step.status === 'completed').length;
+              const groupSteps = group.steps;
+              const isParallelGroup = group.runMode === 'parallel' && groupSteps.length > 1;
+              const groupCompletedCount = groupSteps.filter((step) => step.status === 'completed').length;
 
               return (
                 <div
-                  key={isParallelGroup ? group[0].parallelGroupId : group[0].id}
+                  key={group.id}
                   className={isParallelGroup ? 'rounded-xl border border-border/50 bg-muted/20 p-2' : ''}
                 >
                   {isParallelGroup && (
                     <div className="flex min-w-0 items-center justify-between gap-2 px-2 pb-2">
                       <div className="min-w-0">
-                        <p className="text-xs font-medium text-muted-foreground">{group[0].parallelGroupName || '并行任务组'}</p>
+                        <p className="text-xs font-medium text-muted-foreground">{groupSteps[0].parallelGroupName || '并行任务组'}</p>
                         <p className="text-[11px] text-muted-foreground/80">可自由切换并行推进</p>
                       </div>
                       <Badge variant="outline" className="text-[11px]">
-                        并行 {groupCompletedCount}/{group.length}
+                        并行 {groupCompletedCount}/{groupSteps.length}
                       </Badge>
                     </div>
                   )}
 
                   <div className="flex flex-col gap-1">
-                    {group.map((step) => {
+                    {groupSteps.map((step) => {
                       const idx = visibleWorkflowSteps.findIndex((item) => item.id === step.id);
                       const isActive = idx === activeStepIndex;
                       const isDisabled = step.status === 'pending' && !isActive;
