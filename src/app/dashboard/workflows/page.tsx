@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { ClipboardEvent } from 'react';
+import type { ClipboardEvent, KeyboardEvent } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -74,6 +74,7 @@ import {
   MoreHorizontal,
   GitCompareArrows,
   ShieldCheck,
+  CircleStop,
 } from 'lucide-react';
 
 interface Skill {
@@ -248,6 +249,7 @@ type DeleteTarget =
 
 const chatErrorFallbackContent = '抱歉，对话出现了问题，请重试。';
 const chatErrorFallbackPrefix = '抱歉，对话出现了问题';
+const chatCancelledContent = '已终止本次生成。';
 const claudeRuntimeSkillMisfireMarkers = [
   '/<skill-name>',
   'system-reminder',
@@ -275,7 +277,11 @@ function getLastAssistantMessage(messages: ChatMessage[]) {
 function getLastConfirmableAssistantMessage(messages: ChatMessage[]) {
   const lastAssistantMessage = getLastAssistantMessage(messages);
   const content = lastAssistantMessage?.content.trim() || '';
-  if (!content || content.startsWith(chatErrorFallbackPrefix)) return undefined;
+  if (
+    !content
+    || content.startsWith(chatErrorFallbackPrefix)
+    || content.startsWith(chatCancelledContent)
+  ) return undefined;
   return lastAssistantMessage;
 }
 
@@ -297,6 +303,12 @@ async function getChatResponseError(response: Response) {
     // The response might be an interrupted SSE stream or a non-JSON error page.
   }
   return 'Chat request failed';
+}
+
+function isAbortError(error: unknown) {
+  if (!error || typeof error !== 'object') return false;
+  const maybeError = error as { name?: unknown };
+  return maybeError.name === 'AbortError';
 }
 
 interface KnowledgeBaseOption {
@@ -473,6 +485,7 @@ export default function WorkflowsPage() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const reviewedOutputInputRef = useRef<HTMLInputElement>(null);
+  const activeChatRequestRef = useRef<AbortController | null>(null);
 
   const getVisibleSteps = (workflow: Workflow) => workflow.steps.filter((step) => !step.isRemoved);
 
@@ -697,6 +710,11 @@ export default function WorkflowsPage() {
     loadKnowledgeBases();
   }, [loadKnowledgeBases]);
 
+  useEffect(() => () => {
+    activeChatRequestRef.current?.abort();
+    activeChatRequestRef.current = null;
+  }, []);
+
   // Auto-scroll chat
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -768,7 +786,7 @@ export default function WorkflowsPage() {
   }, [updateActiveWorkflow]);
 
 
-  const handlePasteContextFiles = useCallback((event: ClipboardEvent<HTMLInputElement>) => {
+  const handlePasteContextFiles = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
     const files = Array.from(event.clipboardData.files);
     if (files.length > 0) {
       void addUploadedContextFiles(files);
@@ -1166,6 +1184,9 @@ export default function WorkflowsPage() {
     setChatMessages(visibleMessages);
     saveStepChatMessages(workflow, currentStep.id, visibleMessages, { persist: false });
     setStepChatPersistenceStatus(currentStep.id, 'streaming');
+    const controller = new AbortController();
+    activeChatRequestRef.current = controller;
+    let assistantContent = '';
     setIsStreaming(true);
 
     try {
@@ -1202,6 +1223,7 @@ export default function WorkflowsPage() {
           selected_review_materials: [...selectedReviewMaterials, ...selectedUploadedReviewMaterials],
           uploaded_files: currentStepContextFiles.map(({ previewUrl, ...file }) => file),
         }),
+        signal: controller.signal,
       });
 
       if (!response.ok) throw new Error(await getChatResponseError(response));
@@ -1209,7 +1231,6 @@ export default function WorkflowsPage() {
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let assistantContent = '';
 
       setChatMessages([...visibleMessages, { role: 'assistant', content: '' }]);
 
@@ -1248,6 +1269,19 @@ export default function WorkflowsPage() {
       const savedWorkflow = await persistWorkflow(workflowWithFinalMessages);
       setStepChatPersistenceStatus(currentStep.id, savedWorkflow ? 'saved' : 'failed');
     } catch (error) {
+      if (isAbortError(error)) {
+        const cancelledMessages: ChatMessage[] = [
+          ...visibleMessages,
+          { role: 'assistant', content: chatCancelledContent },
+        ];
+        setChatMessages(cancelledMessages);
+        const workflowWithCancelledMessages = saveStepChatMessages(workflow, currentStep.id, cancelledMessages, { persist: false });
+        setStepChatPersistenceStatus(currentStep.id, 'saving');
+        const savedWorkflow = await persistWorkflow(workflowWithCancelledMessages);
+        setStepChatPersistenceStatus(currentStep.id, savedWorkflow ? 'saved' : 'failed');
+        return;
+      }
+
       console.error('Chat error:', error);
       const errorMessages: ChatMessage[] = [
         ...visibleMessages,
@@ -1259,6 +1293,9 @@ export default function WorkflowsPage() {
       const savedWorkflow = await persistWorkflow(workflowWithErrorMessages);
       setStepChatPersistenceStatus(currentStep.id, savedWorkflow ? 'saved' : 'failed');
     } finally {
+      if (activeChatRequestRef.current === controller) {
+        activeChatRequestRef.current = null;
+      }
       setIsStreaming(false);
     }
   }, [
@@ -1276,6 +1313,19 @@ export default function WorkflowsPage() {
     uploadedContextFiles,
     reviewedOutputFiles,
   ]);
+
+  const handleStopStreaming = useCallback(() => {
+    activeChatRequestRef.current?.abort();
+  }, []);
+
+  const handleChatInputKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) {
+      return;
+    }
+
+    event.preventDefault();
+    void handleSendMessage();
+  }, [handleSendMessage]);
 
   const deriveWorkflowStatus = (steps: WorkflowStep[]): Workflow['status'] => {
     const activeSteps = steps.filter((step) => !step.isRemoved);
@@ -3569,19 +3619,40 @@ export default function WorkflowsPage() {
             )}
           </div>
 
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <Input
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+            <Textarea
               placeholder="输入你的问题或指令..."
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
               onPaste={handlePasteContextFiles}
-              onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
+              onKeyDown={handleChatInputKeyDown}
               disabled={isStreaming}
-              className="min-w-0 flex-1"
+              rows={3}
+              className="max-h-40 min-h-20 min-w-0 flex-1 resize-none overflow-y-auto"
             />
-            <Button className="sm:w-auto" onClick={handleSendMessage} disabled={isStreaming || !chatInput.trim()}>
-              {isStreaming ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-            </Button>
+            {isStreaming ? (
+              <Button
+                type="button"
+                variant="outline"
+                className="gap-2 border-destructive/40 text-destructive hover:bg-destructive/10 sm:w-auto"
+                onClick={handleStopStreaming}
+                aria-label="终止当前任务"
+              >
+                <CircleStop className="h-4 w-4" />
+                终止
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                className="gap-2 sm:w-auto"
+                onClick={handleSendMessage}
+                disabled={!chatInput.trim()}
+                aria-label="发送消息"
+              >
+                <ArrowRight className="h-4 w-4" />
+                发送
+              </Button>
+            )}
           </div>
         </div>
       </div>
