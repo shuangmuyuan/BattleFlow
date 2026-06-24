@@ -418,6 +418,9 @@ function sortWorkflowSteps(steps: WorkflowStepRecord[]): WorkflowStepRecord[] {
   return steps
     .map((step, originalIndex) => ({ step, originalIndex }))
     .sort((a, b) => {
+      if (a.step.isRemoved !== b.step.isRemoved) {
+        return a.step.isRemoved ? 1 : -1;
+      }
       if (a.step.step_index !== b.step.step_index) {
         return a.step.step_index - b.step.step_index;
       }
