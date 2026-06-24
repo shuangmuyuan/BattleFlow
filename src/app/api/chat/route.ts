@@ -124,6 +124,20 @@ function truncateForPrompt(value: string, maxLength: number) {
   return value.length > maxLength ? `${value.slice(0, maxLength)}\n...（已截断）` : value;
 }
 
+function getSafeChatErrorMessage(error: unknown) {
+  const message = typeof error === 'string'
+    ? error.trim()
+    : error instanceof Error
+      ? error.message.trim()
+      : '';
+
+  if (/E2BIG|argument list too long/i.test(message)) {
+    return 'Chat context is too large to start the runtime. Reduce uploaded files, selected materials, or previous-step context and try again.';
+  }
+
+  return message ? truncateForPrompt(message, 300) : 'Chat failed';
+}
+
 function slicePromptTextWithMiddleOmission(value: string, maxLength: number) {
   if (value.length <= maxLength) {
     return { text: value, truncated: false };
@@ -548,7 +562,7 @@ function streamAgentEventsAsSse(agentStream: ReadableStream<AgentEvent>) {
               text: value.text,
             });
           } else if (value.type === 'error') {
-            closeWith({ error: value.error });
+            closeWith({ error: getSafeChatErrorMessage(value.error) });
             return;
           }
         }
@@ -648,7 +662,7 @@ export async function POST(request: NextRequest) {
     return streamClaudeCodeCli(request, claudeMessages, systemPrompt);
   } catch (error) {
     console.error('Chat API error:', error);
-    return new Response(JSON.stringify({ error: 'Chat failed' }), {
+    return new Response(JSON.stringify({ error: getSafeChatErrorMessage(error) }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });

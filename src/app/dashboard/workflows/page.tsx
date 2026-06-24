@@ -285,6 +285,16 @@ function getChatErrorContent(error: unknown) {
   return `${chatErrorFallbackPrefix}：${message}。`;
 }
 
+async function getChatResponseError(response: Response) {
+  try {
+    const data = await response.json() as { error?: unknown };
+    if (typeof data.error === 'string' && data.error.trim()) return data.error.trim();
+  } catch {
+    // The response might be an interrupted SSE stream or a non-JSON error page.
+  }
+  return 'Chat request failed';
+}
+
 interface KnowledgeBaseOption {
   id: string;
   name: string;
@@ -1188,7 +1198,8 @@ export default function WorkflowsPage() {
         }),
       });
 
-      if (!response.ok || !response.body) throw new Error('Chat request failed');
+      if (!response.ok) throw new Error(await getChatResponseError(response));
+      if (!response.body) throw new Error('Chat response body is missing');
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
