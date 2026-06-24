@@ -13,6 +13,8 @@ export type SkillStatus = 'imported' | 'pending_review' | 'published' | 'rejecte
 export type SkillVersionBump = 'patch' | 'minor' | 'major';
 export type SkillPackageAssetKind = 'attachment' | 'script' | 'template' | 'tool' | 'reference' | 'example' | 'task' | 'asset';
 export type SkillPackageAssetContentKind = 'text' | 'metadata';
+export type SkillReviewOperation = 'create' | 'update';
+export type SkillReviewRequestStatus = 'pending' | 'approved' | 'rejected';
 
 export interface SkillPackageAsset {
   path: string;
@@ -32,8 +34,8 @@ export interface SkillVersion {
   changelog: string;
   package_path?: string;
   skill_md?: string;
-  meta_json?: Record<string, unknown>;
   package_assets?: SkillPackageAsset[];
+  meta_json?: Record<string, unknown>;
 }
 
 export interface SkillReview {
@@ -48,6 +50,8 @@ export interface SkillReview {
 
 export interface SkillRecord {
   id: string;
+  skill_id: string;
+  display_name: string;
   name: string;
   description: string;
   version: string;
@@ -74,8 +78,31 @@ export interface SkillRecord {
   is_active: boolean;
 }
 
+export interface SkillReviewRequest {
+  id: string;
+  skill_id: string;
+  display_name: string;
+  description: string;
+  operation: SkillReviewOperation;
+  target_scope: 'team';
+  target_skill_id?: string;
+  target_version?: string;
+  source_skill_id?: string;
+  source_version?: string;
+  submitted_skill: SkillRecord;
+  submitted_at: string;
+  submitted_note?: string;
+  reviewed_at?: string;
+  review_note?: string;
+  decision?: 'approved' | 'rejected';
+  status: SkillReviewRequestStatus;
+  version_bump: SkillVersionBump;
+  is_active: boolean;
+}
+
 interface SkillIndex {
   skills: SkillRecord[];
+  review_requests: SkillReviewRequest[];
 }
 
 interface ImportOptions {
@@ -85,6 +112,19 @@ interface ImportOptions {
   status?: SkillStatus;
   versionBump?: SkillVersionBump;
   changelogNote?: string;
+}
+
+interface SkillImportCandidate {
+  skill: SkillRecord;
+  packagePath: string;
+  options: ImportOptions;
+}
+
+export class SkillImportValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SkillImportValidationError';
+  }
 }
 
 export interface WorkflowSkillReviewInput {
@@ -126,6 +166,9 @@ const PACKAGE_ASSET_FOLDERS: Array<{ folder: string; kind: SkillPackageAssetKind
   { folder: 'attachments', kind: 'attachment' },
   { folder: 'scripts', kind: 'script' },
   { folder: 'script', kind: 'script' },
+  { folder: 'assets/templates', kind: 'template' },
+  { folder: 'assets/examples', kind: 'example' },
+  { folder: 'assets', kind: 'asset' },
   { folder: 'templates', kind: 'template' },
   { folder: 'template', kind: 'template' },
   { folder: 'tools', kind: 'tool' },
@@ -202,9 +245,34 @@ const ASSET_MIME_BY_EXTENSION: Record<string, string> = {
 const MAX_PACKAGE_ASSETS = 120;
 const MAX_PACKAGE_ASSET_TEXT_BYTES = 64_000;
 const MAX_PACKAGE_ASSET_TEXT_CHARS = 8_000;
+const MAX_SKILL_ZIP_UPLOAD_BYTES = readPositiveIntegerEnv('SKILL_IMPORT_MAX_ZIP_UPLOAD_BYTES', 50 * 1024 * 1024);
+const MAX_SKILL_ZIP_UNCOMPRESSED_BYTES = readPositiveIntegerEnv('SKILL_IMPORT_MAX_ZIP_UNCOMPRESSED_BYTES', 150 * 1024 * 1024);
+const MAX_SKILL_ZIP_ENTRY_BYTES = readPositiveIntegerEnv('SKILL_IMPORT_MAX_ZIP_ENTRY_BYTES', 25 * 1024 * 1024);
+const MAX_SKILL_ZIP_ENTRIES = readPositiveIntegerEnv('SKILL_IMPORT_MAX_ZIP_ENTRIES', 1_000);
+const MAX_SKILL_ZIP_COMPRESSION_RATIO = readPositiveIntegerEnv('SKILL_IMPORT_MAX_ZIP_COMPRESSION_RATIO', 100);
+
+interface ZipEntryInfo {
+  name: string;
+  mode: string;
+  compressedSize: number;
+  uncompressedSize: number;
+  isDirectory: boolean;
+  isFile: boolean;
+}
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function readPositiveIntegerEnv(name: string, fallback: number) {
+  const parsed = Number.parseInt(process.env[name] || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function formatBytes(value: number) {
+  if (value >= 1024 * 1024) return `${Math.round(value / 1024 / 1024)} MB`;
+  if (value >= 1024) return `${Math.round(value / 1024)} KB`;
+  return `${value} bytes`;
 }
 
 function slugify(value: string) {
@@ -312,6 +380,12 @@ function extractMarkdownSection(markdown: string, headings: string[]) {
   return match?.[1]?.trim() || '';
 }
 
+function extractMarkdownTitle(markdown: string) {
+  const frontmatter = parseFrontmatter(markdown);
+  const match = frontmatter.body.match(/^#\s+(.+)$/m);
+  return match?.[1]?.trim() || '';
+}
+
 function extractFirstParagraph(markdown: string) {
   return markdown
     .split(/\n\s*\n/)
@@ -319,6 +393,62 @@ function extractFirstParagraph(markdown: string) {
     .filter((section) => section && !section.startsWith('#'))
     .map((section) => section.replace(/\s+/g, ' '))
     .find(Boolean) || '';
+}
+
+function deriveMethodology(contentMd: string, definition: Record<string, unknown>) {
+  return getString(
+    definition.methodology,
+    extractMarkdownSection(contentMd, [
+      'Workflow',
+      '工作流',
+      '编写流程',
+      '方法论',
+      '方法论框架',
+      'Methodology',
+      'Procedure',
+    ]),
+  );
+}
+
+function deriveChecklist(contentMd: string, definition: Record<string, unknown>) {
+  const definedChecklist = toStringArray(definition.checklist);
+  if (definedChecklist.length > 0) return definedChecklist;
+
+  return parseMarkdownList(extractMarkdownSection(contentMd, [
+    'Acceptance Criteria',
+    'Quality Gates',
+    'Checklist',
+    '质量 Checklist',
+    '验收清单',
+    '质量检查',
+    '验收标准',
+  ]));
+}
+
+function deriveSkillDisplayName(skillMd: string, metadata: Record<string, unknown>, fallback: string) {
+  return getString(
+    metadata.display_name,
+    getString(metadata.title, extractMarkdownTitle(skillMd) || fallback),
+  );
+}
+
+function deriveSkillRuntimeFields(skillMd: string, metadata: Record<string, unknown>) {
+  const parsed = parseFrontmatter(skillMd);
+  const mergedMeta = { ...parsed.metadata, ...metadata };
+  const definition = toRecord(mergedMeta.definition);
+  const contentMd = parsed.body || skillMd;
+
+  return {
+    description: getString(
+      mergedMeta.description,
+      extractMarkdownSection(contentMd, ['描述', 'Description']).split('\n')[0] || extractFirstParagraph(contentMd),
+    ),
+    methodology: deriveMethodology(contentMd, definition),
+    tools: toStringArray(definition.tools).length ? toStringArray(definition.tools) : toStringArray(mergedMeta.tools),
+    outputs: Object.keys(toRecord(definition.outputs)).length ? toRecord(definition.outputs) : toRecord(mergedMeta.outputs),
+    checklist: deriveChecklist(contentMd, definition),
+    prompt_template: getString(definition.prompt_template, extractMarkdownSection(contentMd, ['Prompt', '提示词模板', 'Prompt Template'])),
+  };
 }
 
 function parseChangelog(changelog: string): SkillVersion[] {
@@ -585,8 +715,180 @@ function currentVersionPayload(skill: SkillRecord) {
   return skill.versions.find((item) => item.version === skill.version) || skill.versions[0];
 }
 
+function withPackagePath(skill: SkillRecord, packagePath?: string): SkillRecord {
+  if (!packagePath) return skill;
+  return {
+    ...skill,
+    versions: skill.versions.map((version) => ({
+      ...version,
+      package_path: packagePath,
+    })),
+  };
+}
+
+function normalizeSkillRecord(value: unknown): SkillRecord | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Partial<SkillRecord> & Record<string, unknown>;
+  const id = getString(record.id);
+  if (!id) return null;
+
+  const skillMd = getString(record.skill_md);
+  const meta = toRecord(record.meta_json);
+  const runtime = deriveSkillRuntimeFields(skillMd, meta);
+  const fallbackDisplayName = getString(record.display_name, getString(record.name, id));
+  const displayName = deriveSkillDisplayName(skillMd, meta, fallbackDisplayName);
+  const versions = Array.isArray(record.versions)
+    ? record.versions.flatMap((item): SkillVersion[] => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+      const version = item as Partial<SkillVersion>;
+      const versionId = getString(version.version);
+      if (!versionId) return [];
+      return [{
+        version: versionId,
+        updated_at: getString(version.updated_at, getString(record.updated_at, nowIso())),
+        changelog: getString(version.changelog, ''),
+        package_path: getString(version.package_path) || undefined,
+        skill_md: getString(version.skill_md) || undefined,
+        package_assets: normalizeStoredPackageAssets(version.package_assets),
+        meta_json: Object.keys(toRecord(version.meta_json)).length > 0 ? toRecord(version.meta_json) : undefined,
+      }];
+    })
+    : [];
+
+  return {
+    id,
+    skill_id: getString(record.skill_id, id),
+    display_name: displayName,
+    name: displayName,
+    description: getString(record.description, runtime.description),
+    version: getString(record.version, versions[0]?.version || '1.0.0'),
+    author: getString(record.author, ''),
+    tags: toStringArray(record.tags),
+    source_type: getSourceType(record.source_type, 'local'),
+    source_uri: getString(record.source_uri) || undefined,
+    scope: getScope(record.scope, 'personal'),
+    status: getStatus(record.status, 'imported'),
+    methodology: getString(record.methodology, runtime.methodology),
+    tools: toStringArray(record.tools).length > 0 ? toStringArray(record.tools) : runtime.tools,
+    outputs: Object.keys(toRecord(record.outputs)).length > 0 ? toRecord(record.outputs) : runtime.outputs,
+    checklist: toStringArray(record.checklist).length > 0 ? toStringArray(record.checklist) : runtime.checklist,
+    prompt_template: getString(record.prompt_template, runtime.prompt_template) || undefined,
+    skill_md: skillMd,
+    meta_json: meta,
+    changelog: getString(record.changelog, ''),
+    attachments: toStringArray(record.attachments),
+    package_assets: normalizeStoredPackageAssets(record.package_assets),
+    created_at: getString(record.created_at, nowIso()),
+    updated_at: getString(record.updated_at, nowIso()),
+    versions,
+    review: record.review && typeof record.review === 'object' && !Array.isArray(record.review)
+      ? record.review as SkillReview
+      : undefined,
+    is_active: typeof record.is_active === 'boolean' ? record.is_active : true,
+  };
+}
+
+function serializeSkillVersion(version: SkillVersion): SkillVersion {
+  return {
+    version: version.version,
+    updated_at: version.updated_at,
+    changelog: version.changelog,
+    package_path: version.package_path,
+    skill_md: version.skill_md,
+    package_assets: normalizeStoredPackageAssets(version.package_assets),
+  };
+}
+
+function serializeSkillRecord(skill: SkillRecord): Record<string, unknown> {
+  return {
+    id: skill.id,
+    skill_id: skill.skill_id,
+    display_name: skill.display_name,
+    description: skill.description,
+    version: skill.version,
+    source_type: skill.source_type,
+    source_uri: skill.source_uri,
+    scope: skill.scope,
+    status: skill.status,
+    skill_md: skill.skill_md,
+    package_assets: normalizeStoredPackageAssets(skill.package_assets),
+    created_at: skill.created_at,
+    updated_at: skill.updated_at,
+    versions: skill.versions.map(serializeSkillVersion),
+    review: skill.review,
+    is_active: skill.is_active,
+  };
+}
+
+function getReviewRequestStatus(value: unknown, fallback: SkillReviewRequestStatus = 'pending'): SkillReviewRequestStatus {
+  return value === 'approved' || value === 'rejected' || value === 'pending' ? value : fallback;
+}
+
+function getReviewOperation(value: unknown, fallback: SkillReviewOperation = 'create'): SkillReviewOperation {
+  return value === 'update' || value === 'create' ? value : fallback;
+}
+
+function normalizeSkillReviewRequest(value: unknown): SkillReviewRequest | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Partial<SkillReviewRequest> & Record<string, unknown>;
+  const id = getString(record.id);
+  const submittedSkill = normalizeSkillRecord(record.submitted_skill);
+  if (!id || !submittedSkill) return null;
+
+  const skillId = getString(record.skill_id, submittedSkill.skill_id || submittedSkill.id);
+  const versionBump = getVersionBump(record.version_bump);
+  return {
+    id,
+    skill_id: skillId,
+    display_name: getString(record.display_name, submittedSkill.display_name || submittedSkill.name || skillId),
+    description: getString(record.description, submittedSkill.description),
+    operation: getReviewOperation(record.operation),
+    target_scope: 'team',
+    target_skill_id: getString(record.target_skill_id) || undefined,
+    target_version: getString(record.target_version) || undefined,
+    source_skill_id: getString(record.source_skill_id) || undefined,
+    source_version: getString(record.source_version) || undefined,
+    submitted_skill: submittedSkill,
+    submitted_at: getString(record.submitted_at, nowIso()),
+    submitted_note: getString(record.submitted_note) || undefined,
+    reviewed_at: getString(record.reviewed_at) || undefined,
+    review_note: getString(record.review_note) || undefined,
+    decision: record.decision === 'approved' || record.decision === 'rejected' ? record.decision : undefined,
+    status: getReviewRequestStatus(record.status),
+    version_bump: versionBump,
+    is_active: typeof record.is_active === 'boolean' ? record.is_active : true,
+  };
+}
+
+function serializeSkillReviewRequest(request: SkillReviewRequest): Record<string, unknown> {
+  return {
+    id: request.id,
+    skill_id: request.skill_id,
+    display_name: request.display_name,
+    description: request.description,
+    operation: request.operation,
+    target_scope: request.target_scope,
+    target_skill_id: request.target_skill_id,
+    target_version: request.target_version,
+    source_skill_id: request.source_skill_id,
+    source_version: request.source_version,
+    submitted_skill: serializeSkillRecord(request.submitted_skill),
+    submitted_at: request.submitted_at,
+    submitted_note: request.submitted_note,
+    reviewed_at: request.reviewed_at,
+    review_note: request.review_note,
+    decision: request.decision,
+    status: request.status,
+    version_bump: request.version_bump,
+    is_active: request.is_active,
+  };
+}
+
 async function hydrateSkillPackageAssets(skill: SkillRecord): Promise<SkillRecord> {
-  const storedAssets = normalizeStoredPackageAssets(skill.package_assets);
+  const versionPayload = currentVersionPayload(skill);
+  const storedAssets = normalizeStoredPackageAssets(skill.package_assets).length > 0
+    ? normalizeStoredPackageAssets(skill.package_assets)
+    : normalizeStoredPackageAssets(versionPayload?.package_assets);
   if (storedAssets.length > 0) {
     return {
       ...skill,
@@ -594,7 +896,7 @@ async function hydrateSkillPackageAssets(skill: SkillRecord): Promise<SkillRecor
     };
   }
 
-  const packagePath = currentVersionPayload(skill)?.package_path;
+  const packagePath = versionPayload?.package_path;
   if (!packagePath || !(await isRuntimePackageAssetPathAllowed(packagePath))) {
     return {
       ...skill,
@@ -618,7 +920,7 @@ async function ensureRegistry() {
   await fs.mkdir(packageRoot, { recursive: true });
   await fs.mkdir(tempRoot, { recursive: true });
   if (!(await pathExists(indexPath))) {
-    await fs.writeFile(indexPath, JSON.stringify({ skills: [] }, null, 2));
+    await fs.writeFile(indexPath, JSON.stringify({ skills: [], review_requests: [] }, null, 2));
   }
 }
 
@@ -627,15 +929,34 @@ async function readIndex(): Promise<SkillIndex> {
   try {
     const raw = await fs.readFile(indexPath, 'utf8');
     const parsed = JSON.parse(raw) as SkillIndex;
-    return { skills: Array.isArray(parsed.skills) ? parsed.skills : [] };
+    return {
+      skills: Array.isArray(parsed.skills)
+        ? parsed.skills.flatMap((skill) => {
+          const normalized = normalizeSkillRecord(skill);
+          return normalized ? [normalized] : [];
+        })
+        : [],
+      review_requests: Array.isArray(parsed.review_requests)
+        ? parsed.review_requests.flatMap((request) => {
+          const normalized = normalizeSkillReviewRequest(request);
+          return normalized ? [normalized] : [];
+        })
+        : [],
+    };
   } catch {
-    return { skills: [] };
+    return { skills: [], review_requests: [] };
   }
 }
 
 async function writeIndex(index: SkillIndex) {
   await ensureRegistry();
-  await fs.writeFile(indexPath, JSON.stringify(index, null, 2));
+  const payload = {
+    skills: index.skills.map(serializeSkillRecord),
+    review_requests: index.review_requests.map(serializeSkillReviewRequest),
+  };
+  const tempPath = `${indexPath}.${randomUUID()}.tmp`;
+  await fs.writeFile(tempPath, JSON.stringify(payload, null, 2));
+  await fs.rename(tempPath, indexPath);
 }
 
 function buildReviewId(sourceId: string) {
@@ -695,16 +1016,16 @@ async function loadSkillFromPackage(packagePath: string, options: ImportOptions 
   const changelog = changelogPath ? await fs.readFile(changelogPath, 'utf8') : '';
   const packageName = path.basename(packagePath);
 
-  const name = getString(meta.name, getString(definition.name, packageName));
+  const sourceName = getString(meta.name, getString(definition.name, packageName));
+  const id = getString(meta.id, slugify(sourceName));
+  const displayName = deriveSkillDisplayName(skillMd, meta, sourceName || id);
   const version = getString(meta.version, '1.0.0');
   if (!SEMVER_PATTERN.test(version)) {
-    throw new Error(`Skill ${name} has invalid semantic version: ${version}`);
+    throw new Error(`Skill ${displayName} has invalid semantic version: ${version}`);
   }
 
-  const methodology = getString(definition.methodology, extractMarkdownSection(contentMd, ['方法论', '方法论框架', 'Methodology']));
-  const checklist = toStringArray(definition.checklist).length
-    ? toStringArray(definition.checklist)
-    : parseMarkdownList(extractMarkdownSection(contentMd, ['Checklist', '质量 Checklist', '验收清单']));
+  const methodology = deriveMethodology(contentMd, definition);
+  const checklist = deriveChecklist(contentMd, definition);
   const tools = toStringArray(definition.tools).length
     ? toStringArray(definition.tools)
     : toStringArray(meta.tools);
@@ -716,21 +1037,20 @@ async function loadSkillFromPackage(packagePath: string, options: ImportOptions 
   const changelogVersions = parseChangelog(changelog);
   const currentChangelog = changelogVersions.find((item) => item.version === version)?.changelog || '导入当前版本。';
 
-  const id = getString(meta.id, slugify(name));
   const sourceType = options.sourceType || getSourceType(meta.source_type, 'local');
   const scope = options.scope || getScope(meta.scope, 'personal');
   const status = options.status || getStatus(meta.status, scope === 'team' ? 'pending_review' : 'imported');
-  const attachments = (await pathExists(path.join(packagePath, 'attachments')))
-    ? await listFilesRecursive(path.join(packagePath, 'attachments'))
-    : [];
   const packageAssets = await discoverPackageAssets(packagePath);
+  const runtime = deriveSkillRuntimeFields(skillMd, meta);
 
   return {
     id,
-    name,
+    skill_id: id,
+    display_name: displayName,
+    name: displayName,
     description: getString(
       meta.description,
-      extractMarkdownSection(contentMd, ['描述', 'Description']).split('\n')[0] || extractFirstParagraph(contentMd),
+      runtime.description,
     ),
     version,
     author: getString(meta.author, options.sourceType === 'git' ? 'External Git Repository' : 'BattleFlow Team'),
@@ -747,7 +1067,7 @@ async function loadSkillFromPackage(packagePath: string, options: ImportOptions 
     skill_md: skillMd,
     meta_json: meta,
     changelog,
-    attachments,
+    attachments: [],
     package_assets: packageAssets,
     created_at: timestamp,
     updated_at: timestamp,
@@ -807,8 +1127,29 @@ function mergeSkills(seedSkills: SkillRecord[], persistedSkills: SkillRecord[]) 
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
 }
 
+function logicalSkillId(skill: Pick<SkillRecord, 'id' | 'skill_id'>) {
+  return skill.skill_id || skill.id;
+}
+
+function findActiveSkillBySkillId(skills: SkillRecord[], skillId: string, scope: SkillScope) {
+  return skills.find((skill) => (
+    skill.is_active
+    && skill.scope === scope
+    && logicalSkillId(skill) === skillId
+    && skill.status !== 'archived'
+  ));
+}
+
 async function copyPackage(packagePath: string, skill: SkillRecord) {
   const destination = path.join(packageRoot, skill.id, skill.version);
+  await fs.rm(destination, { recursive: true, force: true });
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  await fs.cp(packagePath, destination, { recursive: true });
+  return destination;
+}
+
+async function copyReviewPackage(packagePath: string, requestId: string) {
+  const destination = path.join(packageRoot, '_review_requests', requestId);
   await fs.rm(destination, { recursive: true, force: true });
   await fs.mkdir(path.dirname(destination), { recursive: true });
   await fs.cp(packagePath, destination, { recursive: true });
@@ -897,7 +1238,7 @@ async function upsertSkill(skill: SkillRecord, packagePath?: string, options: Im
     ? index.skills.map((item) => (item.id === effectiveRecord.id ? nextSkill : item))
     : [...index.skills, nextSkill];
 
-  await writeIndex({ skills: nextSkills });
+  await writeIndex({ skills: nextSkills, review_requests: index.review_requests });
   return nextSkill;
 }
 
@@ -908,10 +1249,10 @@ function sourceUriForPackage(root: string, packagePath: string, options: ImportO
   return `${options.sourceUri}#${relativePath.split(path.sep).join('/')}`;
 }
 
-async function importRegistryDirectory(registryPath: string, options: ImportOptions) {
+async function collectRegistryDirectory(registryPath: string, options: ImportOptions): Promise<SkillImportCandidate[]> {
   const registry = await readJson(path.join(registryPath, 'registry.json'));
   const entries = Array.isArray(registry.skills) ? registry.skills : [];
-  const imported: SkillRecord[] = [];
+  const candidates: SkillImportCandidate[] = [];
 
   for (const entry of entries) {
     if (!entry || typeof entry !== 'object') continue;
@@ -930,10 +1271,10 @@ async function importRegistryDirectory(registryPath: string, options: ImportOpti
       status: entryStatus,
     };
     const skill = await loadSkillFromPackage(packagePath, entryOptions);
-    imported.push(await upsertSkill(skill, packagePath, entryOptions));
+    candidates.push({ skill, packagePath, options: entryOptions });
   }
 
-  return imported;
+  return candidates;
 }
 
 async function resolvePluginSkillPath(root: string, pluginDir: string, entry: string) {
@@ -953,11 +1294,11 @@ async function resolvePluginSkillPath(root: string, pluginDir: string, entry: st
   return null;
 }
 
-async function importClaudePluginDirectory(root: string, options: ImportOptions) {
+async function collectClaudePluginDirectory(root: string, options: ImportOptions): Promise<SkillImportCandidate[]> {
   const pluginPath = path.join(root, '.claude-plugin', 'plugin.json');
   const plugin = await readJson(pluginPath);
   const entries = toStringArray(plugin.skills);
-  const imported: SkillRecord[] = [];
+  const candidates: SkillImportCandidate[] = [];
 
   for (const entry of entries) {
     const skillPath = await resolvePluginSkillPath(root, path.dirname(pluginPath), entry);
@@ -967,41 +1308,148 @@ async function importClaudePluginDirectory(root: string, options: ImportOptions)
       ...options,
       sourceUri: sourceUriForPackage(root, packagePath, options),
     });
-    imported.push(await upsertSkill(skill, packagePath, options));
+    candidates.push({
+      skill,
+      packagePath,
+      options: {
+        ...options,
+        sourceUri: sourceUriForPackage(root, packagePath, options),
+      },
+    });
   }
 
-  return imported;
+  return candidates;
 }
 
-async function importSkillDirectory(inputPath: string, options: ImportOptions = {}) {
+async function collectSkillImportCandidates(inputPath: string, options: ImportOptions = {}): Promise<SkillImportCandidate[]> {
   const packagePath = await findPackageRoot(inputPath);
   if (await pathExists(path.join(packagePath, 'registry.json'))) {
-    return importRegistryDirectory(packagePath, options);
+    return collectRegistryDirectory(packagePath, options);
   }
 
   if (await pathExists(path.join(packagePath, '.claude-plugin', 'plugin.json'))) {
-    return importClaudePluginDirectory(packagePath, options);
+    return collectClaudePluginDirectory(packagePath, options);
   }
 
   if (await hasSkillPackageFiles(packagePath)) {
     const skill = await loadSkillFromPackage(packagePath, options);
-    return [await upsertSkill(skill, packagePath, options)];
+    return [{ skill, packagePath, options }];
   }
 
   const packageDirs = await findSkillPackageDirectories(packagePath);
   if (packageDirs.length > 0) {
-    const imported: SkillRecord[] = [];
+    const candidates: SkillImportCandidate[] = [];
     for (const packageDir of packageDirs) {
-      const skill = await loadSkillFromPackage(packageDir, {
+      const entryOptions = {
         ...options,
         sourceUri: sourceUriForPackage(packagePath, packageDir, options),
-      });
-      imported.push(await upsertSkill(skill, packageDir, options));
+      };
+      const skill = await loadSkillFromPackage(packageDir, entryOptions);
+      candidates.push({ skill, packagePath: packageDir, options: entryOptions });
     }
-    return imported;
+    return candidates;
   }
 
   throw new Error(`No Skill package found in ${inputPath}`);
+}
+
+async function importSkillDirectory(inputPath: string, options: ImportOptions = {}) {
+  const candidates = await collectSkillImportCandidates(inputPath, options);
+  const imported: SkillRecord[] = [];
+  for (const candidate of candidates) {
+    imported.push(await upsertSkill(candidate.skill, candidate.packagePath, candidate.options));
+  }
+  return imported;
+}
+
+async function allActiveSkillsForReview(index: SkillIndex) {
+  const seedSkills = await loadSeedSkills();
+  return mergeSkills(seedSkills, index.skills);
+}
+
+function findPendingReviewRequest(index: SkillIndex, skillId: string, targetScope: 'team') {
+  return index.review_requests.find((request) => (
+    request.is_active
+    && request.status === 'pending'
+    && request.target_scope === targetScope
+    && request.skill_id === skillId
+  ));
+}
+
+async function createSkillReviewRequest(
+  submittedSkill: SkillRecord,
+  packagePath: string | undefined,
+  options: ImportOptions = {},
+  submittedNote = '',
+) {
+  const index = await readIndex();
+  const skillId = logicalSkillId(submittedSkill);
+  const activeSkills = await allActiveSkillsForReview(index);
+  const targetSkill = findActiveSkillBySkillId(activeSkills, skillId, 'team');
+  const duplicate = findPendingReviewRequest(index, skillId, 'team');
+  if (duplicate) {
+    throw new Error(`A pending review already exists for Skill ID "${skillId}". Approve, reject, or replace that review before submitting another change.`);
+  }
+
+  const timestamp = nowIso();
+  const requestId = buildReviewId(skillId);
+  const storedPackagePath = packagePath ? await copyReviewPackage(packagePath, requestId) : undefined;
+  const versionBump = getVersionBump(options.versionBump);
+  const reviewSkill = withPackagePath({
+    ...submittedSkill,
+    skill_id: skillId,
+    scope: 'team',
+    status: 'pending_review',
+    updated_at: timestamp,
+  }, storedPackagePath);
+  const request: SkillReviewRequest = {
+    id: requestId,
+    skill_id: skillId,
+    display_name: reviewSkill.display_name || reviewSkill.name || skillId,
+    description: reviewSkill.description,
+    operation: targetSkill ? 'update' : 'create',
+    target_scope: 'team',
+    target_skill_id: targetSkill?.id,
+    target_version: targetSkill?.version,
+    source_skill_id: submittedSkill.id,
+    source_version: submittedSkill.version,
+    submitted_skill: reviewSkill,
+    submitted_at: timestamp,
+    submitted_note: submittedNote.trim() || options.changelogNote || undefined,
+    status: 'pending',
+    version_bump: versionBump,
+    is_active: true,
+  };
+
+  await writeIndex({
+    skills: index.skills,
+    review_requests: [request, ...index.review_requests],
+  });
+  return request;
+}
+
+async function createSkillReviewRequestsFromCandidates(
+  candidates: SkillImportCandidate[],
+  options: ImportOptions = {},
+  submittedNote = '',
+) {
+  const requests: SkillReviewRequest[] = [];
+  for (const candidate of candidates) {
+    requests.push(await createSkillReviewRequest(candidate.skill, candidate.packagePath, {
+      ...candidate.options,
+      ...options,
+    }, submittedNote));
+  }
+  return requests;
+}
+
+async function importSkillReviewRequestsFromDirectory(inputPath: string, options: ImportOptions = {}) {
+  const candidates = await collectSkillImportCandidates(inputPath, {
+    ...options,
+    scope: 'team',
+    status: 'pending_review',
+  });
+  return createSkillReviewRequestsFromCandidates(candidates, options, options.changelogNote);
 }
 
 export async function listSkills(filters: { scope?: string; status?: string } = {}) {
@@ -1014,6 +1462,17 @@ export async function listSkills(filters: { scope?: string; status?: string } = 
   return Promise.all(filteredSkills.map((skill) => hydrateSkillPackageAssets(skill)));
 }
 
+export async function listSkillReviewRequests(filters: { status?: string } = {}) {
+  const index = await readIndex();
+  return index.review_requests
+    .filter((request) => {
+      if (!request.is_active) return false;
+      if (filters.status && request.status !== filters.status) return false;
+      return true;
+    })
+    .sort((a, b) => b.submitted_at.localeCompare(a.submitted_at));
+}
+
 export async function getSkill(id: string) {
   const skills = await listSkills();
   return skills.find((skill) => skill.id === id) || null;
@@ -1021,46 +1480,241 @@ export async function getSkill(id: string) {
 
 export async function importSkillFromPath(inputPath: string, options: ImportOptions = {}) {
   const realInput = await assertAllowedImportPath(inputPath);
+  if (options.scope === 'team') {
+    return importSkillReviewRequestsFromDirectory(realInput, options);
+  }
   return importSkillDirectory(realInput, options);
 }
 
-async function assertSafeZip(zipPath: string) {
-  const { stdout } = await execFile('unzip', ['-Z1', zipPath], { timeout: 10000 });
-  const unsafe = stdout
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .find((entry) => path.isAbsolute(entry) || entry.split('/').includes('..'));
+function getUploadedZipLeafName(fileName: string) {
+  return fileName.split(/[\\/]/).pop()?.trim() || 'skill-package.zip';
+}
 
-  if (unsafe) {
-    throw new Error(`Zip contains unsafe entry: ${unsafe}`);
+function sanitizeUploadedZipSourceName(fileName: string, uploadId: string) {
+  const leafName = getUploadedZipLeafName(fileName);
+  const sanitized = leafName
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 128);
+  return sanitized.toLowerCase().endsWith('.zip') ? sanitized : `skill-${uploadId}.zip`;
+}
+
+function isLikelyZipBuffer(buffer: Buffer) {
+  if (buffer.length < 4) return false;
+  return (
+    buffer[0] === 0x50
+    && buffer[1] === 0x4b
+    && (
+      (buffer[2] === 0x03 && buffer[3] === 0x04)
+      || (buffer[2] === 0x05 && buffer[3] === 0x06)
+      || (buffer[2] === 0x07 && buffer[3] === 0x08)
+    )
+  );
+}
+
+function normalizeZipEntryName(entryName: string) {
+  let normalized = entryName.replace(/\\/g, '/').trim();
+  while (normalized.startsWith('./')) {
+    normalized = normalized.slice(2);
+  }
+  return normalized;
+}
+
+function getUnsafeZipEntryReason(entryName: string) {
+  const normalized = normalizeZipEntryName(entryName);
+  if (!normalized || normalized.includes('\0')) return 'empty or invalid path';
+  if (normalized.startsWith('/') || /^[A-Za-z]:\//.test(normalized)) return 'absolute path';
+
+  const segments = normalized.replace(/\/+$/, '').split('/');
+  if (segments.some((segment) => segment === '..')) return 'parent directory reference';
+  if (segments.some((segment) => segment === '.' || segment === '')) return 'ambiguous path segment';
+  return null;
+}
+
+function isSkillPackageEntry(entryName: string) {
+  const normalized = normalizeZipEntryName(entryName).replace(/\/+$/, '').toLowerCase();
+  const baseName = normalized.split('/').pop() || '';
+  return (
+    SKILL_FILE_NAMES.some((name) => baseName === name.toLowerCase())
+    || META_FILE_NAMES.some((name) => baseName === name.toLowerCase())
+    || normalized === 'registry.json'
+    || normalized.endsWith('/registry.json')
+    || normalized === '.claude-plugin/plugin.json'
+    || normalized.endsWith('/.claude-plugin/plugin.json')
+  );
+}
+
+function parseZipInfoLine(line: string): ZipEntryInfo | null {
+  const match = line.match(/^(\S+)\s+\S+\s+\S+\s+(\d+)\s+\S+\s+(\d+)\s+\S+\s+\S+\s+\S+\s+(.+)$/);
+  if (!match) return null;
+
+  const mode = match[1];
+  const uncompressedSize = Number.parseInt(match[2], 10);
+  const compressedSize = Number.parseInt(match[3], 10);
+  const name = match[4].trim();
+  if (!name || !Number.isFinite(uncompressedSize) || !Number.isFinite(compressedSize)) {
+    return null;
+  }
+
+  return {
+    name,
+    mode,
+    compressedSize,
+    uncompressedSize,
+    isDirectory: mode.startsWith('d') || name.endsWith('/'),
+    isFile: !mode.startsWith('d') && !mode.startsWith('l') && !name.endsWith('/'),
+  };
+}
+
+async function readZipEntries(zipPath: string): Promise<ZipEntryInfo[]> {
+  try {
+    const { stdout } = await execFile('zipinfo', ['-l', zipPath], {
+      timeout: 10_000,
+      maxBuffer: 2_000_000,
+    });
+    const entries = stdout
+      .split(/\r?\n/)
+      .flatMap((line): ZipEntryInfo[] => {
+        const entry = parseZipInfoLine(line.trimEnd());
+        return entry ? [entry] : [];
+      });
+
+    if (entries.length === 0) {
+      throw new SkillImportValidationError('Skill ZIP does not contain any readable entries.');
+    }
+
+    return entries;
+  } catch (error) {
+    if (error instanceof SkillImportValidationError) throw error;
+    throw new SkillImportValidationError('Skill ZIP could not be inspected as a valid zip archive.');
+  }
+}
+
+function assertSkillZipEntries(entries: ZipEntryInfo[]) {
+  if (entries.length > MAX_SKILL_ZIP_ENTRIES) {
+    throw new SkillImportValidationError(
+      `Skill ZIP contains ${entries.length} entries; the limit is ${MAX_SKILL_ZIP_ENTRIES}.`,
+    );
+  }
+
+  let totalCompressedSize = 0;
+  let totalUncompressedSize = 0;
+  let fileCount = 0;
+  let hasSkillPackageMarker = false;
+
+  for (const entry of entries) {
+    const unsafeReason = getUnsafeZipEntryReason(entry.name);
+    if (unsafeReason) {
+      throw new SkillImportValidationError(`Skill ZIP contains unsafe entry "${entry.name}": ${unsafeReason}.`);
+    }
+
+    if (!entry.isFile && !entry.isDirectory) {
+      throw new SkillImportValidationError(`Skill ZIP contains unsupported entry type: ${entry.name}`);
+    }
+
+    if (entry.isDirectory) continue;
+
+    fileCount += 1;
+    totalCompressedSize += entry.compressedSize;
+    totalUncompressedSize += entry.uncompressedSize;
+    hasSkillPackageMarker = hasSkillPackageMarker || isSkillPackageEntry(entry.name);
+
+    if (entry.uncompressedSize > MAX_SKILL_ZIP_ENTRY_BYTES) {
+      throw new SkillImportValidationError(
+        `Skill ZIP entry "${entry.name}" is ${formatBytes(entry.uncompressedSize)}; the per-file limit is ${formatBytes(MAX_SKILL_ZIP_ENTRY_BYTES)}.`,
+      );
+    }
+  }
+
+  if (fileCount === 0) {
+    throw new SkillImportValidationError('Skill ZIP does not contain any files.');
+  }
+
+  if (!hasSkillPackageMarker) {
+    throw new SkillImportValidationError('Skill ZIP must contain SKILL.md, skill.md, meta.json, registry.json, or .claude-plugin/plugin.json.');
+  }
+
+  if (totalUncompressedSize > MAX_SKILL_ZIP_UNCOMPRESSED_BYTES) {
+    throw new SkillImportValidationError(
+      `Skill ZIP expands to ${formatBytes(totalUncompressedSize)}; the limit is ${formatBytes(MAX_SKILL_ZIP_UNCOMPRESSED_BYTES)}.`,
+    );
+  }
+
+  if (totalUncompressedSize > 0 && totalCompressedSize === 0) {
+    throw new SkillImportValidationError('Skill ZIP has an invalid compressed size summary.');
+  }
+
+  const compressionRatio = totalCompressedSize > 0 ? totalUncompressedSize / totalCompressedSize : 0;
+  if (compressionRatio > MAX_SKILL_ZIP_COMPRESSION_RATIO) {
+    throw new SkillImportValidationError(
+      `Skill ZIP compression ratio is ${compressionRatio.toFixed(1)}x; the limit is ${MAX_SKILL_ZIP_COMPRESSION_RATIO}x.`,
+    );
+  }
+}
+
+async function assertSafeSkillZip(zipPath: string) {
+  const entries = await readZipEntries(zipPath);
+  assertSkillZipEntries(entries);
+
+  try {
+    await execFile('unzip', ['-tqq', zipPath], {
+      timeout: 30_000,
+      maxBuffer: 1_000_000,
+    });
+  } catch {
+    throw new SkillImportValidationError('Skill ZIP failed integrity validation.');
   }
 }
 
 export async function importSkillFromUpload(file: File, options: ImportOptions = {}) {
-  await ensureRegistry();
   const uploadId = randomUUID();
+  const sourceFileName = sanitizeUploadedZipSourceName(file.name || `skill-${uploadId}.zip`, uploadId);
+  const uploadSize = typeof file.size === 'number' ? file.size : 0;
+
+  if (!getUploadedZipLeafName(file.name || sourceFileName).toLowerCase().endsWith('.zip')) {
+    throw new SkillImportValidationError('Only .zip uploads are supported for Skill package import.');
+  }
+
+  if (uploadSize <= 0) {
+    throw new SkillImportValidationError('Skill ZIP upload is empty.');
+  }
+
+  if (uploadSize > MAX_SKILL_ZIP_UPLOAD_BYTES) {
+    throw new SkillImportValidationError(
+      `Skill ZIP upload is ${formatBytes(uploadSize)}; the limit is ${formatBytes(MAX_SKILL_ZIP_UPLOAD_BYTES)}.`,
+    );
+  }
+
+  await ensureRegistry();
   const uploadDir = path.join(tempRoot, uploadId);
   await fs.mkdir(uploadDir, { recursive: true });
-  const fileName = file.name || `skill-${uploadId}.zip`;
-  const uploadPath = path.join(uploadDir, fileName);
+  const uploadPath = path.join(uploadDir, `skill-${uploadId}.zip`);
   const buffer = Buffer.from(await file.arrayBuffer());
+
+  if (!isLikelyZipBuffer(buffer)) {
+    await fs.rm(uploadDir, { recursive: true, force: true });
+    throw new SkillImportValidationError('Uploaded Skill package is not a valid zip file.');
+  }
+
   await fs.writeFile(uploadPath, buffer);
 
   try {
-    if (fileName.toLowerCase().endsWith('.zip')) {
-      await assertSafeZip(uploadPath);
-      const extractDir = path.join(uploadDir, 'extracted');
-      await fs.mkdir(extractDir, { recursive: true });
-      await execFile('unzip', ['-q', uploadPath, '-d', extractDir], { timeout: 20000 });
-      return await importSkillDirectory(extractDir, {
+    await assertSafeSkillZip(uploadPath);
+    const extractDir = path.join(uploadDir, 'extracted');
+    await fs.mkdir(extractDir, { recursive: true });
+    await execFile('unzip', ['-q', uploadPath, '-d', extractDir], { timeout: 20_000 });
+    if (options.scope === 'team') {
+      return await importSkillReviewRequestsFromDirectory(extractDir, {
         ...options,
         sourceType: 'local',
-        sourceUri: `upload://${fileName}`,
+        sourceUri: `upload://${sourceFileName}`,
       });
     }
-
-    throw new Error('Only .zip uploads are supported for Skill package import');
+    return await importSkillDirectory(extractDir, {
+      ...options,
+      sourceType: 'local',
+      sourceUri: `upload://${sourceFileName}`,
+    });
   } finally {
     await fs.rm(uploadDir, { recursive: true, force: true });
   }
@@ -1086,6 +1740,13 @@ export async function importSkillFromGit(url: string, options: ImportOptions = {
   try {
     await execFile('git', ['clone', '--depth', '1', gitImport.url, cloneDir], { timeout: 120000 });
     const importRoot = gitImport.subPath ? path.join(cloneDir, gitImport.subPath) : cloneDir;
+    if (options.scope === 'team') {
+      return await importSkillReviewRequestsFromDirectory(importRoot, {
+        ...options,
+        sourceType: 'git',
+        sourceUri: url,
+      });
+    }
     return await importSkillDirectory(importRoot, {
       ...options,
       sourceType: 'git',
@@ -1102,24 +1763,11 @@ export async function requestSkillReview(id: string, submittedNote = '') {
   if (!source) throw new Error(`Personal Skill not found: ${id}`);
   if (source.scope !== 'personal') throw new Error('Only personal Skills can be submitted for team review');
 
-  const timestamp = nowIso();
-  const note = submittedNote.trim();
-  const reviewSkill: SkillRecord = {
-    ...source,
-    id: buildReviewId(source.id),
+  return createSkillReviewRequest(source, source.versions[0]?.package_path, {
     scope: 'team',
-    status: 'pending_review',
-    created_at: timestamp,
-    updated_at: timestamp,
-    review: {
-      source_skill_id: source.id,
-      source_version: source.version,
-      submitted_at: timestamp,
-      submitted_note: note || undefined,
-    },
-  };
-
-  return upsertSkill(reviewSkill, source.versions[0]?.package_path);
+    sourceType: source.source_type,
+    sourceUri: source.source_uri,
+  }, submittedNote);
 }
 
 export async function createWorkflowSkillReview(input: WorkflowSkillReviewInput) {
@@ -1145,7 +1793,7 @@ export async function createWorkflowSkillReview(input: WorkflowSkillReviewInput)
   };
   const meta = {
     id: skillId,
-    name: input.name || baseSkill?.name || '工作流 Skill 调优草稿',
+    name: input.name || baseSkill?.display_name || baseSkill?.name || '工作流 Skill 调优草稿',
     description: input.description || baseSkill?.description || '',
     version,
     author: 'BattleFlow Workflow',
@@ -1163,6 +1811,8 @@ export async function createWorkflowSkillReview(input: WorkflowSkillReviewInput)
 
   const reviewSkill: SkillRecord = {
     id: skillId,
+    skill_id: baseSkill?.skill_id || skillId,
+    display_name: meta.name,
     name: meta.name,
     description: meta.description,
     version,
@@ -1203,10 +1853,16 @@ export async function createWorkflowSkillReview(input: WorkflowSkillReviewInput)
     is_active: true,
   };
 
-  return upsertSkill(reviewSkill);
+  return createSkillReviewRequest(reviewSkill, baseSkill?.versions[0]?.package_path, {
+    scope: 'team',
+    sourceType: 'local',
+    sourceUri: meta.source_uri,
+    versionBump: 'patch',
+    changelogNote: changeSummary,
+  }, submittedNote);
 }
 
-async function updateReviewDecision(id: string, decision: 'approved' | 'rejected', reviewNote = '') {
+async function updateLegacyReviewDecision(id: string, decision: 'approved' | 'rejected', reviewNote = '') {
   const index = await readIndex();
   const timestamp = nowIso();
   const note = reviewNote.trim();
@@ -1235,16 +1891,101 @@ async function updateReviewDecision(id: string, decision: 'approved' | 'rejected
   });
 
   if (!updated) throw new Error(`Review Skill not found: ${id}`);
-  await writeIndex({ skills });
+  await writeIndex({ skills, review_requests: index.review_requests });
   return updated;
 }
 
+async function approveReviewRequest(id: string, reviewNote = '') {
+  const index = await readIndex();
+  const request = index.review_requests.find((item) => item.id === id && item.is_active);
+  if (!request) return null;
+  if (request.status !== 'pending') {
+    throw new Error(`Review request is not pending: ${id}`);
+  }
+
+  const note = reviewNote.trim();
+  const activeSkills = await allActiveSkillsForReview(index);
+  const targetSkill = findActiveSkillBySkillId(activeSkills, request.skill_id, 'team');
+  const packagePath = currentVersionPayload(request.submitted_skill)?.package_path;
+  const submittedSkill: SkillRecord = {
+    ...request.submitted_skill,
+    id: request.target_skill_id || targetSkill?.id || request.skill_id,
+    skill_id: request.skill_id,
+    scope: 'team',
+    status: 'published',
+    review: {
+      source_skill_id: request.source_skill_id || request.submitted_skill.id,
+      source_version: request.source_version || request.submitted_skill.version,
+      submitted_at: request.submitted_at,
+      submitted_note: request.submitted_note,
+      reviewed_at: nowIso(),
+      review_note: note || undefined,
+      decision: 'approved',
+    },
+  };
+
+  const published = await upsertSkill(submittedSkill, packagePath, {
+    scope: 'team',
+    sourceType: submittedSkill.source_type,
+    sourceUri: submittedSkill.source_uri,
+    versionBump: request.operation === 'update' ? request.version_bump : undefined,
+    changelogNote: note || request.submitted_note,
+  });
+
+  const latestIndex = await readIndex();
+  const timestamp = nowIso();
+  const reviewRequests = latestIndex.review_requests.map((item) => (
+    item.id === id
+      ? {
+          ...item,
+          status: 'approved' as SkillReviewRequestStatus,
+          reviewed_at: timestamp,
+          review_note: note || undefined,
+          decision: 'approved' as const,
+          is_active: false,
+        }
+      : item
+  ));
+  await writeIndex({ skills: latestIndex.skills, review_requests: reviewRequests });
+  return published;
+}
+
+async function rejectReviewRequest(id: string, reviewNote = '') {
+  const index = await readIndex();
+  const request = index.review_requests.find((item) => item.id === id && item.is_active);
+  if (!request) return null;
+  if (request.status !== 'pending') {
+    throw new Error(`Review request is not pending: ${id}`);
+  }
+
+  const note = reviewNote.trim();
+  const timestamp = nowIso();
+  const reviewRequests = index.review_requests.map((item) => (
+    item.id === id
+      ? {
+          ...item,
+          status: 'rejected' as SkillReviewRequestStatus,
+          reviewed_at: timestamp,
+          review_note: note || undefined,
+          decision: 'rejected' as const,
+          is_active: false,
+        }
+      : item
+  ));
+  await writeIndex({ skills: index.skills, review_requests: reviewRequests });
+  return reviewRequests.find((item) => item.id === id) || null;
+}
+
 export async function approveSkillReview(id: string, reviewNote = '') {
-  return updateReviewDecision(id, 'approved', reviewNote);
+  const approved = await approveReviewRequest(id, reviewNote);
+  if (approved) return approved;
+  return updateLegacyReviewDecision(id, 'approved', reviewNote);
 }
 
 export async function rejectSkillReview(id: string, reviewNote = '') {
-  return updateReviewDecision(id, 'rejected', reviewNote);
+  const rejected = await rejectReviewRequest(id, reviewNote);
+  if (rejected) return rejected;
+  return updateLegacyReviewDecision(id, 'rejected', reviewNote);
 }
 
 export async function updateSkillStatus(id: string, status: SkillStatus, scope?: SkillScope) {
@@ -1263,7 +2004,7 @@ export async function updateSkillStatus(id: string, status: SkillStatus, scope?:
   });
 
   if (!updated) throw new Error(`Skill not found or read-only: ${id}`);
-  await writeIndex({ skills });
+  await writeIndex({ skills, review_requests: index.review_requests });
   return updated;
 }
 
@@ -1274,13 +2015,22 @@ export async function rollbackSkill(id: string, version: string) {
     if (skill.id !== id) return skill;
     const target = skill.versions.find((item) => item.version === version);
     if (!target) throw new Error(`Version not found: ${version}`);
+    const targetSkillMd = target.skill_md || skill.skill_md;
+    const runtime = deriveSkillRuntimeFields(targetSkillMd, {});
     updated = {
       ...skill,
       version,
-      skill_md: target.skill_md || skill.skill_md,
-      meta_json: target.meta_json || skill.meta_json,
+      display_name: deriveSkillDisplayName(targetSkillMd, {}, skill.display_name || skill.name || skill.id),
+      name: deriveSkillDisplayName(targetSkillMd, {}, skill.display_name || skill.name || skill.id),
+      description: runtime.description || skill.description,
+      skill_md: targetSkillMd,
+      meta_json: {},
       package_assets: target.package_assets || skill.package_assets || [],
-      methodology: getString(toRecord(target.meta_json).definition && toRecord(toRecord(target.meta_json).definition).methodology, skill.methodology),
+      methodology: runtime.methodology,
+      tools: runtime.tools,
+      outputs: runtime.outputs,
+      checklist: runtime.checklist,
+      prompt_template: runtime.prompt_template || undefined,
       updated_at: nowIso(),
       versions: [
         {
@@ -1295,7 +2045,7 @@ export async function rollbackSkill(id: string, version: string) {
   });
 
   if (!updated) throw new Error(`Skill not found or read-only: ${id}`);
-  await writeIndex({ skills });
+  await writeIndex({ skills, review_requests: index.review_requests });
   return updated;
 }
 
@@ -1309,7 +2059,7 @@ export async function archiveSkill(id: string) {
   });
 
   if (!found) throw new Error(`Skill not found or read-only: ${id}`);
-  await writeIndex({ skills });
+  await writeIndex({ skills, review_requests: index.review_requests });
 }
 
 export async function renderSkillMarkdown(id: string, version?: string) {
@@ -1317,19 +2067,16 @@ export async function renderSkillMarkdown(id: string, version?: string) {
   if (!skill) return null;
   const target = version ? skill.versions.find((item) => item.version === version) : skill.versions[0];
   const skillMd = target?.skill_md || skill.skill_md;
-  const meta = target?.meta_json || skill.meta_json;
 
   return [
-    skillMd || `# ${skill.name}`,
+    skillMd || `# ${skill.display_name || skill.name || skill.id}`,
     '',
     '---',
+    `id: ${skill.id}`,
+    `display_name: ${skill.display_name || skill.name}`,
     `version: ${target?.version || skill.version}`,
     `scope: ${skill.scope}`,
     `status: ${skill.status}`,
     `source: ${skill.source_type}`,
-    '',
-    '```json',
-    JSON.stringify(meta, null, 2),
-    '```',
   ].join('\n');
 }

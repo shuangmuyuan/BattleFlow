@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { ClipboardEvent, KeyboardEvent } from 'react';
+import type { ClipboardEvent, DragEvent, KeyboardEvent, MouseEvent, PointerEvent } from 'react';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -30,6 +30,7 @@ import {
   compactMarkdownPreview,
 } from '@/components/battleflow/compact-markdown';
 import { cleanExecutableSkillText } from '@/lib/workflow-skill-draft';
+import { cn } from '@/lib/utils';
 import {
   Dialog,
   DialogContent,
@@ -76,6 +77,7 @@ import {
   GitCompareArrows,
   ShieldCheck,
   CircleStop,
+  GripVertical,
 } from 'lucide-react';
 
 interface Skill {
@@ -720,6 +722,8 @@ export default function WorkflowsPage() {
   const [isConfirmingStep, setIsConfirmingStep] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [draggingWorkflowStepId, setDraggingWorkflowStepId] = useState<string | null>(null);
+  const [dragOverWorkflowStepId, setDragOverWorkflowStepId] = useState<string | null>(null);
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [isDeletingTarget, setIsDeletingTarget] = useState(false);
@@ -755,6 +759,20 @@ export default function WorkflowsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const reviewedOutputInputRef = useRef<HTMLInputElement>(null);
   const activeChatRequestRef = useRef<AbortController | null>(null);
+  const workflowStepDragSourceRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!draggingWorkflowStepId) return undefined;
+
+    const handleMouseUp = () => {
+      workflowStepDragSourceRef.current = null;
+      setDraggingWorkflowStepId(null);
+      setDragOverWorkflowStepId(null);
+    };
+
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => window.removeEventListener('mouseup', handleMouseUp);
+  }, [draggingWorkflowStepId]);
 
   const getVisibleSteps = (workflow: Workflow) => getVisibleWorkflowSteps(workflow);
 
@@ -2041,6 +2059,94 @@ export default function WorkflowsPage() {
     });
   };
 
+  const resetWorkflowStepDrag = () => {
+    workflowStepDragSourceRef.current = null;
+    setDraggingWorkflowStepId(null);
+    setDragOverWorkflowStepId(null);
+  };
+
+  const beginWorkflowStepDrag = (stepId: string) => {
+    workflowStepDragSourceRef.current = stepId;
+    setDraggingWorkflowStepId(stepId);
+    setDragOverWorkflowStepId(stepId);
+  };
+
+  const handleWorkflowStepDragStart = (event: DragEvent<HTMLElement>, stepId: string) => {
+    beginWorkflowStepDrag(stepId);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', stepId);
+  };
+
+  const handleWorkflowStepMouseDown = (event: MouseEvent<HTMLDivElement>, stepId: string) => {
+    const target = event.target as HTMLElement;
+    const isControl = target.closest('button') && !target.closest('[data-drag-handle="true"]');
+    if (isControl) return;
+
+    beginWorkflowStepDrag(stepId);
+  };
+
+  const handleWorkflowStepPointerDown = (event: PointerEvent<HTMLDivElement>, stepId: string) => {
+    const target = event.target as HTMLElement;
+    const isControl = target.closest('button') && !target.closest('[data-drag-handle="true"]');
+    if (isControl) return;
+
+    beginWorkflowStepDrag(stepId);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+
+  const handleWorkflowStepPointerMove = (event: PointerEvent<HTMLDivElement>, workflowId: string) => {
+    const sourceStepId = workflowStepDragSourceRef.current;
+    if (!sourceStepId) return;
+
+    if (event.buttons === 0) {
+      resetWorkflowStepDrag();
+      return;
+    }
+
+    const targetElement = document
+      .elementFromPoint(event.clientX, event.clientY)
+      ?.closest('[data-workflow-step-id]') as HTMLElement | null;
+    const targetStepId = targetElement?.dataset.workflowStepId;
+
+    if (!targetStepId || targetStepId === sourceStepId) return;
+
+    setDragOverWorkflowStepId(targetStepId);
+    handleReorderWorkflowStep(workflowId, sourceStepId, targetStepId);
+  };
+
+  const handleReorderWorkflowStep = (workflowId: string, sourceStepId: string, targetStepId: string) => {
+    if (!sourceStepId || !targetStepId || sourceStepId === targetStepId) return;
+
+    updateWorkflowById(workflowId, (workflow) => {
+      const visibleSteps = getVisibleSteps(workflow);
+      const sourceIndex = visibleSteps.findIndex((step) => step.id === sourceStepId);
+      const targetIndex = visibleSteps.findIndex((step) => step.id === targetStepId);
+      if (sourceIndex < 0 || targetIndex < 0) return workflow;
+
+      const reorderedSteps = [...visibleSteps];
+      const [movedStep] = reorderedSteps.splice(sourceIndex, 1);
+      reorderedSteps.splice(targetIndex, 0, movedStep);
+
+      const updatedAt = new Date().toISOString();
+      const reorderedStepMap = new Map(
+        reorderedSteps.map((step, index) => [
+          step.id,
+          {
+            ...step,
+            step_index: index,
+            updated_at: updatedAt,
+          },
+        ]),
+      );
+
+      return normalizeWorkflowExecutionPlan({
+        ...workflow,
+        steps: workflow.steps.map((step) => reorderedStepMap.get(step.id) || step),
+        updated_at: updatedAt,
+      }, updatedAt);
+    });
+  };
+
   const handleAppendSkillToWorkflow = (workflowId: string, skill: Skill) => {
     updateWorkflowById(workflowId, (workflow) => {
       const updatedAt = new Date().toISOString();
@@ -2653,12 +2759,60 @@ export default function WorkflowsPage() {
                       {getVisibleSteps(editingWorkflow).length} 个启用
                     </Badge>
                   </div>
-                  <div className="space-y-2">
+                  <div data-testid="workflow-step-sort-list" className="flex flex-col gap-2">
                     {getVisibleSteps(editingWorkflow).map((step, idx) => (
                       <div
                         key={step.id}
-                        className="flex items-center gap-3 rounded-lg border border-border/60 bg-muted/20 p-3"
+                        data-workflow-step-id={step.id}
+                        draggable
+                        aria-grabbed={draggingWorkflowStepId === step.id}
+                        onPointerDown={(event) => handleWorkflowStepPointerDown(event, step.id)}
+                        onPointerMove={(event) => handleWorkflowStepPointerMove(event, editingWorkflow.id)}
+                        onPointerUp={resetWorkflowStepDrag}
+                        onPointerCancel={resetWorkflowStepDrag}
+                        onMouseDown={(event) => handleWorkflowStepMouseDown(event, step.id)}
+                        onMouseEnter={() => {
+                          if (!draggingWorkflowStepId || draggingWorkflowStepId === step.id) return;
+                          setDragOverWorkflowStepId(step.id);
+                          handleReorderWorkflowStep(editingWorkflow.id, draggingWorkflowStepId, step.id);
+                        }}
+                        onDragStart={(event) => handleWorkflowStepDragStart(event, step.id)}
+                        onDragOver={(event) => {
+                          event.preventDefault();
+                          event.dataTransfer.dropEffect = 'move';
+                          if (dragOverWorkflowStepId !== step.id) {
+                            setDragOverWorkflowStepId(step.id);
+                          }
+                        }}
+                        onDragLeave={() => {
+                          if (dragOverWorkflowStepId === step.id) {
+                            setDragOverWorkflowStepId(null);
+                          }
+                        }}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          const sourceStepId = draggingWorkflowStepId || event.dataTransfer.getData('text/plain');
+                          handleReorderWorkflowStep(editingWorkflow.id, sourceStepId, step.id);
+                          resetWorkflowStepDrag();
+                        }}
+                        onDragEnd={resetWorkflowStepDrag}
+                        className={cn(
+                          'flex cursor-grab items-center gap-3 rounded-lg border border-border/60 bg-muted/20 p-3 transition-colors active:cursor-grabbing',
+                          draggingWorkflowStepId === step.id && 'opacity-50',
+                          dragOverWorkflowStepId === step.id && draggingWorkflowStepId !== step.id
+                            && 'border-primary/60 bg-primary/10 ring-1 ring-primary/30',
+                        )}
                       >
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          data-drag-handle="true"
+                          aria-label={`拖动 ${step.name} 调整顺序`}
+                          className="cursor-grab text-muted-foreground active:cursor-grabbing"
+                        >
+                          <GripVertical data-icon="inline-start" />
+                        </Button>
                         <Badge variant="secondary" className="h-6 w-6 rounded-full p-0 flex items-center justify-center text-xs">
                           {idx + 1}
                         </Badge>
@@ -3832,37 +3986,46 @@ export default function WorkflowsPage() {
                           </Badge>
                         </div>
                         {previousSteps.length > 0 ? (
-                          <div className="mt-3 flex flex-col gap-2">
-                            {previousSteps.map((step) => {
-                              const enabled = !disabledAutoInjectedStepIds.includes(step.id);
-                              return (
-                                <div
-                                  key={step.id}
-                                  className={`flex items-start justify-between gap-3 rounded-lg border p-3 ${
-                                    enabled ? 'border-primary/50 bg-primary/10' : 'border-border/50 bg-muted/20'
-                                  }`}
-                                >
-                                  <div className="min-w-0">
-                                    <div className="flex min-w-0 items-center gap-2">
-                                      <FileText className="h-3.5 w-3.5 shrink-0 text-primary" />
-                                      <p className="truncate text-xs font-medium">{step.name}</p>
-                                    </div>
-                                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                                      {compactMarkdownPreview(step.output || '', 120)}
-                                    </p>
-                                  </div>
-                                  <Button
-                                    type="button"
-                                    variant={enabled ? 'default' : 'outline'}
-                                    size="sm"
-                                    className="h-8 shrink-0 text-xs"
-                                    onClick={() => setAutoInjectedStepEnabled(step.id, !enabled)}
+                          <div
+                            data-testid="auto-injected-previous-steps-list"
+                            className={cn(
+                              'mt-3 overflow-y-auto pr-2 [scrollbar-gutter:stable]',
+                              previousSteps.length > 3 ? 'h-72' : 'max-h-72',
+                            )}
+                          >
+                            <div className="flex flex-col gap-2 pr-3">
+                              {previousSteps.map((step) => {
+                                const enabled = !disabledAutoInjectedStepIds.includes(step.id);
+                                return (
+                                  <div
+                                    key={step.id}
+                                    className={cn(
+                                      'flex items-start justify-between gap-3 rounded-lg border p-3',
+                                      enabled ? 'border-primary/50 bg-primary/10' : 'border-border/50 bg-muted/20',
+                                    )}
                                   >
-                                    {enabled ? '已注入' : '已取消'}
-                                  </Button>
-                                </div>
-                              );
-                            })}
+                                    <div className="min-w-0">
+                                      <div className="flex min-w-0 items-center gap-2">
+                                        <FileText className="h-3.5 w-3.5 shrink-0 text-primary" />
+                                        <p className="truncate text-xs font-medium">{step.name}</p>
+                                      </div>
+                                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                                        {compactMarkdownPreview(step.output || '', 120)}
+                                      </p>
+                                    </div>
+                                    <Button
+                                      type="button"
+                                      variant={enabled ? 'default' : 'outline'}
+                                      size="sm"
+                                      className="h-8 shrink-0 text-xs"
+                                      onClick={() => setAutoInjectedStepEnabled(step.id, !enabled)}
+                                    >
+                                      {enabled ? '已注入' : '已取消'}
+                                    </Button>
+                                  </div>
+                                );
+                              })}
+                            </div>
                           </div>
                         ) : (
                           <div className="mt-3 rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">

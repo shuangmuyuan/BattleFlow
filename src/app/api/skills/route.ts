@@ -7,10 +7,12 @@ import {
   importSkillFromGit,
   importSkillFromPath,
   importSkillFromUpload,
+  listSkillReviewRequests,
   listSkills,
   rejectSkillReview,
   renderSkillMarkdown,
   requestSkillReview,
+  SkillImportValidationError,
   rollbackSkill,
   type SkillScope,
   type SkillVersionBump,
@@ -53,6 +55,24 @@ function getChangelogNote(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function isReviewRequest(value: unknown) {
+  return Boolean(
+    value
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && 'operation' in value
+    && 'target_scope' in value
+    && 'submitted_skill' in value,
+  );
+}
+
+function importResponse(items: unknown[]) {
+  return {
+    skills: items.filter((item) => !isReviewRequest(item)),
+    review_requests: items.filter(isReviewRequest),
+  };
+}
+
 // GET /api/skills - list, detail, or markdown download
 export async function GET(request: NextRequest) {
   try {
@@ -81,8 +101,11 @@ export async function GET(request: NextRequest) {
       return jsonOk({ skill });
     }
 
-    const skills = await listSkills({ scope, status });
-    return jsonOk({ skills });
+    const [skills, reviewRequests] = await Promise.all([
+      listSkills({ scope, status }),
+      listSkillReviewRequests(),
+    ]);
+    return jsonOk({ skills, review_requests: reviewRequests });
   } catch (error) {
     console.error('Skills GET error:', error);
     return jsonError(error instanceof Error ? error.message : 'Failed to fetch skills');
@@ -111,7 +134,7 @@ export async function POST(request: NextRequest) {
         versionBump,
         changelogNote,
       });
-      return jsonOk({ skills });
+      return jsonOk(importResponse(skills));
     }
 
     const body = await request.json();
@@ -131,7 +154,7 @@ export async function POST(request: NextRequest) {
         versionBump,
         changelogNote,
       });
-      return jsonOk({ skills });
+      return jsonOk(importResponse(skills));
     }
 
     if (action === 'import_git') {
@@ -148,7 +171,7 @@ export async function POST(request: NextRequest) {
         versionBump,
         changelogNote,
       });
-      return jsonOk({ skills });
+      return jsonOk(importResponse(skills));
     }
 
     if (action === 'import_registry') {
@@ -159,14 +182,14 @@ export async function POST(request: NextRequest) {
       const id = String(body.id || '').trim();
       if (!id) return jsonError('id is required', 400);
       const note = String(body.note || '').trim();
-      const skill = await requestSkillReview(id, note);
-      return jsonOk({ skill });
+      const reviewRequest = await requestSkillReview(id, note);
+      return jsonOk({ review_request: reviewRequest, skill: reviewRequest.submitted_skill });
     }
 
     if (action === 'submit_workflow_draft') {
       const draft = body.draft && typeof body.draft === 'object' ? body.draft : null;
       if (!draft) return jsonError('draft is required', 400);
-      const skill = await createWorkflowSkillReview({
+      const reviewRequest = await createWorkflowSkillReview({
         workflowId: String(draft.workflowId || '').trim(),
         workflowName: String(draft.workflowName || '').trim(),
         stepId: String(draft.stepId || '').trim(),
@@ -188,7 +211,7 @@ export async function POST(request: NextRequest) {
         validation_note: typeof draft.validation_note === 'string' ? draft.validation_note : undefined,
         note: typeof body.note === 'string' ? body.note : undefined,
       });
-      return jsonOk({ skill });
+      return jsonOk({ review_request: reviewRequest, skill: reviewRequest.submitted_skill });
     }
 
     if (action === 'approve_publish') {
@@ -196,7 +219,7 @@ export async function POST(request: NextRequest) {
       if (!id) return jsonError('id is required', 400);
       const note = String(body.note || '').trim();
       const skill = await approveSkillReview(id, note);
-      return jsonOk({ skill });
+      return jsonOk(isReviewRequest(skill) ? { review_request: skill } : { skill });
     }
 
     if (action === 'reject_review') {
@@ -204,7 +227,7 @@ export async function POST(request: NextRequest) {
       if (!id) return jsonError('id is required', 400);
       const note = String(body.note || '').trim();
       const skill = await rejectSkillReview(id, note);
-      return jsonOk({ skill });
+      return jsonOk(isReviewRequest(skill) ? { review_request: skill } : { skill });
     }
 
     if (action === 'rollback') {
@@ -218,6 +241,9 @@ export async function POST(request: NextRequest) {
     return jsonError(`Unsupported action: ${action}`, 400);
   } catch (error) {
     console.error('Skills POST error:', error);
+    if (error instanceof SkillImportValidationError) {
+      return jsonError(error.message, 400);
+    }
     return jsonError(error instanceof Error ? error.message : 'Failed to update skills');
   }
 }

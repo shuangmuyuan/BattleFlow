@@ -215,7 +215,9 @@ async function readStore(): Promise<WorkflowStore> {
 
 async function writeStore(store: WorkflowStore) {
   await ensureStoreDir();
-  const tempPath = `${storePath}.tmp`;
+  const tempPath = `${storePath}.${process.pid}.${Date.now().toString(36)}.${Math.random()
+    .toString(16)
+    .slice(2, 8)}.tmp`;
   await fs.writeFile(tempPath, JSON.stringify(store, null, 2), 'utf8');
   await fs.rename(tempPath, storePath);
 }
