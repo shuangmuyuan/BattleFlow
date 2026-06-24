@@ -24,8 +24,9 @@ Use this skill for dashboard pages, shared components, styling, responsive layou
 3. Use lucide-react icons and existing shadcn/ui components.
 4. Preserve explicit scroll and sizing constraints for dashboard layouts.
 5. Avoid SSR/client hydration mismatches by moving browser-only values into client state and effects.
-6. If overlay or responsive class contracts intentionally change, update the corresponding validation script.
-7. Run validation.
+6. For workflow chat UI changes, verify streaming, cancellation, persistence status, and durable-output semantics separately; chat presentation must not silently become confirmed step output.
+7. If overlay or responsive class contracts intentionally change, update the corresponding validation script.
+8. Run validation.
 
 ## Validation
 
@@ -35,3 +36,4 @@ pnpm validate
 
 Run the app visually when changing layout, overlays, navigation, or responsive behavior.
 
+For changes that depend on remote runtime data, validate through the documented SSH tunnel and record whether Browser plugin or Playwright fallback was used.
