@@ -243,6 +243,15 @@ interface ChatMessage {
   content: string;
 }
 
+type WorkflowStepRunMode = NonNullable<WorkflowStep['runMode']>;
+
+interface WorkflowExecutionGroup {
+  id: string;
+  runMode: WorkflowStepRunMode;
+  stepIndex: number;
+  steps: WorkflowStep[];
+}
+
 type ChatPersistenceStatus = 'idle' | 'streaming' | 'saving' | 'saved' | 'failed';
 type DeleteTarget =
   | { type: 'workspace'; id: string; name: string; workflowCount: number }
@@ -288,6 +297,194 @@ function getLastConfirmableAssistantMessage(messages: ChatMessage[]) {
 
 function hasConfirmableAssistantMessage(messages: ChatMessage[]) {
   return Boolean(getLastConfirmableAssistantMessage(messages));
+}
+
+function sortWorkflowStepsForDisplay(steps: WorkflowStep[]) {
+  return steps
+    .map((step, originalIndex) => ({ step, originalIndex }))
+    .sort((a, b) => {
+      if (a.step.step_index !== b.step.step_index) {
+        return a.step.step_index - b.step.step_index;
+      }
+      return a.originalIndex - b.originalIndex;
+    })
+    .map(({ step }) => step);
+}
+
+function getVisibleWorkflowSteps(workflow: Workflow) {
+  return sortWorkflowStepsForDisplay(workflow.steps.filter((step) => !step.isRemoved));
+}
+
+function getWorkflowExecutionGroups(steps: WorkflowStep[]): WorkflowExecutionGroup[] {
+  const groups: WorkflowExecutionGroup[] = [];
+  let parallelGroupCounter = 0;
+
+  sortWorkflowStepsForDisplay(steps).forEach((step) => {
+    const runMode = step.runMode === 'parallel' ? 'parallel' : 'serial';
+    const previousGroup = groups[groups.length - 1];
+
+    if (runMode === 'parallel' && previousGroup?.runMode === 'parallel') {
+      previousGroup.steps.push(step);
+      return;
+    }
+
+    if (runMode === 'parallel') {
+      parallelGroupCounter += 1;
+      groups.push({
+        id: step.parallelGroupId || `parallel-${parallelGroupCounter}`,
+        runMode,
+        stepIndex: step.step_index,
+        steps: [step],
+      });
+      return;
+    }
+
+    groups.push({
+      id: `serial-${step.id}`,
+      runMode,
+      stepIndex: step.step_index,
+      steps: [step],
+    });
+  });
+
+  return groups;
+}
+
+function deriveWorkflowStatusFromSteps(steps: WorkflowStep[]): Workflow['status'] {
+  const activeSteps = steps.filter((step) => !step.isRemoved);
+  if (activeSteps.length === 0) return 'draft';
+  if (activeSteps.every((step) => step.status === 'completed')) return 'completed';
+  return 'in_progress';
+}
+
+function normalizeWorkflowExecutionPlan(workflow: Workflow, updatedAt = new Date().toISOString()): Workflow {
+  const visibleSteps = getVisibleWorkflowSteps(workflow);
+  const removedSteps = workflow.steps.filter((step) => step.isRemoved);
+  const groups = getWorkflowExecutionGroups(visibleSteps);
+  const firstIncompleteGroupIndex = groups.findIndex((group) => (
+    group.steps.some((step) => step.status !== 'completed')
+  ));
+  let nextStepIndex = 0;
+  let parallelGroupCounter = 0;
+
+  const normalizedVisibleSteps = groups.flatMap((group, groupIndex) => {
+    const stepIndex = nextStepIndex;
+    nextStepIndex += 1;
+
+    if (group.runMode === 'parallel') {
+      parallelGroupCounter += 1;
+    }
+
+    const parallelGroupId = group.runMode === 'parallel'
+      ? group.steps[0]?.parallelGroupId || `parallel-${workflow.id}-${parallelGroupCounter}`
+      : undefined;
+    const parallelGroupName = group.runMode === 'parallel'
+      ? group.steps[0]?.parallelGroupName || `并行任务组 ${parallelGroupCounter}`
+      : undefined;
+
+    return group.steps.map((step) => {
+      const isActiveIncompleteGroup = groupIndex === firstIncompleteGroupIndex;
+      const nextStatus = step.status === 'completed'
+        ? 'completed'
+        : isActiveIncompleteGroup
+          ? 'in_progress'
+          : 'pending';
+
+      const nextStep: WorkflowStep = {
+        ...step,
+        step_index: stepIndex,
+        runMode: group.runMode,
+        parallelGroupId,
+        parallelGroupName,
+        status: nextStatus,
+      };
+
+      if (group.runMode === 'serial') {
+        nextStep.parallelGroupId = undefined;
+        nextStep.parallelGroupName = undefined;
+      }
+
+      return nextStep;
+    });
+  });
+
+  const nextSteps = [...normalizedVisibleSteps, ...removedSteps];
+
+  return {
+    ...workflow,
+    status: deriveWorkflowStatusFromSteps(nextSteps),
+    steps: nextSteps,
+    updated_at: updatedAt,
+  };
+}
+
+function hasWorkflowExecutionPlanChanged(source: Workflow, normalized: Workflow) {
+  if (source.status !== normalized.status) return true;
+  if (source.steps.length !== normalized.steps.length) return true;
+
+  return source.steps.some((step, index) => {
+    const normalizedStep = normalized.steps[index];
+    if (!normalizedStep || step.id !== normalizedStep.id) return true;
+    return (
+      step.step_index !== normalizedStep.step_index
+      || (step.runMode || 'serial') !== (normalizedStep.runMode || 'serial')
+      || step.parallelGroupId !== normalizedStep.parallelGroupId
+      || step.parallelGroupName !== normalizedStep.parallelGroupName
+      || step.status !== normalizedStep.status
+    );
+  });
+}
+
+function getPriorWorkflowSteps(workflow: Workflow, step: WorkflowStep) {
+  const visibleSteps = getVisibleWorkflowSteps(workflow);
+  const groups = getWorkflowExecutionGroups(visibleSteps);
+  const currentGroupIndex = groups.findIndex((group) => group.steps.some((item) => item.id === step.id));
+  if (currentGroupIndex <= 0) return [];
+
+  return groups
+    .slice(0, currentGroupIndex)
+    .flatMap((group) => group.steps);
+}
+
+function buildSelectedWorkflowSteps(
+  selectedSkills: Skill[],
+  selectedSkillModes: Record<string, WorkflowStepRunMode>,
+) {
+  let stepIndex = 0;
+  let parallelGroupCounter = 0;
+  let activeParallelGroupId = '';
+  let activeParallelGroupName = '';
+  let previousMode: WorkflowStepRunMode | undefined;
+
+  return selectedSkills.map((skill, index) => {
+    const mode = selectedSkillModes[skill.id] === 'parallel' ? 'parallel' : 'serial';
+
+    if (mode === 'parallel' && previousMode !== 'parallel') {
+      parallelGroupCounter += 1;
+      activeParallelGroupId = `parallel-${Date.now()}-${parallelGroupCounter}`;
+      activeParallelGroupName = `并行任务组 ${parallelGroupCounter}`;
+    }
+
+    const step = {
+      name: skill.name,
+      skill_id: skill.id,
+      step_index: stepIndex,
+      runMode: mode,
+      parallelGroupId: mode === 'parallel' ? activeParallelGroupId : undefined,
+      parallelGroupName: mode === 'parallel' ? activeParallelGroupName : undefined,
+    };
+
+    const nextMode = index + 1 < selectedSkills.length
+      ? selectedSkillModes[selectedSkills[index + 1].id] || 'serial'
+      : undefined;
+
+    if (mode === 'serial' || nextMode !== 'parallel') {
+      stepIndex += 1;
+    }
+    previousMode = mode;
+
+    return step;
+  });
 }
 
 function getChatErrorContent(error: unknown) {
@@ -559,7 +756,7 @@ export default function WorkflowsPage() {
   const reviewedOutputInputRef = useRef<HTMLInputElement>(null);
   const activeChatRequestRef = useRef<AbortController | null>(null);
 
-  const getVisibleSteps = (workflow: Workflow) => workflow.steps.filter((step) => !step.isRemoved);
+  const getVisibleSteps = (workflow: Workflow) => getVisibleWorkflowSteps(workflow);
 
   const normalizeContextSelection = (selection?: Partial<WorkflowContextSelection>): WorkflowContextSelection => ({
     knowledgeBaseIds: Array.isArray(selection?.knowledgeBaseIds) ? selection.knowledgeBaseIds : [],
@@ -612,8 +809,9 @@ export default function WorkflowsPage() {
     if (nextStep?.id) {
       setStepChatPersistenceStatus(nextStep.id, hasConfirmableAssistantMessage(nextStepMessages) ? 'saved' : 'idle');
     }
+    const priorSteps = nextStep ? getPriorWorkflowSteps(workflow, nextStep) : [];
     setRightPanelTab(
-      nextStep?.output || (nextStep && visibleSteps.some((step) => step.step_index < nextStep.step_index && step.output))
+      nextStep?.output || priorSteps.some((step) => step.output)
         ? 'outputs'
         : 'skill',
     );
@@ -696,11 +894,21 @@ export default function WorkflowsPage() {
   }, [persistWorkflow]);
 
   const openWorkflow = (workflow: Workflow) => {
-    setActiveWorkflow(workflow);
-    const visibleSteps = getVisibleSteps(workflow);
+    const normalizedWorkflow = normalizeWorkflowExecutionPlan(
+      workflow,
+      workflow.updated_at || new Date().toISOString(),
+    );
+    setActiveWorkflow(normalizedWorkflow);
+    setWorkflows((prev) => prev.map((item) => (
+      item.id === normalizedWorkflow.id ? normalizedWorkflow : item
+    )));
+    if (hasWorkflowExecutionPlanChanged(workflow, normalizedWorkflow)) {
+      void persistWorkflow(normalizedWorkflow);
+    }
+    const visibleSteps = getVisibleSteps(normalizedWorkflow);
     const firstInProgress = visibleSteps.findIndex((step) => step.status === 'in_progress');
     const nextStepIndex = firstInProgress >= 0 ? firstInProgress : 0;
-    switchActiveStep(workflow, nextStepIndex);
+    switchActiveStep(normalizedWorkflow, nextStepIndex);
   };
 
   const loadWorkflowState = useCallback(async () => {
@@ -1235,9 +1443,10 @@ export default function WorkflowsPage() {
       : selection.reviewMaterialIds;
     const selectedReviewIds = new Set(reviewMaterialIds);
     const disabledAutoIds = new Set(selection.disabledAutoInjectedStepIds || []);
+    const priorSteps = getPriorWorkflowSteps(workflow, step);
     const autoInjectedStepIds = new Set(
-      workflow.steps
-        .filter((item) => !item.isRemoved && item.step_index < step.step_index && item.output && !disabledAutoIds.has(item.id))
+      priorSteps
+        .filter((item) => item.output && !disabledAutoIds.has(item.id))
         .map((item) => item.id),
     );
 
@@ -1247,14 +1456,14 @@ export default function WorkflowsPage() {
     const stepContextFiles = (workflow.contextFiles || [])
       .filter((file) => file.stepId === step.id)
       .map((file) => summarizeWorkflowFile(file, 800));
-    const autoInjectedStepMaterials = workflow.steps
-      .filter((item) => !item.isRemoved && item.step_index < step.step_index && item.output && !disabledAutoIds.has(item.id))
+    const autoInjectedStepMaterials = priorSteps
+      .filter((item) => item.output && !disabledAutoIds.has(item.id))
       .map((item) => {
         const markdown = buildStepOutputMarkdown(workflow, item);
         return `默认注入：${item.name} Markdown 产物\n${markdown.slice(0, 1200)}${markdown.length > 1200 ? '\n...（已截断）' : ''}`;
       });
-    const selectedStepMaterials = workflow.steps
-      .filter((item) => !item.isRemoved && selectedReviewIds.has(item.id) && !autoInjectedStepIds.has(item.id) && item.output)
+    const selectedStepMaterials = getVisibleSteps(workflow)
+      .filter((item) => selectedReviewIds.has(item.id) && !autoInjectedStepIds.has(item.id) && item.output)
       .map((item) => {
         const markdown = buildStepOutputMarkdown(workflow, item);
         return `${item.name}产物\n${markdown.slice(0, 1200)}${markdown.length > 1200 ? '\n...（已截断）' : ''}`;
@@ -1295,13 +1504,8 @@ export default function WorkflowsPage() {
     const disabledAutoInjectedStepIds = new Set(contextSelection.disabledAutoInjectedStepIds || []);
     const autoInjectedStepOutputs: Array<{ id: string; name: string; output: string }> = [];
     let remainingStepContextChars = maxTotalStepPromptContextChars;
-    for (const step of workflow.steps) {
-      if (
-        step.isRemoved
-        || step.step_index >= currentStep.step_index
-        || !step.output
-        || disabledAutoInjectedStepIds.has(step.id)
-      ) {
+    for (const step of getPriorWorkflowSteps(workflow, currentStep)) {
+      if (!step.output || disabledAutoInjectedStepIds.has(step.id)) {
         continue;
       }
 
@@ -1327,10 +1531,9 @@ export default function WorkflowsPage() {
       });
     }
     const autoInjectedStepOutputIds = new Set(autoInjectedStepOutputs.map((step) => step.id));
-    const selectedReviewMaterials = workflow.steps
+    const selectedReviewMaterials = getVisibleSteps(workflow)
       .filter((step) => (
-        !step.isRemoved
-        && selectedReviewMaterialIds.includes(step.id)
+        selectedReviewMaterialIds.includes(step.id)
         && !autoInjectedStepOutputIds.has(step.id)
         && step.output
       ))
@@ -1516,55 +1719,22 @@ export default function WorkflowsPage() {
     void handleSendMessage();
   }, [handleSendMessage]);
 
-  const deriveWorkflowStatus = (steps: WorkflowStep[]): Workflow['status'] => {
-    const activeSteps = steps.filter((step) => !step.isRemoved);
-    if (activeSteps.length === 0) return 'draft';
-    if (activeSteps.every((step) => step.status === 'completed')) return 'completed';
-    return 'in_progress';
-  };
-
   const completeWorkflowStep = (workflow: Workflow, stepId: string, output: string) => {
     const currentStep = workflow.steps.find((step) => step.id === stepId);
     if (!currentStep) return { workflow, nextActiveStepIndex: activeStepIndex };
 
     const completedAt = new Date().toISOString();
-    let nextSteps = workflow.steps.map((step) => (
+    const nextSteps = workflow.steps.map((step) => (
       step.id === stepId
         ? { ...step, status: 'completed' as const, output, completed_at: completedAt, updated_at: completedAt }
         : step
     ));
 
-    const unlockNextStepIndex = () => {
-      const laterStepIndex = Math.min(
-        ...nextSteps
-          .filter((step) => !step.isRemoved && step.step_index > currentStep.step_index)
-          .map((step) => step.step_index)
-      );
-
-      if (!Number.isFinite(laterStepIndex)) return;
-
-      nextSteps = nextSteps.map((step) => (
-        step.step_index === laterStepIndex && step.status === 'pending'
-          ? { ...step, status: 'in_progress' as const, updated_at: completedAt }
-          : step
-      ));
-    };
-
-    if (currentStep.runMode === 'parallel' && currentStep.parallelGroupId) {
-      const groupSteps = nextSteps.filter((step) => !step.isRemoved && step.parallelGroupId === currentStep.parallelGroupId);
-      if (groupSteps.every((step) => step.status === 'completed')) {
-        unlockNextStepIndex();
-      }
-    } else {
-      unlockNextStepIndex();
-    }
-
-    const nextWorkflow: Workflow = {
+    const nextWorkflow = normalizeWorkflowExecutionPlan({
       ...workflow,
-      status: deriveWorkflowStatus(nextSteps),
       steps: nextSteps,
       updated_at: completedAt,
-    };
+    }, completedAt);
     const visibleSteps = getVisibleSteps(nextWorkflow);
     const nextInProgressIndex = visibleSteps.findIndex((step) => step.status === 'in_progress');
     const completedStepIndex = visibleSteps.findIndex((step) => step.id === stepId);
@@ -1625,49 +1795,7 @@ export default function WorkflowsPage() {
   const handleCreateWorkflow = async () => {
     if (!activeWorkspaceId || !newWorkflowName.trim() || selectedSkills.length < 3) return;
 
-    let stepIndex = 0;
-    let parallelGroupCounter = 0;
-    let activeParallelGroupId = '';
-    let activeParallelGroupName = '';
-    const steps = selectedSkills.map((skill, idx) => {
-      const mode = selectedSkillModes[skill.id] || 'serial';
-      const previousMode = idx > 0 ? selectedSkillModes[selectedSkills[idx - 1].id] || 'serial' : 'serial';
-      const nextMode = idx < selectedSkills.length - 1 ? selectedSkillModes[selectedSkills[idx + 1].id] || 'serial' : 'serial';
-
-      if (mode === 'serial') {
-        if (idx > 0) stepIndex += 1;
-        activeParallelGroupId = '';
-        activeParallelGroupName = '';
-        return {
-          name: skill.name,
-          skill_id: skill.id,
-          step_index: stepIndex,
-          runMode: 'serial' as const,
-        };
-      }
-
-      if (previousMode !== 'parallel') {
-        if (idx > 0) stepIndex += 1;
-        parallelGroupCounter += 1;
-        activeParallelGroupId = `parallel-${Date.now()}-${parallelGroupCounter}`;
-        activeParallelGroupName = `并行任务组 ${parallelGroupCounter}`;
-      }
-
-      const currentStepIndex = stepIndex;
-      if (nextMode !== 'parallel') {
-        // The next serial step should depend on this parallel group.
-        stepIndex += 0;
-      }
-
-      return {
-        name: skill.name,
-        skill_id: skill.id,
-        step_index: currentStepIndex,
-        runMode: 'parallel' as const,
-        parallelGroupId: activeParallelGroupId,
-        parallelGroupName: activeParallelGroupName,
-      };
-    });
+    const steps = buildSelectedWorkflowSteps(selectedSkills, selectedSkillModes);
 
     try {
       setErrorMessage('');
@@ -1685,7 +1813,7 @@ export default function WorkflowsPage() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || '创建工作流失败');
 
-      const createdWorkflow = data.workflow as Workflow;
+      const createdWorkflow = normalizeWorkflowExecutionPlan(data.workflow as Workflow);
       setWorkflows((prev) => [createdWorkflow, ...prev]);
       setActiveWorkflow(createdWorkflow);
       setActiveStepIndex(0);
@@ -1815,14 +1943,15 @@ export default function WorkflowsPage() {
     const timestamp = Date.now();
     const visibleSteps = getVisibleSteps(workflow);
     const firstVisibleStepId = visibleSteps[0]?.id;
+    const clonedAt = new Date().toISOString();
 
-    const clonedWorkflow: Workflow = {
+    const clonedWorkflow = normalizeWorkflowExecutionPlan({
       ...workflow,
       id: `wf-clone-${timestamp}`,
       name: `${workflow.name} 副本`,
       status: 'draft',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      created_at: clonedAt,
+      updated_at: clonedAt,
       steps: workflow.steps.map((step, index) => ({
         ...step,
         id: `step-clone-${timestamp}-${index}`,
@@ -1834,32 +1963,40 @@ export default function WorkflowsPage() {
       stepSnapshots: [],
       stepChats: {},
       skillDrafts: {},
-    };
+    }, clonedAt);
 
     setWorkflows((prev) => [clonedWorkflow, ...prev]);
     void persistWorkflow(clonedWorkflow);
   };
 
   const handleSoftRemoveStep = (workflowId: string, stepId: string) => {
-    updateWorkflowById(workflowId, (workflow) => ({
-      ...workflow,
-      steps: workflow.steps.map((step) => (
-        step.id === stepId
-          ? { ...step, isRemoved: true, removedAt: new Date().toISOString() }
-          : step
-      )),
-    }));
+    updateWorkflowById(workflowId, (workflow) => {
+      const updatedAt = new Date().toISOString();
+      return normalizeWorkflowExecutionPlan({
+        ...workflow,
+        steps: workflow.steps.map((step) => (
+          step.id === stepId
+            ? { ...step, isRemoved: true, removedAt: updatedAt, updated_at: updatedAt }
+            : step
+        )),
+        updated_at: updatedAt,
+      }, updatedAt);
+    });
   };
 
   const handleRestoreStep = (workflowId: string, stepId: string) => {
-    updateWorkflowById(workflowId, (workflow) => ({
-      ...workflow,
-      steps: workflow.steps.map((step) => (
-        step.id === stepId
-          ? { ...step, isRemoved: false, removedAt: undefined }
-          : step
-      )),
-    }));
+    updateWorkflowById(workflowId, (workflow) => {
+      const updatedAt = new Date().toISOString();
+      return normalizeWorkflowExecutionPlan({
+        ...workflow,
+        steps: workflow.steps.map((step) => (
+          step.id === stepId
+            ? { ...step, isRemoved: false, removedAt: undefined, updated_at: updatedAt }
+            : step
+        )),
+        updated_at: updatedAt,
+      }, updatedAt);
+    });
   };
 
   const handleUpdateStepRunMode = (workflowId: string, stepId: string, runMode: 'serial' | 'parallel') => {
@@ -1869,14 +2006,9 @@ export default function WorkflowsPage() {
       if (stepPosition < 0) return workflow;
 
       const targetStep = visibleSteps[stepPosition];
-      const previousStep = visibleSteps[stepPosition - 1];
-      const nextStep = visibleSteps[stepPosition + 1];
-      const adjacentGroupId = previousStep?.parallelGroupId || nextStep?.parallelGroupId;
-      const adjacentGroupName = previousStep?.parallelGroupName || nextStep?.parallelGroupName;
-      const newGroupId = adjacentGroupId || `parallel-${Date.now()}-${stepId}`;
-      const newGroupName = adjacentGroupName || `并行任务组 ${workflow.steps.filter((step) => step.runMode === 'parallel').length + 1}`;
+      const updatedAt = new Date().toISOString();
 
-      return {
+      return normalizeWorkflowExecutionPlan({
         ...workflow,
         steps: workflow.steps.map((step) => {
           if (step.id !== targetStep.id) return step;
@@ -1887,26 +2019,26 @@ export default function WorkflowsPage() {
               runMode: 'serial',
               parallelGroupId: undefined,
               parallelGroupName: undefined,
+              updated_at: updatedAt,
             };
           }
 
           return {
             ...step,
             runMode: 'parallel',
-            parallelGroupId: newGroupId,
-            parallelGroupName: newGroupName,
+            updated_at: updatedAt,
           };
         }),
-      };
+        updated_at: updatedAt,
+      }, updatedAt);
     });
   };
 
   const handleAppendSkillToWorkflow = (workflowId: string, skill: Skill) => {
     updateWorkflowById(workflowId, (workflow) => {
-      const maxStepIndex = workflow.steps.reduce((max, step) => Math.max(max, step.step_index), -1);
-      const visibleSteps = getVisibleSteps(workflow);
+      const updatedAt = new Date().toISOString();
 
-      return {
+      return normalizeWorkflowExecutionPlan({
         ...workflow,
         steps: [
           ...workflow.steps,
@@ -1914,13 +2046,16 @@ export default function WorkflowsPage() {
             id: `step-${Date.now()}-${skill.id}`,
             name: skill.name,
             skill_id: skill.id,
-            step_index: maxStepIndex + 1,
+            step_index: workflow.steps.length,
             runMode: 'serial',
-            status: visibleSteps.length === 0 ? 'in_progress' : 'pending',
+            status: 'pending',
             output: null,
+            created_at: updatedAt,
+            updated_at: updatedAt,
           },
         ],
-      };
+        updated_at: updatedAt,
+      }, updatedAt);
     });
   };
 
@@ -2701,7 +2836,7 @@ export default function WorkflowsPage() {
   const isCurrentSkillDraftEnabled = Boolean(currentSkillDraft?.enabled);
   const currentSkillDraftDiff = getSkillDraftDiffSummary(baseCurrentSkill, currentSkillDraft);
   const previousSteps = currentStep
-    ? visibleWorkflowSteps.filter((step) => step.step_index < currentStep.step_index && step.output)
+    ? getPriorWorkflowSteps(activeWorkflow, currentStep).filter((step) => step.output)
     : [];
   const currentContextSelection = currentStep
     ? getContextSelection(activeWorkflow, currentStep.id)
@@ -2710,8 +2845,8 @@ export default function WorkflowsPage() {
   const autoInjectedPreviousSteps = previousSteps.filter((step) => !disabledAutoInjectedStepIds.includes(step.id));
   const autoInjectedPreviousStepIds = new Set(autoInjectedPreviousSteps.map((step) => step.id));
   const disabledAutoInjectedPreviousSteps = previousSteps.filter((step) => disabledAutoInjectedStepIds.includes(step.id));
-  const reviewMaterials: ReviewMaterial[] = activeWorkflow.steps
-    .filter((step) => !step.isRemoved && step.status === 'completed' && step.output)
+  const reviewMaterials: ReviewMaterial[] = visibleWorkflowSteps
+    .filter((step) => step.status === 'completed' && step.output)
     .map((step) => ({
       id: step.id,
       name: `${step.name}产物`,
@@ -2896,8 +3031,8 @@ export default function WorkflowsPage() {
     try {
       const previousOutputs: Array<{ name: string; output: string }> = [];
       let remainingPreviousOutputChars = maxTotalStepPromptContextChars;
-      for (const step of activeWorkflow.steps) {
-        if (step.isRemoved || step.step_index >= currentStep.step_index || !step.output) continue;
+      for (const step of getPriorWorkflowSteps(activeWorkflow, currentStep)) {
+        if (!step.output) continue;
         if (remainingPreviousOutputChars <= 0) {
           previousOutputs.push({
             name: step.name,
@@ -3059,15 +3194,7 @@ export default function WorkflowsPage() {
       updated_at: updatedAt,
     }));
   };
-  const workflowStepGroups = Object.values(
-    visibleWorkflowSteps.reduce<Record<string, WorkflowStep[]>>((groups, step) => {
-      const key = step.runMode === 'parallel' && step.parallelGroupId
-        ? `parallel-${step.parallelGroupId}`
-        : `serial-${step.id}`;
-      groups[key] = [...(groups[key] || []), step];
-      return groups;
-    }, {})
-  );
+  const workflowStepGroups = getWorkflowExecutionGroups(visibleWorkflowSteps).map((group) => group.steps);
   const toggleOutputExpanded = (stepId: string) => {
     setExpandedOutputIds((prev) => ({
       ...prev,
@@ -3283,7 +3410,7 @@ export default function WorkflowsPage() {
               onClick={() => {
                 if (!activeWorkflow || !currentStep) return;
                 const updatedAt = new Date().toISOString();
-                const nextWorkflow: Workflow = {
+                const nextWorkflow = normalizeWorkflowExecutionPlan({
                   ...activeWorkflow,
                   status: 'in_progress',
                   steps: activeWorkflow.steps.map((step) => (
@@ -3292,7 +3419,7 @@ export default function WorkflowsPage() {
                       : step
                   )),
                   updated_at: updatedAt,
-                };
+                }, updatedAt);
                 setWorkflows((prev) => prev.map((workflow) => (
                   workflow.id === nextWorkflow.id ? nextWorkflow : workflow
                 )));
