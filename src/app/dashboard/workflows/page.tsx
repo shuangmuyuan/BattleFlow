@@ -876,17 +876,17 @@ export default function WorkflowsPage() {
     return (
       <div
         key={`assistant-document-${messageIndex}`}
-        className="w-full min-w-0 max-w-[min(100%,44rem)] overflow-hidden rounded-xl border border-border/50 bg-card shadow-sm"
+        className="w-full min-w-0 max-w-[min(100%,44rem)] overflow-hidden rounded-lg border border-border/50 bg-card shadow-sm"
       >
         <div className="flex min-w-0 items-center justify-between gap-3 border-b border-border/50 bg-muted/25 px-3 py-2.5">
           <div className="flex min-w-0 items-center gap-2">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
               <FileText className="h-4 w-4" />
             </div>
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold">{title}</p>
               <p className="text-[11px] text-muted-foreground">
-                Markdown 文档 · {documentContent.length.toLocaleString('zh-CN')} 字符
+                Markdown 文档 · {documentContent.length.toLocaleString('zh-CN')} 字符 · 确认步骤后保存
               </p>
             </div>
           </div>
@@ -896,6 +896,7 @@ export default function WorkflowsPage() {
               size="sm"
               className="h-8 w-8 p-0"
               title="复制 Markdown"
+              aria-label="复制 Markdown 文档"
               onClick={() => navigator.clipboard.writeText(documentContent)}
             >
               <Copy className="h-3.5 w-3.5" />
@@ -905,13 +906,14 @@ export default function WorkflowsPage() {
               size="sm"
               className="h-8 w-8 p-0"
               title="下载 Markdown"
+              aria-label="下载 Markdown 文档"
               onClick={() => downloadMarkdownDocument(title, documentContent)}
             >
               <Download className="h-3.5 w-3.5" />
             </Button>
           </div>
         </div>
-        <div className="max-h-[34rem] min-w-0 overflow-y-auto p-4">
+        <div className="max-h-[min(34rem,55vh)] min-w-0 overflow-y-auto p-4">
           <CompactMarkdown
             content={documentContent}
             className="text-sm leading-6 [&_h2]:text-sm [&_h3]:text-xs [&_table]:text-[11px]"
