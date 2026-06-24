@@ -469,8 +469,11 @@ export default function SkillsPage() {
       });
       const data = (await res.json()) as ApiSkillResponse;
       if (!res.ok) throw new Error(data.error || 'Skill operation failed');
+      const shouldRefreshReviewState = body.action === 'approve_publish'
+        || body.action === 'reject_review'
+        || body.action === 'publish_request';
       if (data.skill) updateSkillInState(data.skill);
-      if (data.skills || data.review_request || data.review_requests) await fetchSkills();
+      if (data.skills || data.review_request || data.review_requests || shouldRefreshReviewState) await fetchSkills();
       setSuccessMessage(success);
       return true;
     } catch (error) {
