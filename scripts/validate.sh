@@ -1,9 +1,9 @@
 #!/bin/bash
 set -Eeuo pipefail
 
-COZE_WORKSPACE_PATH="${COZE_WORKSPACE_PATH:-$(pwd)}"
+BATTLEFLOW_WORKSPACE_PATH="${BATTLEFLOW_WORKSPACE_PATH:-$(pwd)}"
 
-cd "${COZE_WORKSPACE_PATH}"
+cd "${BATTLEFLOW_WORKSPACE_PATH}"
 
 echo "🔍 Running validate..."
 pnpm validate

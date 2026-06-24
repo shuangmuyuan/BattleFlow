@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { ClipboardEvent, KeyboardEvent } from 'react';
+import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -389,6 +390,76 @@ const defaultContextSelection: WorkflowContextSelection = {
 
 const maxTextContextChars = 32_000;
 const maxPreviewImageBytes = 800_000;
+const maxStepPromptContextChars = 12_000;
+const maxTotalStepPromptContextChars = 36_000;
+const maxChatRequestMessages = 12;
+const maxChatRequestMessageChars = 12_000;
+const maxTotalChatRequestMessageChars = 48_000;
+const maxRenderedMarkdownPreviewChars = 24_000;
+const maxDocumentTitleScanChars = 16_000;
+const maxDocumentTypeScanChars = 12_000;
+
+function sliceTextWithMiddleOmission(value: string, maxChars: number) {
+  if (value.length <= maxChars) {
+    return { text: value, truncated: false, omittedChars: 0 };
+  }
+
+  const headChars = Math.floor(maxChars * 0.72);
+  const tailChars = Math.max(maxChars - headChars, 0);
+  const omittedChars = value.length - headChars - tailChars;
+
+  return {
+    text: [
+      value.slice(0, headChars),
+      '',
+      `...（中间省略 ${omittedChars.toLocaleString('zh-CN')} 字符）...`,
+      '',
+      tailChars > 0 ? value.slice(-tailChars) : '',
+    ].filter(Boolean).join('\n'),
+    truncated: true,
+    omittedChars,
+  };
+}
+
+function getRenderedMarkdownPreview(content: string, maxChars = maxRenderedMarkdownPreviewChars) {
+  const sliced = sliceTextWithMiddleOmission(content.trim(), maxChars);
+  return {
+    content: sliced.text,
+    truncated: sliced.truncated,
+    omittedChars: sliced.omittedChars,
+  };
+}
+
+function buildPromptChatMessages(messages: ChatMessage[]) {
+  const recentMessages = messages.slice(-maxChatRequestMessages);
+  let remainingMessageChars = maxTotalChatRequestMessageChars;
+
+  return recentMessages.map((message) => {
+    if (remainingMessageChars <= 0) {
+      return {
+        ...message,
+        content: `注：该历史消息未注入正文，因为本轮历史对话上下文已达到 ${maxTotalChatRequestMessageChars.toLocaleString('zh-CN')} 字符预算。`,
+      };
+    }
+
+    const sliced = sliceTextWithMiddleOmission(
+      message.content,
+      Math.min(maxChatRequestMessageChars, remainingMessageChars),
+    );
+    remainingMessageChars -= sliced.text.length;
+
+    return {
+      ...message,
+      content: sliced.truncated
+        ? [
+          sliced.text,
+          '',
+          `注：该历史消息原始长度为 ${message.content.length.toLocaleString('zh-CN')} 字符，本轮请求已按上下文预算截取。`,
+        ].join('\n')
+        : sliced.text,
+    };
+  });
+}
 
 function isReadableTextFile(file: File) {
   return file.type.startsWith('text/') || /\.(txt|md|markdown)$/i.test(file.name);
@@ -447,6 +518,7 @@ export default function WorkflowsPage() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const [expandedAssistantDocumentIds, setExpandedAssistantDocumentIds] = useState<Record<string, boolean>>({});
   const [chatPersistenceByStepId, setChatPersistenceByStepId] = useState<Record<string, ChatPersistenceStatus>>({});
   const [isConfirmingStep, setIsConfirmingStep] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -863,11 +935,54 @@ export default function WorkflowsPage() {
     URL.revokeObjectURL(url);
   };
 
+  const copyMarkdownToClipboard = useCallback(async (content: string, label = 'Markdown 文档') => {
+    const normalizedContent = content.trim();
+
+    if (!normalizedContent) {
+      toast.warning('暂无可复制内容');
+      return;
+    }
+
+    const fallbackCopy = () => {
+      const textarea = document.createElement('textarea');
+      textarea.value = normalizedContent;
+      textarea.setAttribute('readonly', 'true');
+      textarea.style.position = 'fixed';
+      textarea.style.inset = '0 auto auto -9999px';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      const copied = document.execCommand('copy');
+      document.body.removeChild(textarea);
+      return copied;
+    };
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(normalizedContent);
+      } else if (!fallbackCopy()) {
+        throw new Error('Clipboard fallback failed');
+      }
+
+      toast.success(`${label}已复制到剪贴板`);
+    } catch (error) {
+      if (fallbackCopy()) {
+        toast.success(`${label}已复制到剪贴板`);
+        return;
+      }
+
+      console.warn('Failed to copy Markdown content', error);
+      toast.error('复制失败，可展开后手动选择内容复制');
+    }
+  }, []);
+
   const getMarkdownDocumentTitle = (content: string, fallback: string) => {
-    const heading = content.match(/^\s*#{1,3}\s+(.+)$/m)?.[1]?.trim();
+    const sample = content.length > maxDocumentTitleScanChars ? content.slice(0, maxDocumentTitleScanChars) : content;
+    const heading = sample.match(/^\s*#{1,3}\s+(.+)$/m)?.[1]?.trim();
     if (heading) return heading.slice(0, 64);
 
-    const firstLine = content
+    const firstLine = sample
       .split('\n')
       .map((line) => line.replace(/^[>\s#*-]+/, '').trim())
       .find(Boolean);
@@ -878,10 +993,11 @@ export default function WorkflowsPage() {
   const isAssistantDocumentLike = (content: string) => {
     const value = content.trim();
     if (value.length < 900) return false;
+    const sample = value.length > maxDocumentTypeScanChars ? value.slice(0, maxDocumentTypeScanChars) : value;
     return (
-      /^#{1,3}\s+\S/m.test(value)
-      || /\n\|[^|\n]+\|[^|\n]+\|\n\|[\s:|-]+\|/.test(value)
-      || /(输出文档|最终产出|分析报告|需求说明书|规格说明书|Markdown 文档)/.test(value)
+      /^#{1,3}\s+\S/m.test(sample)
+      || /\n\|[^|\n]+\|[^|\n]+\|\n\|[\s:|-]+\|/.test(sample)
+      || /(输出文档|最终产出|分析报告|需求说明书|规格说明书|Markdown 文档)/.test(sample)
     );
   };
 
@@ -890,13 +1006,16 @@ export default function WorkflowsPage() {
       ? normalizeSkillOutputDocument(activeWorkflow, currentStep, content)
       : content.trim();
     const title = getMarkdownDocumentTitle(documentContent, `${currentStep?.name || '当前步骤'} - Skill 输出文档`);
+    const documentId = `${currentStep?.id || 'step'}-${messageIndex}`;
+    const isExpanded = Boolean(expandedAssistantDocumentIds[documentId]);
+    const previewDocument = getRenderedMarkdownPreview(documentContent);
 
     return (
       <div
         key={`assistant-document-${messageIndex}`}
-        className="w-full min-w-0 max-w-[min(100%,44rem)] overflow-hidden rounded-lg border border-border/50 bg-card shadow-sm"
+        className="w-full min-w-0 max-w-full overflow-hidden rounded-lg border border-border/50 bg-card shadow-sm md:max-w-[80%] xl:max-w-[44rem]"
       >
-        <div className="flex min-w-0 items-center justify-between gap-3 border-b border-border/50 bg-muted/25 px-3 py-2.5">
+        <div className={`flex min-w-0 items-center justify-between gap-3 bg-muted/25 px-3 py-2.5 ${isExpanded ? 'border-b border-border/50' : ''}`}>
           <div className="flex min-w-0 items-center gap-2">
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
               <FileText className="h-4 w-4" />
@@ -915,7 +1034,7 @@ export default function WorkflowsPage() {
               className="h-8 w-8 p-0"
               title="复制 Markdown"
               aria-label="复制 Markdown 文档"
-              onClick={() => navigator.clipboard.writeText(documentContent)}
+              onClick={() => copyMarkdownToClipboard(documentContent)}
             >
               <Copy className="h-3.5 w-3.5" />
             </Button>
@@ -929,14 +1048,41 @@ export default function WorkflowsPage() {
             >
               <Download className="h-3.5 w-3.5" />
             </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 gap-1 px-2 text-xs"
+              title={isExpanded ? '折叠文档' : '展开文档'}
+              aria-expanded={isExpanded}
+              aria-controls={`assistant-document-body-${documentId}`}
+              onClick={() => {
+                setExpandedAssistantDocumentIds((prev) => ({
+                  ...prev,
+                  [documentId]: !isExpanded,
+                }));
+              }}
+            >
+              {isExpanded ? '折叠' : '展开'}
+              <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+            </Button>
           </div>
         </div>
-        <div className="max-h-[min(34rem,55vh)] min-w-0 overflow-y-auto p-4">
-          <CompactMarkdown
-            content={documentContent}
-            className="text-sm leading-6 [&_h2]:text-sm [&_h3]:text-xs [&_table]:text-[11px]"
-          />
-        </div>
+        {isExpanded && (
+          <div
+            id={`assistant-document-body-${documentId}`}
+            className="max-h-[min(34rem,55vh)] min-w-0 overflow-y-auto p-4"
+          >
+            <CompactMarkdown
+              content={previewDocument.content}
+              className="text-sm leading-6 [&_h2]:text-sm [&_h3]:text-xs [&_table]:text-[11px]"
+            />
+            {previewDocument.truncated && (
+              <p className="mt-3 rounded-md border border-border/60 bg-muted/35 px-3 py-2 text-xs text-muted-foreground">
+                预览已省略 {previewDocument.omittedChars.toLocaleString('zh-CN')} 字符，复制或下载可获取完整 Markdown。
+              </p>
+            )}
+          </div>
+        )}
       </div>
     );
   };
@@ -949,6 +1095,23 @@ export default function WorkflowsPage() {
     return /^#\s+\S/.test(output)
       ? output
       : `# ${workflow.name}\n\n## ${step.name}\n\n${output}`;
+  };
+
+  const buildStepOutputPromptContext = (
+    workflow: Workflow,
+    step: WorkflowStep,
+    maxChars = maxStepPromptContextChars,
+  ) => {
+    const output = buildStepOutputMarkdown(workflow, step);
+    const sliced = sliceTextWithMiddleOmission(output, maxChars);
+
+    if (!sliced.truncated) return sliced.text;
+
+    return [
+      sliced.text,
+      '',
+      `注：该前序步骤产物原始长度为 ${output.length.toLocaleString('zh-CN')} 字符，本轮上下文已按 ${maxChars.toLocaleString('zh-CN')} 字符预算截取。`,
+    ].join('\n');
   };
 
   const getWorkflowSkillDraft = useCallback((workflow?: Workflow | null, stepId?: string) => (
@@ -1130,13 +1293,39 @@ export default function WorkflowsPage() {
     const selectedKnowledgeBases = knowledgeBases.filter((kb) => selectedKnowledgeBaseIds.includes(kb.id));
     const contextSelection = getContextSelection(workflow, currentStep.id);
     const disabledAutoInjectedStepIds = new Set(contextSelection.disabledAutoInjectedStepIds || []);
-    const autoInjectedStepOutputs = workflow.steps
-      .filter((step) => !step.isRemoved && step.step_index < currentStep.step_index && step.output && !disabledAutoInjectedStepIds.has(step.id))
-      .map((step) => ({
+    const autoInjectedStepOutputs: Array<{ id: string; name: string; output: string }> = [];
+    let remainingStepContextChars = maxTotalStepPromptContextChars;
+    for (const step of workflow.steps) {
+      if (
+        step.isRemoved
+        || step.step_index >= currentStep.step_index
+        || !step.output
+        || disabledAutoInjectedStepIds.has(step.id)
+      ) {
+        continue;
+      }
+
+      if (remainingStepContextChars <= 0) {
+        autoInjectedStepOutputs.push({
+          id: step.id,
+          name: step.name,
+          output: `注：该前序步骤产物未注入正文，因为本轮前序产物上下文已达到 ${maxTotalStepPromptContextChars.toLocaleString('zh-CN')} 字符预算。`,
+        });
+        continue;
+      }
+
+      const output = buildStepOutputPromptContext(
+        workflow,
+        step,
+        Math.min(maxStepPromptContextChars, remainingStepContextChars),
+      );
+      remainingStepContextChars -= output.length;
+      autoInjectedStepOutputs.push({
         id: step.id,
         name: step.name,
-        output: buildStepOutputMarkdown(workflow, step),
-      }));
+        output,
+      });
+    }
     const autoInjectedStepOutputIds = new Set(autoInjectedStepOutputs.map((step) => step.id));
     const selectedReviewMaterials = workflow.steps
       .filter((step) => (
@@ -1148,7 +1337,7 @@ export default function WorkflowsPage() {
       .map((step) => ({
         name: step.name,
         source: '工作流已评审产物',
-        summary: buildStepOutputMarkdown(workflow, step).slice(0, 1200),
+        summary: buildStepOutputPromptContext(workflow, step, 1200),
       }));
     const selectedUploadedReviewMaterials = reviewedOutputFiles
       .filter((file) => selectedReviewMaterialIds.includes(file.id))
@@ -1196,7 +1385,7 @@ export default function WorkflowsPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: requestMessages.map((m) => ({
+          messages: buildPromptChatMessages(requestMessages).map((m) => ({
             role: m.role,
             content: m.content,
           })),
@@ -2705,12 +2894,29 @@ export default function WorkflowsPage() {
     setSkillTuningMessage('');
 
     try {
-      const previousOutputs = activeWorkflow.steps
-        .filter((step) => !step.isRemoved && step.step_index < currentStep.step_index && step.output)
-        .map((step) => ({
+      const previousOutputs: Array<{ name: string; output: string }> = [];
+      let remainingPreviousOutputChars = maxTotalStepPromptContextChars;
+      for (const step of activeWorkflow.steps) {
+        if (step.isRemoved || step.step_index >= currentStep.step_index || !step.output) continue;
+        if (remainingPreviousOutputChars <= 0) {
+          previousOutputs.push({
+            name: step.name,
+            output: `注：该前序步骤产物未注入正文，因为本轮前序产物上下文已达到 ${maxTotalStepPromptContextChars.toLocaleString('zh-CN')} 字符预算。`,
+          });
+          continue;
+        }
+
+        const output = buildStepOutputPromptContext(
+          activeWorkflow,
+          step,
+          Math.min(maxStepPromptContextChars, remainingPreviousOutputChars),
+        );
+        remainingPreviousOutputChars -= output.length;
+        previousOutputs.push({
           name: step.name,
-          output: buildStepOutputMarkdown(activeWorkflow, step),
-        }));
+          output,
+        });
+      }
       const response = await fetch('/api/skills/tune', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2872,6 +3078,7 @@ export default function WorkflowsPage() {
     const output = step.output || '';
     const isExpanded = Boolean(expandedOutputIds[step.id]);
     const preview = compactMarkdownPreview(output, 132) || '暂无摘要。';
+    const outputMarkdownPreview = getRenderedMarkdownPreview(output);
 
     return (
       <Card key={step.id} className="mb-2 border-border/60 bg-card/75 shadow-none">
@@ -2921,9 +3128,14 @@ export default function WorkflowsPage() {
                   {isExpanded && (
                     <div className="mt-3 max-h-72 min-w-0 overflow-y-auto rounded-lg border border-border/60 bg-background/80 p-3">
                       <CompactMarkdown
-                        content={output}
+                        content={outputMarkdownPreview.content}
                         className="text-xs leading-5 [&_blockquote]:my-2 [&_h2]:text-sm [&_h3]:text-xs [&_li]:text-xs [&_p]:text-xs [&_table]:text-[11px]"
                       />
+                      {outputMarkdownPreview.truncated && (
+                        <p className="mt-3 rounded-md border border-border/60 bg-muted/35 px-3 py-2 text-xs text-muted-foreground">
+                          预览已省略 {outputMarkdownPreview.omittedChars.toLocaleString('zh-CN')} 字符，下载可获取完整 Markdown。
+                        </p>
+                      )}
                     </div>
                   )}
                 </>
@@ -3126,7 +3338,7 @@ export default function WorkflowsPage() {
         )}
 
         {/* Chat Messages */}
-        <ScrollArea className="min-h-0 min-w-0 flex-1 p-4">
+        <ScrollArea className="min-h-0 min-w-0 flex-1 overflow-hidden p-4 [&_[data-slot=scroll-area-viewport]]:min-w-0 [&_[data-slot=scroll-area-viewport]]:overflow-x-hidden">
           {currentStep?.status === 'completed' && currentStep.output && chatMessages.length === 0 ? (
             /* Show completed step output */
             <div className="min-w-0 max-w-full space-y-4 overflow-hidden">
@@ -3142,11 +3354,7 @@ export default function WorkflowsPage() {
                       variant="ghost"
                       size="sm"
                       className="h-7 gap-1 text-xs"
-                      onClick={() => {
-                        if (currentStep.output) {
-                          navigator.clipboard.writeText(currentStep.output);
-                        }
-                      }}
+                      onClick={() => copyMarkdownToClipboard(currentStep.output || '', `${currentStep.name}产物`)}
                     >
                       复制
                     </Button>
@@ -3161,7 +3369,19 @@ export default function WorkflowsPage() {
                     </Button>
                   </div>
                 </div>
-                <CompactMarkdown content={currentStep.output} />
+                {(() => {
+                  const outputPreview = getRenderedMarkdownPreview(currentStep.output || '');
+                  return (
+                    <>
+                      <CompactMarkdown content={outputPreview.content} />
+                      {outputPreview.truncated && (
+                        <p className="mt-3 rounded-md border border-border/60 bg-muted/35 px-3 py-2 text-xs text-muted-foreground">
+                          预览已省略 {outputPreview.omittedChars.toLocaleString('zh-CN')} 字符，下载可获取完整 Markdown。
+                        </p>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
               {currentSkill?.checklist && currentSkill.checklist.length > 0 && (
                 <div className="bg-muted/30 border border-border/30 rounded-lg p-4">
@@ -3203,20 +3423,20 @@ export default function WorkflowsPage() {
               )}
             </div>
           ) : (
-            <div className="min-w-0 max-w-full space-y-4 overflow-hidden">
+            <div className="w-full min-w-0 max-w-full space-y-4 overflow-hidden">
               {chatMessages.map((msg, idx) => {
                 const renderDocumentCard = msg.role === 'assistant' && isAssistantDocumentLike(msg.content);
 
                 return (
                   <div
                     key={idx}
-                    className={`flex min-w-0 max-w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                    className={`flex w-full min-w-0 max-w-full ${msg.role === 'user' ? 'justify-end pl-6 sm:pl-10' : 'justify-start pr-6 sm:pr-10'}`}
                   >
                     {renderDocumentCard ? (
                       renderAssistantDocumentCard(msg.content, idx)
                     ) : (
                       <div
-                        className={`min-w-0 max-w-[min(100%,42rem)] overflow-hidden break-words rounded-lg p-3 text-sm md:max-w-[min(80%,42rem)] ${
+                        className={`w-fit min-w-0 max-w-full overflow-hidden break-words rounded-lg p-3 text-sm [overflow-wrap:anywhere] md:max-w-[80%] xl:max-w-2xl ${
                           msg.role === 'user'
                             ? 'bg-primary text-primary-foreground'
                             : 'bg-muted/50 border border-border/40'
@@ -3225,7 +3445,7 @@ export default function WorkflowsPage() {
                         {msg.role === 'assistant' ? (
                           <CompactMarkdown content={msg.content} />
                         ) : (
-                          <div className="whitespace-pre-wrap">{msg.content}</div>
+                          <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.content}</div>
                         )}
                       </div>
                     )}

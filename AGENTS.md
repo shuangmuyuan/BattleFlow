@@ -61,7 +61,7 @@ Use `pnpm` only. Do not use `npm` or `yarn` for dependency or script execution i
 | Responsive layout check | `pnpm check:responsive` | Verifies required responsive layout class contracts. |
 | Full validation gate | `pnpm validate` | Runs type-check, lint, overlay, and responsive checks in parallel. |
 | Production build | `pnpm build` | Installs dependencies, runs `next build`, then bundles `src/server.ts` with `tsup`. |
-| Production start | `COZE_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start` | Runs `dist/server.js`; requires a prior build. |
+| Production start | `BATTLEFLOW_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start` | Runs `dist/server.js`; requires a prior build. |
 
 ## Mandatory Rules
 
@@ -76,7 +76,7 @@ Use `pnpm` only. Do not use `npm` or `yarn` for dependency or script execution i
 - Overlay safety: business code must not import raw Radix overlay primitives directly. Use the bounded components in `src/components/ui/`.
 - Validation: run `pnpm validate` before considering a code or UI change complete. Run `pnpm build` for server/runtime, dependency, or deployment-impacting changes.
 - Testing gap: this repo currently has validation scripts but no unit/component/e2e test runner. Behavior changes should either add focused tests if a runner is introduced or document the manual verification performed.
-- Secrets: never commit `.env*`, Supabase service role keys, Anthropic/Claude credentials, Coze credentials, imported private Skill packages, or runtime registry data under `data/`.
+- Secrets: never commit `.env*`, Supabase service role keys, Anthropic/Claude credentials, imported private Skill packages, or runtime registry data under `data/`.
 - Runtime data: `data/skill-registry/`, `data/workflows/`, `.dwp/`, and `tmp/` are working state, not product source.
 - Repository boundaries: this is an individual repository. Do not treat it as an orchestrator hub and do not commit unrelated sibling repository changes from here.
 - Progress reporting: for multi-step work, keep the user informed after significant phases. Do not block engineering work on status reporting if the reporting channel is unavailable.

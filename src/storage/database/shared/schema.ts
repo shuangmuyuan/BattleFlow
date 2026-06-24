@@ -187,7 +187,7 @@ export const knowledgeBases = pgTable("knowledge_bases", {
     api_key: string;
     dataset_name: string;
   }>(),
-  // Coze knowledge dataset name
+  // External knowledge dataset name
   dataset_name: varchar("dataset_name", { length: 128 }),
   is_active: boolean("is_active").default(true).notNull(),
   created_by: varchar("created_by", { length: 36 }),

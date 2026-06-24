@@ -414,6 +414,18 @@ function deriveWorkflowStatus(workflow: WorkflowRecord): WorkflowStatus {
   return workflow.status === 'draft' ? 'draft' : 'in_progress';
 }
 
+function sortWorkflowSteps(steps: WorkflowStepRecord[]): WorkflowStepRecord[] {
+  return steps
+    .map((step, originalIndex) => ({ step, originalIndex }))
+    .sort((a, b) => {
+      if (a.step.step_index !== b.step.step_index) {
+        return a.step.step_index - b.step.step_index;
+      }
+      return a.originalIndex - b.originalIndex;
+    })
+    .map(({ step }) => step);
+}
+
 function normalizeWorkflow(workflow: Partial<WorkflowRecord>): WorkflowRecord {
   const now = nowIso();
   const steps = Array.isArray(workflow.steps)
@@ -425,7 +437,7 @@ function normalizeWorkflow(workflow: Partial<WorkflowRecord>): WorkflowRecord {
     name: workflow.name || '未命名工作流',
     description: workflow.description || '',
     status: workflow.status === 'completed' || workflow.status === 'draft' ? workflow.status : 'in_progress',
-    steps,
+    steps: sortWorkflowSteps(steps),
     contextFiles: Array.isArray(workflow.contextFiles)
       ? workflow.contextFiles.map((file, index) => normalizeContextFile(file, index))
       : [],

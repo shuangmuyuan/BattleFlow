@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 type MarkdownBlock =
@@ -140,7 +140,10 @@ function parseMarkdown(content: string): MarkdownBlock[] {
 }
 
 export function compactMarkdownPreview(content: string, maxChars = 160) {
-  return content
+  const sampleChars = Math.max(maxChars * 8, 2000);
+  const sample = content.length > sampleChars ? content.slice(0, sampleChars) : content;
+
+  return sample
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/^\s*(?:[-*+]|\d+[.)])\s+/gm, '')
@@ -235,20 +238,20 @@ export function CompactMarkdown({
   content: string;
   className?: string;
 }) {
-  const blocks = parseMarkdown(content);
+  const blocks = useMemo(() => parseMarkdown(content), [content]);
 
   if (blocks.length === 0) {
     return null;
   }
 
   return (
-    <div className={cn('min-w-0 max-w-full space-y-3 overflow-hidden text-sm leading-7 text-foreground', className)}>
+    <div className={cn('min-w-0 max-w-full space-y-3 overflow-hidden text-sm leading-7 text-foreground [overflow-wrap:anywhere]', className)}>
       {blocks.map((block, index) => {
         if (block.type === 'heading') {
           return (
             <div
               key={`heading-${index}`}
-              className="mt-4 min-w-0 max-w-full break-words first:mt-0 rounded-md bg-muted/45 px-3 py-2 text-sm font-semibold text-foreground"
+              className="mt-4 min-w-0 max-w-full break-words first:mt-0 rounded-md bg-muted/45 px-3 py-2 text-sm font-semibold text-foreground [overflow-wrap:anywhere]"
             >
               {renderInline(block.text)}
             </div>
@@ -257,7 +260,7 @@ export function CompactMarkdown({
 
         if (block.type === 'paragraph') {
           return (
-            <p key={`paragraph-${index}`} className="whitespace-normal break-words text-sm text-foreground/90">
+            <p key={`paragraph-${index}`} className="whitespace-normal break-words text-sm text-foreground/90 [overflow-wrap:anywhere]">
               {renderMultiline(block.lines)}
             </p>
           );
@@ -274,7 +277,7 @@ export function CompactMarkdown({
               )}
             >
               {block.items.map((item, itemIndex) => (
-                <li key={`${item}-${itemIndex}`} className="min-w-0 break-words pl-1">
+                <li key={`${item}-${itemIndex}`} className="min-w-0 break-words pl-1 [overflow-wrap:anywhere]">
                   {renderInline(item)}
                 </li>
               ))}
@@ -286,7 +289,7 @@ export function CompactMarkdown({
           return (
             <blockquote
               key={`quote-${index}`}
-              className="min-w-0 max-w-full break-words border-l-2 border-brand/60 bg-muted/30 px-3 py-2 text-sm text-muted-foreground"
+              className="min-w-0 max-w-full break-words border-l-2 border-brand/60 bg-muted/30 px-3 py-2 text-sm text-muted-foreground [overflow-wrap:anywhere]"
             >
               {renderMultiline(block.lines)}
             </blockquote>

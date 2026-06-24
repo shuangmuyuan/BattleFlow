@@ -1,7 +1,6 @@
 import { NextRequest } from 'next/server';
-import { LLMClient, Config, HeaderUtils, KnowledgeClient } from 'coze-coding-dev-sdk';
 import { streamClaudeCodeCliTurn } from '@/lib/agent-adapters/claude-code-cli';
-import type { AgentEvent, AgentProvider } from '@/lib/agent-adapters/types';
+import type { AgentEvent } from '@/lib/agent-adapters/types';
 import { cleanExecutableSkillText } from '@/lib/workflow-skill-draft';
 
 export const runtime = 'nodejs';
@@ -98,6 +97,11 @@ const MAX_TOTAL_UPLOADED_FILES_PROMPT_CHARS = 36_000;
 const MAX_SKILL_PACKAGE_ASSET_PROMPT_CHARS = 24_000;
 const MAX_SKILL_PACKAGE_ASSET_ITEM_PROMPT_CHARS = 6_000;
 const MAX_SKILL_PACKAGE_ASSET_PROMPT_COUNT = 60;
+const MAX_STEP_CONTEXT_PROMPT_CHARS = 12_000;
+const MAX_TOTAL_STEP_CONTEXT_PROMPT_CHARS = 36_000;
+const MAX_CHAT_PROMPT_MESSAGES = 12;
+const MAX_CHAT_PROMPT_MESSAGE_CHARS = 12_000;
+const MAX_TOTAL_CHAT_PROMPT_MESSAGE_CHARS = 48_000;
 
 function sse(payload: Record<string, unknown>) {
   return `data: ${JSON.stringify(payload)}\n\n`;
@@ -136,6 +140,35 @@ function getSafeChatErrorMessage(error: unknown) {
   }
 
   return message ? truncateForPrompt(message, 300) : 'Chat failed';
+}
+
+function boundPromptMessages(messages: ChatMessage[]) {
+  const recentMessages = messages.slice(-MAX_CHAT_PROMPT_MESSAGES);
+  let remainingMessageBudget = MAX_TOTAL_CHAT_PROMPT_MESSAGE_CHARS;
+
+  return recentMessages.map((message) => {
+    if (remainingMessageBudget <= 0) {
+      return {
+        ...message,
+        content: `Context omitted because chat history has reached the ${MAX_TOTAL_CHAT_PROMPT_MESSAGE_CHARS.toLocaleString('en-US')} character prompt budget.`,
+      };
+    }
+
+    const itemBudget = Math.min(MAX_CHAT_PROMPT_MESSAGE_CHARS, remainingMessageBudget);
+    const sliced = slicePromptTextWithMiddleOmission(message.content, itemBudget);
+    remainingMessageBudget -= sliced.text.length;
+
+    return {
+      ...message,
+      content: sliced.truncated
+        ? [
+          sliced.text,
+          '',
+          `Note: this chat message was reduced from ${message.content.length.toLocaleString('en-US')} to ${itemBudget.toLocaleString('en-US')} characters before prompt construction.`,
+        ].join('\n')
+        : sliced.text,
+    };
+  });
 }
 
 function slicePromptTextWithMiddleOmission(value: string, maxLength: number) {
@@ -261,34 +294,6 @@ function prepareMessagesForClaudeCodeCli(messages: ChatMessage[], hasWorkflowMet
     ));
 }
 
-function getChunkContent(chunk: Record<string, unknown>) {
-  return getString(
-    chunk.content,
-    getString(chunk.text, getString(chunk.raw_data, getString(chunk.chunk))),
-  );
-}
-
-function normalizeKnowledgeChunks(chunks: unknown): KnowledgeRetrievalChunk[] {
-  if (!Array.isArray(chunks)) return [];
-  const normalized: KnowledgeRetrievalChunk[] = [];
-
-  for (const chunk of chunks) {
-    if (!chunk || typeof chunk !== 'object' || Array.isArray(chunk)) continue;
-    const record = chunk as Record<string, unknown>;
-    const content = getChunkContent(record);
-    if (!content) continue;
-    const source = getString(record.source, getString(record.url, getString(record.document_name)));
-    const score = getNumber(record.score);
-    normalized.push({
-      content: truncateForPrompt(content, 1600),
-      ...(source ? { source } : {}),
-      ...(typeof score === 'number' ? { score } : {}),
-    });
-  }
-
-  return normalized;
-}
-
 function getLastUserMessage(messages: ChatMessage[]) {
   return [...messages].reverse().find((message) => message.role === 'user')?.content || '';
 }
@@ -314,10 +319,7 @@ async function retrieveKnowledgeContext(
     }));
   }
 
-  const kbClient = new KnowledgeClient(new Config());
-  const topK = 4;
-
-  return Promise.all(selectedKnowledgeBases.map(async (knowledgeBase) => {
+  return selectedKnowledgeBases.map((knowledgeBase) => {
     if (!knowledgeBase.dataset_name) {
       return {
         knowledge_base_id: knowledgeBase.id,
@@ -329,38 +331,15 @@ async function retrieveKnowledgeContext(
       };
     }
 
-    try {
-      const result = await kbClient.search(query, [knowledgeBase.dataset_name], topK, 0.3) as unknown as Record<string, unknown>;
-      if (result.code !== 0) {
-        return {
-          knowledge_base_id: knowledgeBase.id,
-          name: knowledgeBase.name,
-          dataset_name: knowledgeBase.dataset_name,
-          status: 'error' as const,
-          error: getString(result.msg, '知识检索失败。'),
-          chunks: [],
-        };
-      }
-
-      const chunks = normalizeKnowledgeChunks(result.chunks);
-      return {
-        knowledge_base_id: knowledgeBase.id,
-        name: knowledgeBase.name,
-        dataset_name: knowledgeBase.dataset_name,
-        status: chunks.length > 0 ? 'retrieved' as const : 'empty' as const,
-        chunks,
-      };
-    } catch (error) {
-      return {
-        knowledge_base_id: knowledgeBase.id,
-        name: knowledgeBase.name,
-        dataset_name: knowledgeBase.dataset_name,
-        status: 'error' as const,
-        error: error instanceof Error ? error.message : '知识检索失败。',
-        chunks: [],
-      };
-    }
-  }));
+    return {
+      knowledge_base_id: knowledgeBase.id,
+      name: knowledgeBase.name,
+      dataset_name: knowledgeBase.dataset_name,
+      status: 'skipped' as const,
+      error: '知识库文档索引尚未接入，当前仅注入已选知识库的元数据。',
+      chunks: [],
+    };
+  });
 }
 
 function buildSystemPrompt(body: Record<string, unknown>) {
@@ -428,8 +407,21 @@ function buildSystemPrompt(body: Record<string, unknown>) {
 
   if (stepContext.length > 0) {
     systemPrompt += '\n\n## Previous Steps Output (Context)\n';
+    let remainingStepContextBudget = MAX_TOTAL_STEP_CONTEXT_PROMPT_CHARS;
     for (const ctx of stepContext) {
-      systemPrompt += `\n### ${ctx.step_name || 'Previous Step'}\n${ctx.step_output || ''}\n`;
+      const rawOutput = ctx.step_output || '';
+      if (remainingStepContextBudget <= 0) {
+        systemPrompt += `\n### ${ctx.step_name || 'Previous Step'}\nContext omitted because previous-step output has reached the ${MAX_TOTAL_STEP_CONTEXT_PROMPT_CHARS.toLocaleString('en-US')} character prompt budget.\n`;
+        continue;
+      }
+
+      const itemBudget = Math.min(MAX_STEP_CONTEXT_PROMPT_CHARS, remainingStepContextBudget);
+      const sliced = slicePromptTextWithMiddleOmission(rawOutput, itemBudget);
+      systemPrompt += `\n### ${ctx.step_name || 'Previous Step'}\n${sliced.text}\n`;
+      if (sliced.truncated) {
+        systemPrompt += `Note: this previous-step output was reduced from ${rawOutput.length.toLocaleString('en-US')} to ${itemBudget.toLocaleString('en-US')} characters before prompt construction.\n`;
+      }
+      remainingStepContextBudget -= sliced.text.length;
     }
   }
 
@@ -593,52 +585,10 @@ function streamClaudeCodeCli(request: NextRequest, messages: ChatMessage[], syst
   }));
 }
 
-function streamCozeSdk(request: NextRequest, messages: ChatMessage[], systemPrompt: string, modelId?: string) {
-  const customHeaders = HeaderUtils.extractForwardHeaders(request.headers);
-  const config = new Config();
-  const client = new LLMClient(config, customHeaders);
-  const fullMessages = [
-    { role: 'system' as const, content: systemPrompt },
-    ...messages,
-  ];
-  const stream = client.stream(fullMessages, {
-    model: modelId || 'doubao-seed-2-0-pro-260215',
-    temperature: 0.7,
-  });
-
-  const encoder = new TextEncoder();
-  const readable = new ReadableStream({
-    async start(controller) {
-      try {
-        for await (const chunk of stream) {
-          if (chunk.content) {
-            controller.enqueue(encoder.encode(sse({ content: chunk.content.toString() })));
-          }
-        }
-        controller.enqueue(encoder.encode(sse({ done: true })));
-        controller.close();
-      } catch (error) {
-        console.error('Coze SDK stream error:', error);
-        controller.enqueue(encoder.encode(sse({ error: 'Model stream interrupted' })));
-        controller.close();
-      }
-    },
-  });
-
-  return new Response(readable, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      'Transfer-Encoding': 'chunked',
-    },
-  });
-}
-
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json() as Record<string, unknown>;
-    const messages = Array.isArray(body.messages) ? body.messages.filter(isChatMessage) : [];
+    const messages = boundPromptMessages(Array.isArray(body.messages) ? body.messages.filter(isChatMessage) : []);
 
     if (messages.length === 0) {
       return new Response(JSON.stringify({ error: 'Messages are required' }), {
@@ -652,10 +602,12 @@ export async function POST(request: NextRequest) {
       ...body,
       knowledge_retrievals: knowledgeRetrievals,
     });
-    const provider = String(body.agent_provider || process.env.CHAT_AGENT_PROVIDER || 'claude-code-cli') as AgentProvider;
-    if (provider === 'coze-sdk') {
-      const modelId = typeof body.model_id === 'string' ? body.model_id : undefined;
-      return streamCozeSdk(request, messages, systemPrompt, modelId);
+    const provider = String(body.agent_provider || process.env.CHAT_AGENT_PROVIDER || 'claude-code-cli');
+    if (provider !== 'claude-code-cli' && provider !== 'claude-cli') {
+      return new Response(JSON.stringify({ error: `Unsupported agent provider: ${provider}` }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
 
     const claudeMessages = prepareMessagesForClaudeCodeCli(messages, Boolean(body.skill_definition));

@@ -1,4 +1,4 @@
-export type AgentProvider = 'claude-code-cli' | 'claude-cli' | 'coze-sdk';
+export type AgentProvider = 'claude-code-cli' | 'claude-cli';
 
 export type AgentChatRole = 'user' | 'assistant' | 'system';
 

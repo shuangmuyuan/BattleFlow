@@ -27,7 +27,7 @@ BattleFlow is a workspace for AI-native product planning. It helps teams turn re
 - File-backed Skill registry under `data/skill-registry/` by default.
 - File-backed workflow registry under `data/workflows/` by default.
 - Dashboard pages for Skills, workflows, knowledge, demos, and workspace overview.
-- Chat route that can use Coze SDK LLMs or the Claude Code CLI adapter.
+- Chat route that uses the Claude Code CLI adapter for AI collaboration.
 - Supabase configuration injection for browser auth and server-side data access.
 - UI validation scripts that enforce overlay and responsive layout contracts.
 
@@ -46,4 +46,3 @@ BattleFlow is a workspace for AI-native product planning. It helps teams turn re
 - BattleFlow is not an unrestricted autonomous agent runtime.
 - BattleFlow does not make runtime registries under `data/` part of source control.
 - BattleFlow does not currently provide a full automated unit/e2e test suite.
-

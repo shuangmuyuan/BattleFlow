@@ -9,9 +9,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import Image from 'next/image';
+import { Swords } from 'lucide-react';
 
-const APP_ICON = 'https://coze-coding-project.tos.coze.site/gen_project_icon/2026-06-08/7648911020878053428_1780902092.png?sign=4902970176-a8669e5906-0-e35914f306ada1fa545af91a35054a974532e6c3f47b661a9307fabd4ed24e5d';
 const APP_NAME = 'BattleFlow';
 
 export default function LoginPage() {
@@ -111,13 +110,12 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <div className="w-full max-w-md space-y-6">
         <div className="flex flex-col items-center gap-4">
-          <Image
-            src={APP_ICON}
-            alt={APP_NAME}
-            width={64}
-            height={64}
-            className="rounded-xl"
-          />
+          <div
+            aria-label={APP_NAME}
+            className="flex size-16 items-center justify-center rounded-xl bg-brand/15 text-brand"
+          >
+            <Swords className="size-8" />
+          </div>
           <h1 className="text-2xl font-semibold text-foreground">{APP_NAME}</h1>
           <p className="text-sm text-muted-foreground">AI Native Product Planning Platform</p>
         </div>

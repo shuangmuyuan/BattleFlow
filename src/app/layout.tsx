@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { Inspector } from 'react-dev-inspector';
 import { SupabaseConfigProvider } from '@/lib/supabase-config-inject';
+import { Toaster } from '@/components/ui/sonner';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -58,7 +59,7 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const isDev = process.env.COZE_PROJECT_ENV === 'DEV';
+  const isDev = process.env.BATTLEFLOW_PROJECT_ENV === 'DEV';
 
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
@@ -71,6 +72,7 @@ export default function RootLayout({
         <SupabaseConfigProvider>
           {isDev && <Inspector />}
           {children}
+          <Toaster position="top-center" richColors />
         </SupabaseConfigProvider>
       </body>
     </html>

@@ -33,6 +33,14 @@ const layoutContracts = [
     ],
   },
   {
+    name: 'ScrollArea viewport cannot expand horizontally beyond its parent',
+    file: 'src/components/ui/scroll-area.tsx',
+    requiredTokenSets: [
+      ['min-w-0', 'overflow-x-hidden'],
+      ['[&>div]:!block', '[&>div]:!min-w-0', '[&>div]:!w-full'],
+    ],
+  },
+  {
     name: 'Workflow list contains workspace selector and workflow cards inside bounded scroll regions',
     file: 'src/app/dashboard/workflows/page.tsx',
     requiredTokenSets: [

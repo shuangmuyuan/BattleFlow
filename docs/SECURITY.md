@@ -10,12 +10,12 @@ Never commit:
 
 - `.env`, `.env.local`, or environment-specific `.env.*.local` files;
 - Supabase service role keys;
-- Anthropic, Claude, Coze, or Dailybot tokens;
+- Anthropic, Claude, or Dailybot tokens;
 - private Skill packages;
 - generated runtime registry data under `data/`;
 - `.dwp/` plan state or `tmp/` scratch artifacts containing user data.
 
-`COZE_SUPABASE_SERVICE_ROLE_KEY` is server-only. Do not expose it through client components or `/api/supabase-config`.
+`BATTLEFLOW_SUPABASE_SERVICE_ROLE_KEY` is server-only. Do not expose it through client components or `/api/supabase-config`.
 
 ## Authentication and Authorization
 

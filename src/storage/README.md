@@ -10,7 +10,7 @@ Supabase and database schema boundary.
 
 ## Security Boundaries
 
-- `COZE_SUPABASE_SERVICE_ROLE_KEY` is server-only.
+- `BATTLEFLOW_SUPABASE_SERVICE_ROLE_KEY` is server-only.
 - Browser code must use injected URL and anon key only.
 - Do not expose service-role keys through route handlers.
 - Keep auth/session checks explicit when routes mutate user or organization data.
@@ -20,4 +20,3 @@ Supabase and database schema boundary.
 - Preserve table names and relation semantics unless there is a migration plan.
 - Add indexes for new query patterns.
 - Keep JSON payload types explicit and narrow.
-

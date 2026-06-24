@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { KnowledgeClient, Config, KnowledgeDocument, DataSourceType } from 'coze-coding-dev-sdk';
 
 const KNOWLEDGE_UNAVAILABLE_MESSAGE = '知识库服务未配置：当前环境缺少 Supabase 知识库连接配置，暂时无法访问知识库资产。';
+const KNOWLEDGE_SEARCH_NOT_CONFIGURED_MESSAGE = '知识库检索服务尚未配置文档索引，当前仅支持知识库元数据管理。';
 
 function isKnowledgeServiceConfigError(error: unknown) {
   return error instanceof Error && (
-    error.message.includes('COZE_SUPABASE_URL')
-    || error.message.includes('COZE_SUPABASE_ANON_KEY')
+    error.message.includes('BATTLEFLOW_SUPABASE_URL')
+    || error.message.includes('BATTLEFLOW_SUPABASE_ANON_KEY')
   );
 }
 
@@ -50,20 +50,11 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ knowledgeBases: data });
     }
 
-    // Search knowledge base
-    const kbConfig = new Config();
-    const kbClient = new KnowledgeClient(kbConfig);
-    const datasetName = searchParams.get('dataset');
-    const tableNames = datasetName ? [datasetName] : undefined;
-    const topK = parseInt(searchParams.get('topK') || '5');
-
-    const searchResult = await kbClient.search(query, tableNames, topK, 0.3);
-
-    if (searchResult.code === 0) {
-      return NextResponse.json({ results: searchResult.chunks });
-    } else {
-      return NextResponse.json({ error: searchResult.msg, results: [] }, { status: 500 });
-    }
+    return NextResponse.json({
+      results: [],
+      serviceUnavailable: true,
+      error: KNOWLEDGE_SEARCH_NOT_CONFIGURED_MESSAGE,
+    }, { status: 200 });
   } catch (error) {
     console.error('Knowledge GET error:', error);
     if (isKnowledgeServiceConfigError(error)) {
@@ -132,22 +123,11 @@ export async function POST(request: NextRequest) {
       if (kbError) throw new Error(`Failed to fetch knowledge base: ${kbError.message}`);
       if (!kb) return NextResponse.json({ error: 'Knowledge base not found' }, { status: 404 });
 
-      const kbConfig = new Config();
-      const kbClient = new KnowledgeClient(kbConfig);
-
-      const docs: KnowledgeDocument[] = documents.map((doc: { source_type: string; content?: string; url?: string }) => ({
-        source: doc.source_type === 'url' ? DataSourceType.URL : DataSourceType.TEXT,
-        raw_data: doc.content,
-        url: doc.url,
-      }));
-
-      const result = await kbClient.addDocuments(docs, kb.dataset_name);
-
-      if (result.code === 0) {
-        return NextResponse.json({ success: true, doc_ids: result.doc_ids });
-      } else {
-        return NextResponse.json({ error: result.msg }, { status: 500 });
-      }
+      return NextResponse.json({
+        success: false,
+        error: KNOWLEDGE_SEARCH_NOT_CONFIGURED_MESSAGE,
+        dataset_name: kb.dataset_name,
+      }, { status: 501 });
     }
 
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
