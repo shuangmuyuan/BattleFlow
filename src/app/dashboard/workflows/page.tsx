@@ -272,11 +272,15 @@ function getLastAssistantMessage(messages: ChatMessage[]) {
   return [...messages].reverse().find((message) => message.role === 'assistant');
 }
 
-function hasConfirmableAssistantMessage(messages: ChatMessage[]) {
+function getLastConfirmableAssistantMessage(messages: ChatMessage[]) {
   const lastAssistantMessage = getLastAssistantMessage(messages);
   const content = lastAssistantMessage?.content.trim() || '';
+  if (!content || content.startsWith(chatErrorFallbackPrefix)) return undefined;
+  return lastAssistantMessage;
+}
 
-  return content.length > 0 && !content.startsWith(chatErrorFallbackPrefix);
+function hasConfirmableAssistantMessage(messages: ChatMessage[]) {
+  return Boolean(getLastConfirmableAssistantMessage(messages));
 }
 
 function getChatErrorContent(error: unknown) {
@@ -1336,13 +1340,12 @@ export default function WorkflowsPage() {
     const currentStep = getVisibleSteps(activeWorkflow)[activeStepIndex];
     if (!currentStep) return;
 
-    const lastAssistantMsg = getLastAssistantMessage(chatMessages);
+    const lastAssistantMsg = getLastConfirmableAssistantMessage(chatMessages);
     const currentStepChatStatus = chatPersistenceByStepId[currentStep.id] || 'idle';
     if (
       isStreaming
       || currentStepChatStatus !== 'saved'
       || !lastAssistantMsg
-      || !hasConfirmableAssistantMessage(chatMessages)
     ) {
       return;
     }
