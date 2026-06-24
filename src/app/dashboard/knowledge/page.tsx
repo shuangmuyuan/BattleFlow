@@ -182,7 +182,13 @@ export default function KnowledgePage() {
 
       setKnowledgeBases((prev) =>
         prev.map((kb) =>
-          kb.id === selectedKb.id ? { ...kb, document_count: kb.document_count + 1 } : kb
+          kb.id === selectedKb.id
+            ? {
+                ...kb,
+                document_count: data.knowledgeBase?.document_count ?? kb.document_count + (data.insertedCount ?? 1),
+                updated_at: data.knowledgeBase?.updated_at ?? kb.updated_at,
+              }
+            : kb
         )
       );
       setUploadDialogOpen(false);

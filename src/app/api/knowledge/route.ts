@@ -1,13 +1,43 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import {
+  addKnowledgeDocuments,
+  createKnowledgeBase,
+  isKnowledgeDatabaseConfigured,
+  KnowledgeDatabaseConfigError,
+  KnowledgeNotFoundError,
+  KnowledgeValidationError,
+  listKnowledgeBases,
+  searchKnowledgeDocuments,
+  type KnowledgeDocumentInput,
+} from '@/lib/knowledge-repository';
 
-const KNOWLEDGE_UNAVAILABLE_MESSAGE = '知识库服务未配置：当前环境缺少 Supabase 知识库连接配置，暂时无法访问知识库资产。';
-const KNOWLEDGE_SEARCH_NOT_CONFIGURED_MESSAGE = '知识库检索服务尚未配置文档索引，当前仅支持知识库元数据管理。';
+export const runtime = 'nodejs';
+
+const KNOWLEDGE_UNAVAILABLE_MESSAGE = '知识库服务未配置：当前环境缺少数据库连接配置，暂时无法访问知识库资产。';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return isRecord(value) ? value : null;
+}
+
+function readTopK(value: string | null): number {
+  if (!value) {
+    return 5;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : 5;
+}
 
 function isKnowledgeServiceConfigError(error: unknown) {
-  return error instanceof Error && (
-    error.message.includes('BATTLEFLOW_SUPABASE_URL')
-    || error.message.includes('BATTLEFLOW_SUPABASE_ANON_KEY')
+  return error instanceof KnowledgeDatabaseConfigError || (
+    error instanceof Error && error.message.includes('BATTLEFLOW_DATABASE_URL')
   );
 }
 
@@ -20,40 +50,57 @@ function knowledgeUnavailableResponse(status = 503) {
   }, { status });
 }
 
+function parseDocuments(value: unknown): KnowledgeDocumentInput[] {
+  if (!Array.isArray(value)) {
+    throw new KnowledgeValidationError('Documents must be an array');
+  }
+
+  return value.map((document, index) => {
+    if (!isRecord(document)) {
+      throw new KnowledgeValidationError(`Document ${index + 1} must be an object`);
+    }
+
+    const content = readString(document.content);
+    if (!content) {
+      throw new KnowledgeValidationError(`Document ${index + 1} content is required`);
+    }
+
+    const metadata = readRecord(document.metadata);
+
+    return {
+      title: readString(document.title) ?? null,
+      sourceType: readString(document.source_type) ?? readString(document.sourceType) ?? null,
+      source: readString(document.source) ?? null,
+      content,
+      metadata,
+    };
+  });
+}
+
 // GET /api/knowledge - List knowledge bases or search
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const query = searchParams.get('query');
 
   try {
-    const token = request.headers.get('x-session') || undefined;
+    if (!isKnowledgeDatabaseConfigured()) {
+      return query ? knowledgeUnavailableResponse(503) : knowledgeUnavailableResponse(200);
+    }
 
     // List knowledge bases
     if (!query) {
-      let client;
-      try {
-        client = getSupabaseClient(token);
-      } catch (error) {
-        if (isKnowledgeServiceConfigError(error)) {
-          return knowledgeUnavailableResponse(200);
-        }
-        throw error;
-      }
-
-      const { data, error } = await client
-        .from('knowledge_bases')
-        .select('*')
-        .eq('is_active', true)
-        .order('updated_at', { ascending: false });
-
-      if (error) throw new Error(`Failed to fetch knowledge bases: ${error.message}`);
-      return NextResponse.json({ knowledgeBases: data });
+      const knowledgeBases = await listKnowledgeBases();
+      return NextResponse.json({ knowledgeBases });
     }
 
+    const results = await searchKnowledgeDocuments({
+      query,
+      topK: readTopK(searchParams.get('topK')),
+    });
+
     return NextResponse.json({
-      results: [],
-      serviceUnavailable: true,
-      error: KNOWLEDGE_SEARCH_NOT_CONFIGURED_MESSAGE,
+      results,
+      serviceUnavailable: false,
     }, { status: 200 });
   } catch (error) {
     console.error('Knowledge GET error:', error);
@@ -67,67 +114,57 @@ export async function GET(request: NextRequest) {
 // POST /api/knowledge - Create knowledge base or add documents
 export async function POST(request: NextRequest) {
   try {
-    const token = request.headers.get('x-session') || undefined;
-    const body = await request.json();
-    let client;
+    if (!isKnowledgeDatabaseConfigured()) {
+      return knowledgeUnavailableResponse(503);
+    }
+
+    let body: unknown;
     try {
-      client = getSupabaseClient(token);
-    } catch (error) {
-      if (isKnowledgeServiceConfigError(error)) {
-        return knowledgeUnavailableResponse(503);
-      }
-      throw error;
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+    }
+
+    if (!isRecord(body)) {
+      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
     }
 
     // Create new knowledge base
     if (body.action === 'create') {
-      const { name, description, organization_id, source_type, connection_config, dataset_name } = body;
+      const name = readString(body.name);
 
       if (!name) {
         return NextResponse.json({ error: 'Name is required' }, { status: 400 });
       }
 
-      const { data, error } = await client
-        .from('knowledge_bases')
-        .insert({
-          name,
-          description,
-          organization_id,
-          source_type: source_type || 'builtin',
-          connection_config,
-          dataset_name: dataset_name || `kb_${Date.now()}`,
-          is_active: true,
-        })
-        .select()
-        .single();
+      const knowledgeBase = await createKnowledgeBase({
+        name,
+        description: readString(body.description) ?? null,
+        organizationId: readString(body.organization_id) ?? null,
+        sourceType: readString(body.source_type) ?? null,
+        connectionConfig: readRecord(body.connection_config),
+        datasetName: readString(body.dataset_name) ?? null,
+        createdBy: readString(body.created_by) ?? null,
+      });
 
-      if (error) throw new Error(`Failed to create knowledge base: ${error.message}`);
-      return NextResponse.json({ knowledgeBase: data });
+      return NextResponse.json({ knowledgeBase });
     }
 
     // Add documents to knowledge base
     if (body.action === 'add_documents') {
-      const { knowledge_base_id, documents } = body;
+      const knowledgeBaseId = readString(body.knowledge_base_id);
 
-      if (!knowledge_base_id || !documents) {
+      if (!knowledgeBaseId || !body.documents) {
         return NextResponse.json({ error: 'Knowledge base ID and documents are required' }, { status: 400 });
       }
 
-      // Get knowledge base info
-      const { data: kb, error: kbError } = await client
-        .from('knowledge_bases')
-        .select('dataset_name')
-        .eq('id', knowledge_base_id)
-        .maybeSingle();
-
-      if (kbError) throw new Error(`Failed to fetch knowledge base: ${kbError.message}`);
-      if (!kb) return NextResponse.json({ error: 'Knowledge base not found' }, { status: 404 });
+      const result = await addKnowledgeDocuments(knowledgeBaseId, parseDocuments(body.documents));
 
       return NextResponse.json({
-        success: false,
-        error: KNOWLEDGE_SEARCH_NOT_CONFIGURED_MESSAGE,
-        dataset_name: kb.dataset_name,
-      }, { status: 501 });
+        success: true,
+        insertedCount: result.insertedCount,
+        knowledgeBase: result.knowledgeBase,
+      });
     }
 
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
@@ -135,6 +172,12 @@ export async function POST(request: NextRequest) {
     console.error('Knowledge POST error:', error);
     if (isKnowledgeServiceConfigError(error)) {
       return knowledgeUnavailableResponse(503);
+    }
+    if (error instanceof KnowledgeValidationError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    if (error instanceof KnowledgeNotFoundError) {
+      return NextResponse.json({ error: error.message }, { status: 404 });
     }
     return NextResponse.json({ error: 'Failed to process knowledge request' }, { status: 500 });
   }

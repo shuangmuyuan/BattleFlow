@@ -48,6 +48,14 @@ BATTLEFLOW_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start
 
 `scripts/start.sh` runs `node dist/server.js`, so `pnpm build` must run first.
 
+## Database Bootstrap
+
+```bash
+BATTLEFLOW_DATABASE_URL=postgresql://... pnpm db:knowledge:init
+```
+
+This applies the direct Postgres knowledge-store bootstrap in `scripts/database/001_knowledge_store.sql`. It is intended for runtimes that expose Postgres but do not expose the Supabase REST/Auth API stack.
+
 ## Useful Environment Variables
 
 | Variable | Purpose |
@@ -58,6 +66,10 @@ BATTLEFLOW_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start
 | `BATTLEFLOW_SUPABASE_URL` | Supabase project URL. |
 | `BATTLEFLOW_SUPABASE_ANON_KEY` | Browser-safe Supabase anon key. |
 | `BATTLEFLOW_SUPABASE_SERVICE_ROLE_KEY` | Server-only privileged Supabase key. |
+| `BATTLEFLOW_DATABASE_URL` | Server-only direct Postgres connection string for knowledge-store operations. |
+| `BATTLEFLOW_DEFAULT_ORGANIZATION_ID` | Default organization used by single-tenant knowledge operations. |
+| `BATTLEFLOW_DATABASE_POOL_MAX` | Optional Postgres pool size, defaults to `5`. |
+| `BATTLEFLOW_DATABASE_SSL` | Optional Postgres SSL mode. Use `true` or `require` to enable SSL. |
 | `SKILL_REGISTRY_DIR` | File-backed Skill registry root. |
 | `SKILL_IMPORT_ROOTS` | Allowed server-path roots for Skill imports. |
 | `WORKFLOW_REGISTRY_DIR` | File-backed workflow registry root. |

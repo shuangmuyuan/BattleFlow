@@ -2,7 +2,7 @@
 
 ## Security Posture
 
-BattleFlow handles product-planning content, imported Skill packages, workflow context files, knowledge retrieval snippets, chat prompts, Supabase credentials, and optional Claude CLI execution. Treat all user-provided Skill content and imported files as untrusted.
+BattleFlow handles product-planning content, imported Skill packages, workflow context files, knowledge retrieval snippets, chat prompts, Supabase credentials, direct Postgres credentials, and optional Claude CLI execution. Treat all user-provided Skill content and imported files as untrusted.
 
 ## Secrets
 
@@ -10,19 +10,30 @@ Never commit:
 
 - `.env`, `.env.local`, or environment-specific `.env.*.local` files;
 - Supabase service role keys;
+- direct Postgres connection strings and database passwords;
 - Anthropic, Claude, or Dailybot tokens;
 - private Skill packages;
 - generated runtime registry data under `data/`;
 - `.dwp/` plan state or `tmp/` scratch artifacts containing user data.
 
-`BATTLEFLOW_SUPABASE_SERVICE_ROLE_KEY` is server-only. Do not expose it through client components or `/api/supabase-config`.
+`BATTLEFLOW_SUPABASE_SERVICE_ROLE_KEY` and `BATTLEFLOW_DATABASE_URL` are server-only. Do not expose them through client components or `/api/supabase-config`.
 
 ## Authentication and Authorization
 
 - Browser auth uses Supabase session state through `getSupabaseBrowserClientWithRetry`.
 - Server Supabase access may use the service role key when no user token is provided.
+- Server Postgres access uses `BATTLEFLOW_DATABASE_URL` for knowledge-store operations only.
 - API routes that mutate team/user data should prefer explicit user/session checks before production hardening.
 - Any change that broadens service-role usage requires a security review.
+
+## Database Access
+
+- Keep direct Postgres access in server-only modules and route handlers.
+- Use parameterized queries for runtime SQL.
+- Keep static migration SQL in `scripts/database/`.
+- Prefer least-privilege application roles for runtime access.
+- Do not log connection strings, database passwords, or raw SQL errors that include credentials.
+- Treat stored knowledge documents as untrusted user content when retrieving them into prompts or rendering previews.
 
 ## Skill Imports
 
