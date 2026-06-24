@@ -151,6 +151,21 @@ export function compactMarkdownPreview(content: string, maxChars = 160) {
     .slice(0, maxChars);
 }
 
+function getSafeMarkdownHref(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.startsWith('#') || trimmed.startsWith('/')) return trimmed;
+
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === 'http:' || url.protocol === 'https:' || url.protocol === 'mailto:'
+      ? trimmed
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function renderInline(text: string): ReactNode[] {
   const nodes: ReactNode[] = [];
   const pattern = /(\[[^\]]+\]\([^)]+\)|`[^`]+`|\*\*[^*]+\*\*|__[^_]+__)/g;
@@ -165,17 +180,18 @@ function renderInline(text: string): ReactNode[] {
     const token = match[0];
     const link = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
     if (link) {
-      nodes.push(
+      const safeHref = getSafeMarkdownHref(link[2]);
+      nodes.push(safeHref ? (
         <a
           key={`${token}-${match.index}`}
-          href={link[2]}
+          href={safeHref}
           target="_blank"
           rel="noreferrer"
           className="break-words font-medium text-brand underline-offset-2 hover:underline"
         >
           {link[1]}
-        </a>,
-      );
+        </a>
+      ) : link[1]);
     } else if (token.startsWith('`')) {
       nodes.push(
         <code

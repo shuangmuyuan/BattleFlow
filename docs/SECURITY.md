@@ -62,6 +62,10 @@ Log enough context for operational debugging, but never log:
 - private imported Skill packages;
 - user session tokens.
 
+## User-Provided Content Rendering
+
+Workflow and Skill Markdown previews must render through React-owned components, not raw HTML injection. Markdown links should allow only safe schemes such as `http:`, `https:`, `mailto:`, root-relative paths, and page anchors; unsafe schemes should render as plain text.
+
 ## Security Review Gate
 
 Every DWP plan must end with a security review. For this repo, that review checks:
