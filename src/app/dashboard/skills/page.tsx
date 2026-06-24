@@ -53,6 +53,19 @@ interface SkillVersion {
   version: string;
   updated_at: string;
   changelog: string;
+  package_assets?: SkillPackageAsset[];
+}
+
+interface SkillPackageAsset {
+  path: string;
+  kind: string;
+  source_folder: string;
+  mime_type: string;
+  size: number;
+  content_kind: 'text' | 'metadata';
+  content?: string;
+  truncated?: boolean;
+  note?: string;
 }
 
 interface SkillReview {
@@ -86,6 +99,7 @@ interface Skill {
   meta_json: Record<string, unknown>;
   changelog: string;
   attachments: string[];
+  package_assets?: SkillPackageAsset[];
   versions: SkillVersion[];
   review?: SkillReview;
 }
@@ -1012,6 +1026,7 @@ export default function SkillsPage() {
                 <div className="max-w-full overflow-x-auto">
                   <TabsList className="w-max">
                     <TabsTrigger value="overview">概要</TabsTrigger>
+                    <TabsTrigger value="assets">Package assets</TabsTrigger>
                     <TabsTrigger value="skill-md">skill.md</TabsTrigger>
                     <TabsTrigger value="meta">meta.json</TabsTrigger>
                     <TabsTrigger value="changes">变更记录</TabsTrigger>
@@ -1035,6 +1050,10 @@ export default function SkillsPage() {
                       <div>
                         <div className="text-muted-foreground">附件</div>
                         <div className="mt-1">{detailSkill.attachments.length || 0} 个资源</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground">Package assets</div>
+                        <div className="mt-1">{detailSkill.package_assets?.length || 0} assets</div>
                       </div>
                       {detailSkill.review && (
                         <>
@@ -1099,6 +1118,37 @@ export default function SkillsPage() {
                         ))}
                       </div>
                     </div>
+                  </TabsContent>
+
+                  <TabsContent value="assets" className="min-w-0">
+                    {(detailSkill.package_assets?.length || 0) === 0 ? (
+                      <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
+                        No package assets were discovered for this Skill package.
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-3">
+                        {(detailSkill.package_assets || []).map((asset) => (
+                          <div key={asset.path} className="min-w-0 rounded-lg border p-3 text-sm">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Badge variant="outline">{asset.kind}</Badge>
+                              <span className="min-w-0 break-all font-mono text-xs">{asset.path}</span>
+                            </div>
+                            <div className="mt-2 text-xs text-muted-foreground">
+                              {asset.mime_type} · {formatFileSize(asset.size)} · {asset.content_kind === 'text' ? 'bounded text' : 'metadata only'}
+                              {asset.truncated ? ' · truncated' : ''}
+                            </div>
+                            {asset.note && (
+                              <div className="mt-2 text-xs text-muted-foreground">{asset.note}</div>
+                            )}
+                            {asset.content_kind === 'text' && asset.content && (
+                              <pre className={`${codeBlockClassName} mt-3 max-h-56 text-xs`}>
+                                {asset.content}
+                              </pre>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </TabsContent>
 
                   <TabsContent value="skill-md" className="min-w-0">

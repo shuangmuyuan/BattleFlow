@@ -31,6 +31,8 @@ Skill imports can come from uploads, local/server paths, or Git URLs. Keep these
 - Validate package shape before import.
 - Keep server-path imports constrained by `SKILL_IMPORT_ROOTS`.
 - Do not execute imported Skill content during import.
+- Treat scripts, templates, tools, references, and attachments inside Skill packages as untrusted data-only assets. They may be indexed and exposed to prompts as bounded reference text, but must never be executed automatically.
+- Keep oversized or binary package assets metadata-only.
 - Do not trust `meta.json` fields without validation and narrowing.
 - Archive or reject malformed Skills rather than normalizing unsafe content.
 
@@ -70,4 +72,3 @@ Every DWP plan must end with a security review. For this repo, that review check
 4. file-system boundaries;
 5. agent/CLI permission changes;
 6. user-provided content rendering and Markdown links.
-

@@ -33,12 +33,13 @@ File-backed registries are simple and inspectable but not meant for high-concurr
 - Avoid unnecessary full-store rewrites in hot paths.
 - Preserve atomic writes for workflow and Skill state.
 - Keep uploaded or generated content bounded before storing inline.
+- Keep imported Skill package asset text bounded before storing inline; binary and oversized package assets should stay metadata-only.
 - Move large binary assets out of JSON registry files if usage grows.
 
 ## Chat and Agent Runtime
 
 - Stream responses instead of buffering full model output.
 - Truncate workflow, knowledge, and file context before prompt construction.
+- Keep Skill package assets under a separate prompt budget from uploaded workflow files.
 - Keep CLI budget defaults conservative.
 - Surface adapter availability through `/api/agent-runtime` without blocking dashboard rendering.
-

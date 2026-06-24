@@ -11,6 +11,20 @@ export type SkillScope = 'personal' | 'team' | 'official';
 export type SkillSourceType = 'local' | 'registry' | 'git';
 export type SkillStatus = 'imported' | 'pending_review' | 'published' | 'rejected' | 'archived';
 export type SkillVersionBump = 'patch' | 'minor' | 'major';
+export type SkillPackageAssetKind = 'attachment' | 'script' | 'template' | 'tool' | 'reference' | 'example' | 'task' | 'asset';
+export type SkillPackageAssetContentKind = 'text' | 'metadata';
+
+export interface SkillPackageAsset {
+  path: string;
+  kind: SkillPackageAssetKind;
+  source_folder: string;
+  mime_type: string;
+  size: number;
+  content_kind: SkillPackageAssetContentKind;
+  content?: string;
+  truncated?: boolean;
+  note?: string;
+}
 
 export interface SkillVersion {
   version: string;
@@ -19,6 +33,7 @@ export interface SkillVersion {
   package_path?: string;
   skill_md?: string;
   meta_json?: Record<string, unknown>;
+  package_assets?: SkillPackageAsset[];
 }
 
 export interface SkillReview {
@@ -51,6 +66,7 @@ export interface SkillRecord {
   meta_json: Record<string, unknown>;
   changelog: string;
   attachments: string[];
+  package_assets: SkillPackageAsset[];
   created_at: string;
   updated_at: string;
   versions: SkillVersion[];
@@ -106,6 +122,86 @@ const SKILL_FILE_NAMES = ['skill.md', 'SKILL.md'];
 const META_FILE_NAMES = ['meta.json'];
 const CHANGELOG_FILE_NAMES = ['CHANGELOG.md', 'changelog.md'];
 const IGNORED_SCAN_DIRS = new Set(['.git', 'node_modules', '.next', 'dist', 'data', '.claude-plugin']);
+const PACKAGE_ASSET_FOLDERS: Array<{ folder: string; kind: SkillPackageAssetKind }> = [
+  { folder: 'attachments', kind: 'attachment' },
+  { folder: 'scripts', kind: 'script' },
+  { folder: 'script', kind: 'script' },
+  { folder: 'templates', kind: 'template' },
+  { folder: 'template', kind: 'template' },
+  { folder: 'tools', kind: 'tool' },
+  { folder: 'tool', kind: 'tool' },
+  { folder: 'references', kind: 'reference' },
+  { folder: 'reference', kind: 'reference' },
+  { folder: 'examples', kind: 'example' },
+  { folder: 'example', kind: 'example' },
+  { folder: 'tasks', kind: 'task' },
+  { folder: 'task', kind: 'task' },
+];
+const TEXT_ASSET_EXTENSIONS = new Set([
+  '.cjs',
+  '.css',
+  '.csv',
+  '.html',
+  '.js',
+  '.json',
+  '.jsx',
+  '.md',
+  '.mdx',
+  '.mjs',
+  '.py',
+  '.rb',
+  '.sh',
+  '.sql',
+  '.toml',
+  '.ts',
+  '.tsx',
+  '.txt',
+  '.xml',
+  '.yaml',
+  '.yml',
+]);
+const BINARY_ASSET_EXTENSIONS = new Set([
+  '.7z',
+  '.avif',
+  '.bmp',
+  '.doc',
+  '.docx',
+  '.gif',
+  '.gz',
+  '.ico',
+  '.jpeg',
+  '.jpg',
+  '.pdf',
+  '.png',
+  '.ppt',
+  '.pptx',
+  '.tar',
+  '.webp',
+  '.xls',
+  '.xlsx',
+  '.zip',
+]);
+const ASSET_MIME_BY_EXTENSION: Record<string, string> = {
+  '.css': 'text/css',
+  '.csv': 'text/csv',
+  '.html': 'text/html',
+  '.js': 'text/javascript',
+  '.json': 'application/json',
+  '.jsx': 'text/javascript',
+  '.md': 'text/markdown',
+  '.mdx': 'text/markdown',
+  '.mjs': 'text/javascript',
+  '.py': 'text/x-python',
+  '.sh': 'text/x-shellscript',
+  '.ts': 'text/typescript',
+  '.tsx': 'text/typescript',
+  '.txt': 'text/plain',
+  '.yaml': 'application/yaml',
+  '.yml': 'application/yaml',
+};
+const MAX_PACKAGE_ASSETS = 120;
+const MAX_PACKAGE_ASSET_TEXT_BYTES = 64_000;
+const MAX_PACKAGE_ASSET_TEXT_CHARS = 8_000;
 
 function nowIso() {
   return new Date().toISOString();
@@ -323,6 +419,201 @@ async function listFilesRecursive(root: string, base = root): Promise<string[]> 
   return files.flat().sort();
 }
 
+function toPosixRelativePath(value: string) {
+  return value.split(path.sep).join('/');
+}
+
+function getAssetExtension(assetPath: string) {
+  return path.extname(assetPath).toLowerCase();
+}
+
+function getAssetMimeType(assetPath: string) {
+  const extension = getAssetExtension(assetPath);
+  return ASSET_MIME_BY_EXTENSION[extension] || 'application/octet-stream';
+}
+
+function isPotentialTextAsset(assetPath: string, kind: SkillPackageAssetKind) {
+  const extension = getAssetExtension(assetPath);
+  if (BINARY_ASSET_EXTENSIONS.has(extension)) return false;
+  if (TEXT_ASSET_EXTENSIONS.has(extension)) return true;
+  return kind === 'script' || kind === 'template' || kind === 'tool' || kind === 'reference' || kind === 'task';
+}
+
+function normalizeStoredPackageAssets(value: unknown): SkillPackageAsset[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((item): SkillPackageAsset[] => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const record = item as Record<string, unknown>;
+    const assetPath = getString(record.path);
+    const kind = record.kind === 'attachment'
+      || record.kind === 'script'
+      || record.kind === 'template'
+      || record.kind === 'tool'
+      || record.kind === 'reference'
+      || record.kind === 'example'
+      || record.kind === 'task'
+      || record.kind === 'asset'
+      ? record.kind
+      : 'asset';
+    const size = typeof record.size === 'number' && Number.isFinite(record.size) && record.size >= 0 ? record.size : 0;
+    if (!assetPath) return [];
+
+    const contentKind = record.content_kind === 'text' ? 'text' : 'metadata';
+    return [{
+      path: assetPath,
+      kind,
+      source_folder: getString(record.source_folder, assetPath.split('/')[0] || 'package'),
+      mime_type: getString(record.mime_type, getAssetMimeType(assetPath)),
+      size,
+      content_kind: contentKind,
+      content: contentKind === 'text' && typeof record.content === 'string' ? record.content : undefined,
+      truncated: typeof record.truncated === 'boolean' ? record.truncated : undefined,
+      note: typeof record.note === 'string' ? record.note : undefined,
+    }];
+  });
+}
+
+async function readBoundedTextAsset(filePath: string, size: number) {
+  if (size > MAX_PACKAGE_ASSET_TEXT_BYTES) {
+    return {
+      content_kind: 'metadata' as const,
+      note: `Text content omitted because the file exceeds ${MAX_PACKAGE_ASSET_TEXT_BYTES} bytes.`,
+    };
+  }
+
+  const buffer = await fs.readFile(filePath);
+  if (buffer.includes(0)) {
+    return {
+      content_kind: 'metadata' as const,
+      note: 'Text content omitted because the file appears to be binary.',
+    };
+  }
+
+  const raw = buffer.toString('utf8');
+  const truncated = raw.length > MAX_PACKAGE_ASSET_TEXT_CHARS;
+  return {
+    content_kind: 'text' as const,
+    content: truncated
+      ? `${raw.slice(0, MAX_PACKAGE_ASSET_TEXT_CHARS)}\n... (truncated)`
+      : raw,
+    truncated,
+  };
+}
+
+async function buildPackageAsset(packagePath: string, relativeAssetPath: string, kind: SkillPackageAssetKind): Promise<SkillPackageAsset | null> {
+  const fullPath = path.join(packagePath, relativeAssetPath);
+  const stat = await fs.stat(fullPath).catch(() => null);
+  if (!stat?.isFile()) return null;
+
+  const assetPath = toPosixRelativePath(relativeAssetPath);
+  const base: SkillPackageAsset = {
+    path: assetPath,
+    kind,
+    source_folder: assetPath.split('/')[0] || 'package',
+    mime_type: getAssetMimeType(assetPath),
+    size: stat.size,
+    content_kind: 'metadata',
+  };
+
+  if (!isPotentialTextAsset(assetPath, kind)) {
+    return {
+      ...base,
+      note: 'Content is metadata-only because the asset is not a supported text format.',
+    };
+  }
+
+  try {
+    const textAsset = await readBoundedTextAsset(fullPath, stat.size);
+    return {
+      ...base,
+      ...textAsset,
+    };
+  } catch {
+    return {
+      ...base,
+      note: 'Content is metadata-only because the asset could not be read as text.',
+    };
+  }
+}
+
+async function discoverPackageAssets(packagePath: string): Promise<SkillPackageAsset[]> {
+  const seen = new Set<string>();
+  const discovered: SkillPackageAsset[] = [];
+
+  for (const { folder, kind } of PACKAGE_ASSET_FOLDERS) {
+    const folderPath = path.join(packagePath, folder);
+    if (!(await pathExists(folderPath))) continue;
+
+    const files = await listFilesRecursive(folderPath);
+    for (const file of files) {
+      if (discovered.length >= MAX_PACKAGE_ASSETS) {
+        return discovered;
+      }
+
+      const relativeAssetPath = path.join(folder, file);
+      const normalizedPath = toPosixRelativePath(relativeAssetPath);
+      if (seen.has(normalizedPath)) continue;
+      seen.add(normalizedPath);
+
+      const asset = await buildPackageAsset(packagePath, relativeAssetPath, kind);
+      if (asset) discovered.push(asset);
+    }
+  }
+
+  return discovered.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+async function realPathOrNull(candidate: string) {
+  return fs.realpath(candidate).catch(() => null);
+}
+
+async function isRuntimePackageAssetPathAllowed(packagePath: string) {
+  const [realPackagePath, realPackageRoot, realSeedRoot] = await Promise.all([
+    realPathOrNull(packagePath),
+    realPathOrNull(packageRoot),
+    realPathOrNull(seedRoot),
+  ]);
+  if (!realPackagePath) return false;
+
+  return [realPackageRoot, realSeedRoot]
+    .filter((root): root is string => Boolean(root))
+    .some((root) => realPackagePath === root || realPackagePath.startsWith(`${root}${path.sep}`));
+}
+
+function currentVersionPayload(skill: SkillRecord) {
+  return skill.versions.find((item) => item.version === skill.version) || skill.versions[0];
+}
+
+async function hydrateSkillPackageAssets(skill: SkillRecord): Promise<SkillRecord> {
+  const storedAssets = normalizeStoredPackageAssets(skill.package_assets);
+  if (storedAssets.length > 0) {
+    return {
+      ...skill,
+      package_assets: storedAssets,
+    };
+  }
+
+  const packagePath = currentVersionPayload(skill)?.package_path;
+  if (!packagePath || !(await isRuntimePackageAssetPathAllowed(packagePath))) {
+    return {
+      ...skill,
+      package_assets: [],
+    };
+  }
+
+  const packageAssets = await discoverPackageAssets(packagePath);
+  return {
+    ...skill,
+    package_assets: packageAssets,
+    versions: skill.versions.map((version) => (
+      version.version === skill.version && !Array.isArray(version.package_assets)
+        ? { ...version, package_assets: packageAssets }
+        : version
+    )),
+  };
+}
+
 async function ensureRegistry() {
   await fs.mkdir(packageRoot, { recursive: true });
   await fs.mkdir(tempRoot, { recursive: true });
@@ -432,6 +723,7 @@ async function loadSkillFromPackage(packagePath: string, options: ImportOptions 
   const attachments = (await pathExists(path.join(packagePath, 'attachments')))
     ? await listFilesRecursive(path.join(packagePath, 'attachments'))
     : [];
+  const packageAssets = await discoverPackageAssets(packagePath);
 
   return {
     id,
@@ -456,6 +748,7 @@ async function loadSkillFromPackage(packagePath: string, options: ImportOptions 
     meta_json: meta,
     changelog,
     attachments,
+    package_assets: packageAssets,
     created_at: timestamp,
     updated_at: timestamp,
     versions: [
@@ -466,12 +759,14 @@ async function loadSkillFromPackage(packagePath: string, options: ImportOptions 
         package_path: packagePath,
         skill_md: skillMd,
         meta_json: meta,
+        package_assets: packageAssets,
       },
       ...changelogVersions
         .filter((item) => item.version !== version)
         .map((item) => ({
           ...item,
           package_path: packagePath,
+          package_assets: packageAssets,
         })),
     ],
     is_active: true,
@@ -582,6 +877,7 @@ async function upsertSkill(skill: SkillRecord, packagePath?: string, options: Im
     package_path: storedPackagePath,
     skill_md: effectiveRecord.skill_md,
     meta_json: effectiveRecord.meta_json,
+    package_assets: effectiveRecord.package_assets,
   };
 
   const nextSkill: SkillRecord = {
@@ -710,11 +1006,12 @@ async function importSkillDirectory(inputPath: string, options: ImportOptions = 
 
 export async function listSkills(filters: { scope?: string; status?: string } = {}) {
   const [seedSkills, index] = await Promise.all([loadSeedSkills(), readIndex()]);
-  return mergeSkills(seedSkills, index.skills).filter((skill) => {
+  const filteredSkills = mergeSkills(seedSkills, index.skills).filter((skill) => {
     if (filters.scope && skill.scope !== filters.scope) return false;
     if (filters.status && skill.status !== filters.status) return false;
     return true;
   });
+  return Promise.all(filteredSkills.map((skill) => hydrateSkillPackageAssets(skill)));
 }
 
 export async function getSkill(id: string) {
@@ -883,7 +1180,8 @@ export async function createWorkflowSkillReview(input: WorkflowSkillReviewInput)
     skill_md: skillMd,
     meta_json: meta,
     changelog: changeSummary,
-    attachments: [],
+    attachments: baseSkill?.attachments || [],
+    package_assets: baseSkill?.package_assets || [],
     created_at: timestamp,
     updated_at: timestamp,
     versions: [
@@ -893,6 +1191,7 @@ export async function createWorkflowSkillReview(input: WorkflowSkillReviewInput)
         changelog: changeSummary,
         skill_md: skillMd,
         meta_json: meta,
+        package_assets: baseSkill?.package_assets || [],
       },
     ],
     review: {
@@ -980,6 +1279,7 @@ export async function rollbackSkill(id: string, version: string) {
       version,
       skill_md: target.skill_md || skill.skill_md,
       meta_json: target.meta_json || skill.meta_json,
+      package_assets: target.package_assets || skill.package_assets || [],
       methodology: getString(toRecord(target.meta_json).definition && toRecord(toRecord(target.meta_json).definition).methodology, skill.methodology),
       updated_at: nowIso(),
       versions: [

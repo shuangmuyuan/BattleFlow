@@ -92,11 +92,24 @@ interface Skill {
   scope?: 'personal' | 'team' | 'official';
   status?: 'imported' | 'pending_review' | 'published' | 'rejected' | 'archived';
   updated_at?: string;
+  package_assets?: SkillPackageAsset[];
   review?: {
     source_skill_id?: string;
     source_version?: string;
     decision?: 'approved' | 'rejected';
   };
+}
+
+interface SkillPackageAsset {
+  path: string;
+  kind: string;
+  source_folder: string;
+  mime_type: string;
+  size: number;
+  content_kind: 'text' | 'metadata';
+  content?: string;
+  truncated?: boolean;
+  note?: string;
 }
 
 const skillStatusPriority: Record<string, number> = {
@@ -919,6 +932,7 @@ export default function WorkflowsPage() {
       ...(baseSkill || {
         id: draft.baseSkillId,
         tags: [],
+        package_assets: [],
         scope: 'personal' as const,
         status: 'imported' as const,
       }),
@@ -1160,6 +1174,7 @@ export default function WorkflowsPage() {
             tools: skillDef.tools,
             prompt_template: skillDef.prompt_template,
             skill_md: skillDef.skill_md,
+            package_assets: skillDef.package_assets || [],
             tuning_request: 'tuning_request' in skillDef ? skillDef.tuning_request : undefined,
           } : undefined,
           step_context: autoInjectedStepOutputs.map((step) => ({

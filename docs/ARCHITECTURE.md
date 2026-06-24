@@ -55,6 +55,8 @@ All API handlers use App Router route handlers under `src/app/api`.
 
 Route handlers that access the file system or spawn CLI processes must keep `runtime = 'nodejs'`.
 
+Skill package imports preserve structured package asset metadata for conventional folders such as `attachments/`, `scripts/`, `templates/`, `template/`, `tools/`, `references/`, `examples/`, and `tasks/`. Small text assets can be included in `/api/chat` as explicitly untrusted, bounded reference context. Binary and oversized assets remain metadata-only, and imported scripts are never executed by the registry or chat runtime.
+
 ## Agent Runtime Boundary
 
 The Claude Code CLI adapter lives in `src/lib/agent-adapters/claude-code-cli.ts`.
@@ -77,4 +79,3 @@ The dashboard has a fixed viewport shell in `src/app/dashboard/layout.tsx`:
 - optional Supabase auth user display.
 
 Pages must own their scroll regions and avoid body-level layout drift. The static validation scripts enforce required class tokens for this.
-
