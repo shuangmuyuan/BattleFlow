@@ -19,6 +19,18 @@ BattleFlow API route handlers.
 | `workflows/snapshots` | Manages step and workflow snapshots. |
 | `workflows/validation` | Runs workflow step self-check and independent Agent validation gates. |
 
+## Workflow Validation Route
+
+`POST /api/workflows/validation` supports:
+
+- `start_step_validation`: stores a candidate artifact, runs Skill self-check, then runs independent Agent validation.
+- `retry_step_validation`: reruns the same gate flow for a revised candidate after failure.
+- `clear_failed_validation`: clears candidate/gate fields on the current step without deleting historical attempts.
+
+`GET /api/workflows/validation?workflow_id=...&step_id=...` returns validation attempts for a workflow or step.
+
+Only a passed final attempt promotes candidate output to `step.output`. Failed or error attempts keep the candidate in candidate fields and leave downstream steps blocked.
+
 ## Patterns
 
 - Keep JSON response helpers local to the route when the route has custom status behavior.

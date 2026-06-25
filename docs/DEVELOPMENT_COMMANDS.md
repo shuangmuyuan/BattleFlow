@@ -23,10 +23,12 @@ pnpm ts-check
 pnpm lint:build
 pnpm check:overlays
 pnpm check:responsive
+pnpm test
 pnpm validate
 ```
 
 `pnpm validate` runs the four validation gates in parallel.
+`pnpm test` runs the Vitest unit tests.
 
 ## Build
 
