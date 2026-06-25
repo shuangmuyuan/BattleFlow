@@ -439,6 +439,55 @@ function getStepStatusLabel(status: WorkflowStepStatus) {
   }
 }
 
+function getValidationAttemptStatusLabel(status?: WorkflowStepValidationAttempt['status']) {
+  switch (status) {
+    case 'passed':
+      return '已通过';
+    case 'failed':
+      return '未通过';
+    case 'error':
+      return '运行错误';
+    case 'running':
+      return '运行中';
+    default:
+      return '未开始';
+  }
+}
+
+function getValidationAttemptTone(status?: WorkflowStepValidationAttempt['status']) {
+  if (status === 'passed') return 'success';
+  if (status === 'failed' || status === 'error') return 'danger';
+  if (status === 'running') return 'brand';
+  return 'neutral';
+}
+
+function getValidationOutcomeLabel(outcome?: WorkflowValidationOutcome) {
+  switch (outcome) {
+    case 'pass':
+      return '通过';
+    case 'needs_revision':
+      return '需要修订';
+    case 'blocked':
+      return '阻塞';
+    case 'error':
+      return '错误';
+    default:
+      return '未运行';
+  }
+}
+
+function getFindingSeverityLabel(severity: WorkflowStepValidationFinding['severity']) {
+  if (severity === 'blocking') return '阻塞';
+  if (severity === 'warning') return '警告';
+  return '建议';
+}
+
+function getFindingSeverityTone(severity: WorkflowStepValidationFinding['severity']) {
+  if (severity === 'blocking') return 'danger';
+  if (severity === 'warning') return 'warning';
+  return 'neutral';
+}
+
 function normalizeWorkflowExecutionPlan(workflow: Workflow, updatedAt = new Date().toISOString()): Workflow {
   const visibleSteps = getVisibleWorkflowSteps(workflow);
   const removedSteps = workflow.steps.filter((step) => step.isRemoved);
@@ -827,7 +876,7 @@ export default function WorkflowsPage() {
   const [reviewComments, setReviewComments] = useState<Record<string, string>>({});
   const [supplementalContextOpen, setSupplementalContextOpen] = useState(false);
   const [supplementalContextTab, setSupplementalContextTab] = useState<'knowledge' | 'materials' | 'files'>('knowledge');
-  const [rightPanelTab, setRightPanelTab] = useState<'skill' | 'tuning' | 'outputs' | 'review' | 'archive'>('outputs');
+  const [rightPanelTab, setRightPanelTab] = useState<'skill' | 'tuning' | 'outputs' | 'gate' | 'review' | 'archive'>('outputs');
   const [skillTuningInstruction, setSkillTuningInstruction] = useState('');
   const [skillTuningMessage, setSkillTuningMessage] = useState('');
   const [skillTuningGenerating, setSkillTuningGenerating] = useState(false);
@@ -913,7 +962,9 @@ export default function WorkflowsPage() {
     }
     const priorSteps = nextStep ? getPriorWorkflowSteps(workflow, nextStep) : [];
     setRightPanelTab(
-      nextStep?.output || priorSteps.some((step) => step.output)
+      nextStep?.status === 'validation_failed'
+        ? 'gate'
+        : nextStep?.output || priorSteps.some((step) => step.output)
         ? 'outputs'
         : 'skill',
     );
@@ -1892,9 +1943,9 @@ export default function WorkflowsPage() {
         workflow.id === savedWorkflow.id ? savedWorkflow : workflow
       )));
       setActiveWorkflow(savedWorkflow);
-      setRightPanelTab('outputs');
 
       if (data.passed) {
+        setRightPanelTab('outputs');
         const visibleSteps = getVisibleSteps(savedWorkflow);
         const nextInProgressIndex = visibleSteps.findIndex((step) => isActiveWorkflowStepStatus(step.status));
         const completedStepIndex = visibleSteps.findIndex((step) => step.id === currentStep.id);
@@ -1914,6 +1965,7 @@ export default function WorkflowsPage() {
       setActiveStepIndex(currentStepIndex);
       syncWorkflowSupportingState(savedWorkflow, currentStepIndex);
       setChatMessages(getStepChatMessages(savedWorkflow, currentStep.id));
+      setRightPanelTab('gate');
       const failedStep = savedWorkflow.steps.find((step) => step.id === currentStep.id);
       const summary = failedStep?.validationSummary || data.attempt?.agentValidation?.summary || data.attempt?.selfCheck?.summary || '';
       const message = summary ? `验证未通过：${summary}` : '验证未通过，请修订后重新验证。';
@@ -3177,6 +3229,33 @@ export default function WorkflowsPage() {
   const currentStepOutputMarkdown = currentStep?.output
     ? buildStepOutputMarkdown(activeWorkflow, currentStep)
     : '';
+  const currentValidationAttempts = currentStep
+    ? (activeWorkflow.validationAttempts || [])
+      .filter((attempt) => attempt.stepId === currentStep.id)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    : [];
+  const currentValidationAttempt = currentStep?.validationAttemptId
+    ? currentValidationAttempts.find((attempt) => attempt.id === currentStep.validationAttemptId) || currentValidationAttempts[0]
+    : currentValidationAttempts[0];
+  const currentCandidateSnapshot = currentValidationAttempt?.artifactSnapshotId
+    ? (activeWorkflow.stepSnapshots || []).find((snapshot) => snapshot.id === currentValidationAttempt.artifactSnapshotId)
+    : currentStep?.candidateSnapshotId
+      ? (activeWorkflow.stepSnapshots || []).find((snapshot) => snapshot.id === currentStep.candidateSnapshotId)
+      : undefined;
+  const currentValidationCandidate = currentStep?.candidateOutput || currentCandidateSnapshot?.output || '';
+  const currentValidationCriteria = currentValidationAttempt?.criteria?.length
+    ? currentValidationAttempt.criteria
+    : currentSkill?.checklist || [];
+  const currentValidationFindings = [
+    ...(currentValidationAttempt?.selfCheck?.findings || []),
+    ...(currentValidationAttempt?.agentValidation?.findings || []),
+  ];
+  const currentBlockingFindings = currentValidationFindings.filter((finding) => finding.severity === 'blocking');
+  const currentGateBlocked = Boolean(
+    currentStep?.status === 'validation_failed'
+      || currentValidationAttempt?.status === 'failed'
+      || currentValidationAttempt?.status === 'error',
+  );
   const savedCurrentStepOutputIsCurrent = Boolean(
     savedCurrentStepOutput?.content && savedCurrentStepOutput.content === currentStepOutputMarkdown,
   );
@@ -3228,6 +3307,42 @@ export default function WorkflowsPage() {
     if (currentStep?.status === 'validation_failed') return '重新验证';
     return '运行验证';
   })();
+  const renderValidationPhase = (label: string, phase?: WorkflowStepValidationPhase) => (
+    <div className="rounded-lg border border-border/50 bg-background/60 p-3">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <p className="truncate text-xs font-medium">{label}</p>
+        <StatusBadge
+          tone={phase?.outcome === 'pass' ? 'success' : phase ? 'warning' : 'neutral'}
+          className="shrink-0 text-[11px]"
+        >
+          {getValidationOutcomeLabel(phase?.outcome)}
+        </StatusBadge>
+      </div>
+      {phase?.summary ? (
+        <p className="mt-2 text-xs leading-5 text-muted-foreground">{phase.summary}</p>
+      ) : (
+        <p className="mt-2 text-xs leading-5 text-muted-foreground">暂无结果。</p>
+      )}
+      {phase?.findings && phase.findings.length > 0 && (
+        <div className="mt-3 flex flex-col gap-2">
+          {phase.findings.slice(0, 4).map((finding) => (
+            <div key={finding.id} className="rounded-md border border-border/40 bg-muted/25 p-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <StatusBadge tone={getFindingSeverityTone(finding.severity)} className="shrink-0 text-[10px]">
+                  {getFindingSeverityLabel(finding.severity)}
+                </StatusBadge>
+                <p className="min-w-0 truncate text-[11px] text-muted-foreground">{finding.criterion || '未指定验收标准'}</p>
+              </div>
+              <p className="mt-1 text-xs leading-5">{finding.issue}</p>
+              {finding.recommendation && (
+                <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{finding.recommendation}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
   const updateCurrentContextSelection = (
     nextSelection: Partial<WorkflowContextSelection>,
     localStateUpdate?: () => void,
@@ -3780,6 +3895,57 @@ export default function WorkflowsPage() {
                   已取消 {disabledAutoInjectedPreviousSteps.length} 个
                 </Badge>
               )}
+            </div>
+          </div>
+        )}
+
+        {currentGateBlocked && (
+          <div className="border-b border-destructive/20 bg-destructive/5 px-4 py-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <div className="flex min-w-0 items-center gap-2">
+                  <CircleStop className="h-4 w-4 shrink-0 text-destructive" />
+                  <p className="truncate text-sm font-medium text-destructive">验证门禁阻塞</p>
+                </div>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  {currentStep?.validationSummary || currentValidationAttempt?.agentValidation?.summary || currentValidationAttempt?.selfCheck?.summary || '候选产物未通过验收标准，请继续对话修订。'}
+                </p>
+                {currentBlockingFindings.length > 0 && (
+                  <div className="mt-2 flex flex-col gap-1.5">
+                    {currentBlockingFindings.slice(0, 2).map((finding) => (
+                      <p key={finding.id} className="line-clamp-2 text-[11px] leading-4 text-muted-foreground">
+                        {finding.criterion ? `${finding.criterion}：` : ''}{finding.issue}
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 gap-1.5 text-xs"
+                  onClick={() => setRightPanelTab('gate')}
+                >
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  查看门禁
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="h-8 gap-1.5 text-xs"
+                  disabled={!currentStepCanConfirm}
+                  onClick={() => void handleConfirmStep()}
+                >
+                  {isConfirmingStep || currentStepValidationStage ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RotateCcw className="h-3.5 w-3.5" />
+                  )}
+                  重新验证
+                </Button>
+              </div>
             </div>
           </div>
         )}
@@ -4345,10 +4511,11 @@ export default function WorkflowsPage() {
             <p className="mt-1 truncate text-xs text-muted-foreground">
               {currentStep?.name || '未选择步骤'}
             </p>
-            <TabsList className="mt-3 grid h-8 w-full grid-cols-5">
+            <TabsList className="mt-3 grid h-auto w-full grid-cols-3 gap-1 sm:grid-cols-6">
               <TabsTrigger value="skill" className="text-xs">Skill</TabsTrigger>
               <TabsTrigger value="tuning" className="text-xs">调优</TabsTrigger>
               <TabsTrigger value="outputs" className="text-xs">产出</TabsTrigger>
+              <TabsTrigger value="gate" className="text-xs">门禁</TabsTrigger>
               <TabsTrigger value="review" className="text-xs">审核</TabsTrigger>
               <TabsTrigger value="archive" className="text-xs">沉淀</TabsTrigger>
             </TabsList>
@@ -4567,6 +4734,126 @@ export default function WorkflowsPage() {
             </div>
           </TabsContent>
 
+          <TabsContent value="gate" className="min-h-0 flex-1 overflow-hidden">
+            <div className="flex h-full min-w-0 flex-col gap-3 overflow-y-auto p-4">
+              {currentStep ? (
+                <>
+                  <div className="rounded-lg border border-border/50 bg-background/60 p-3">
+                    <div className="flex min-w-0 items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium">当前门禁状态</p>
+                        <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                          {currentValidationAttempt?.updated_at ? `最近验证：${formatSnapshotTime(currentValidationAttempt.updated_at)}` : '尚未运行验证'}
+                        </p>
+                      </div>
+                      <StatusBadge tone={getValidationAttemptTone(currentValidationAttempt?.status)} className="shrink-0 text-[11px]">
+                        {getValidationAttemptStatusLabel(currentValidationAttempt?.status)}
+                      </StatusBadge>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <StatusBadge tone={currentStep.status === 'validation_failed' ? 'danger' : currentStep.status === 'completed' ? 'success' : 'brand'} className="text-[11px]">
+                        {getStepStatusLabel((currentStepEffectiveStatus || currentStep.status) as WorkflowStepStatus)}
+                      </StatusBadge>
+                      <Badge variant="outline" className="text-[11px]">
+                        Attempts {currentValidationAttempts.length}
+                      </Badge>
+                    </div>
+                    {(currentStep.validationSummary || currentValidationAttempt?.agentValidation?.summary || currentValidationAttempt?.selfCheck?.summary) && (
+                      <p className="mt-3 text-xs leading-5 text-muted-foreground">
+                        {currentStep.validationSummary || currentValidationAttempt?.agentValidation?.summary || currentValidationAttempt?.selfCheck?.summary}
+                      </p>
+                    )}
+                    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1.5 text-xs"
+                        disabled={!currentValidationCandidate}
+                        onClick={() => currentValidationCandidate && downloadMarkdownDocument(`${currentStep.name}-验证候选产物`, currentValidationCandidate)}
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        下载候选
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="h-8 gap-1.5 text-xs"
+                        disabled={!currentStepCanConfirm}
+                        onClick={() => void handleConfirmStep()}
+                      >
+                        {isConfirmingStep || currentStepValidationStage ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <RotateCcw className="h-3.5 w-3.5" />
+                        )}
+                        {currentStep.status === 'validation_failed' ? '重新验证' : '运行验证'}
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-border/50 bg-background/60 p-3">
+                    <div className="flex min-w-0 items-center justify-between gap-2">
+                      <p className="text-xs font-medium">验收标准</p>
+                      <Badge variant="outline" className="shrink-0 text-[11px]">
+                        {currentValidationCriteria.length}
+                      </Badge>
+                    </div>
+                    {currentValidationCriteria.length > 0 ? (
+                      <div className="mt-3 flex flex-col gap-2">
+                        {currentValidationCriteria.map((criterion, index) => (
+                          <div key={`${criterion}-${index}`} className="flex gap-2 rounded-md bg-muted/25 px-2.5 py-2 text-[11px] leading-5">
+                            <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-medium text-primary">
+                              {index + 1}
+                            </span>
+                            <span className="min-w-0 break-words text-muted-foreground">{criterion}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-3 rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
+                        当前 Skill 暂无显式验收标准；系统会使用通用 BattleFlow 产物标准。
+                      </p>
+                    )}
+                  </div>
+
+                  {renderValidationPhase('Skill 自检结果', currentValidationAttempt?.selfCheck)}
+                  {renderValidationPhase('Agent 校验结果', currentValidationAttempt?.agentValidation)}
+
+                  <div className="rounded-lg border border-border/50 bg-background/60 p-3">
+                    <div className="flex min-w-0 items-center justify-between gap-2">
+                      <p className="text-xs font-medium">阻塞项</p>
+                      <StatusBadge tone={currentBlockingFindings.length > 0 ? 'danger' : 'success'} className="shrink-0 text-[11px]">
+                        {currentBlockingFindings.length > 0 ? `${currentBlockingFindings.length} 项` : '无阻塞'}
+                      </StatusBadge>
+                    </div>
+                    {currentBlockingFindings.length > 0 ? (
+                      <div className="mt-3 flex flex-col gap-2">
+                        {currentBlockingFindings.map((finding) => (
+                          <div key={finding.id} className="rounded-md border border-destructive/20 bg-destructive/5 p-2">
+                            <p className="text-[11px] font-medium text-destructive">{finding.criterion || '未指定验收标准'}</p>
+                            <p className="mt-1 text-xs leading-5">{finding.issue}</p>
+                            {finding.recommendation && (
+                              <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{finding.recommendation}</p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-3 rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
+                        暂无阻塞项。若验证尚未运行，请先在当前步骤生成候选产物并运行验证。
+                      </p>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
+                  选择一个步骤后查看验证门禁。
+                </p>
+              )}
+            </div>
+          </TabsContent>
+
           <TabsContent value="outputs" className="min-h-0 flex-1 overflow-hidden">
             <div className="flex h-full min-w-0 flex-col gap-4 overflow-y-auto p-4">
                 <div className="min-w-0">
@@ -4580,7 +4867,7 @@ export default function WorkflowsPage() {
                     renderStepOutputPreview(currentStep, { label: '当前步骤' })
                   ) : (
                     <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
-                      当前步骤确认完成后，会在这里展示本步骤产出。
+                      当前步骤验证通过后，会在这里展示本步骤产出。
                     </p>
                   )}
                 </div>
@@ -4636,7 +4923,7 @@ export default function WorkflowsPage() {
                     </div>
                   ) : (
                     <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
-                      最后一个步骤确认完成后，这里会自动汇总为工作流最终产出。
+                      最后一个步骤验证通过后，这里会自动汇总为工作流最终产出。
                     </p>
                   )}
                 </div>
