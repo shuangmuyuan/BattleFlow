@@ -38,3 +38,13 @@ export interface AgentTurnInput {
   systemPrompt: string;
   signal?: AbortSignal;
 }
+
+export interface AgentRunResult {
+  text: string;
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    costUsd?: number;
+    model?: string;
+  };
+}
