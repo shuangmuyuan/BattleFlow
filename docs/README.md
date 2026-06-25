@@ -14,6 +14,7 @@ This directory is the durable context hub for humans and AI agents working on Ba
 | [SECURITY.md](SECURITY.md) | You are touching auth, credentials, Skill imports, file-system writes, or external tools. |
 | [AUTHORIZATION_DESIGN.md](AUTHORIZATION_DESIGN.md) | You are changing accounts, sessions, organizations, departments, teams, resource grants, or admin permissions. |
 | [ACCOUNT_ORG_PERMISSION_RUNBOOK.md](ACCOUNT_ORG_PERMISSION_RUNBOOK.md) | You are bootstrapping, operating, migrating, or recovering the first-party account and permission system. |
+| [ACCOUNT_ORG_PERMISSION_EXECUTIVE_REPORT.md](ACCOUNT_ORG_PERMISSION_EXECUTIVE_REPORT.md) | You need the final delivery summary, validation record, risks, and next steps for the account and permission system. |
 | [AUTHORIZATION_QA.md](AUTHORIZATION_QA.md) | You are manually validating account, organization, resource authorization, prompt context, or super admin behavior. |
 | [ADMIN_MANAGEMENT_QA.md](ADMIN_MANAGEMENT_QA.md) | You are manually validating organization admin, department, team, invitation, resource permission, or platform admin UI flows. |
 | [PERFORMANCE.md](PERFORMANCE.md) | You are changing dashboard rendering, workflow state, chat streaming, imports, or build output. |
