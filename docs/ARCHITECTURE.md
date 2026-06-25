@@ -33,12 +33,13 @@ BattleFlow currently has two storage styles:
    - Both directories are gitignored runtime state.
    - Skill/workflow business metadata, version/state indexes, asset manifests, and resource grants are projected into direct Postgres through `src/lib/resource-metadata-repository.ts`.
    - Large package assets, uploaded workflow files, and file-backed runtime state remain outside tracked source and are returned only after Postgres permission checks.
-2. Supabase-backed data model and direct Postgres knowledge store:
+2. Supabase-backed legacy data model and direct Postgres application data:
    - `src/storage/database/shared/schema.ts` defines organizations, members, Skills, workflows, steps, snapshots, milestones, knowledge bases, and PRD documents.
    - `src/storage/database/supabase-client.ts` creates server clients with anon or service-role keys depending on available env.
-   - `src/storage/database/postgres-client.ts` creates a server-only Postgres pool from `BATTLEFLOW_DATABASE_URL` for knowledge-store operations when a full Supabase REST/Auth stack is not available.
+   - `src/storage/database/postgres-client.ts` creates a server-only Postgres pool from `BATTLEFLOW_DATABASE_URL` for first-party auth, organization management, permission checks, knowledge-store operations, PRD documents, milestones, and resource metadata.
    - `scripts/database/001_knowledge_store.sql` bootstraps organizations, knowledge bases, knowledge documents, and lexical/trigram search indexes.
-   - Browser auth uses injected public Supabase config from `src/lib/supabase-config-inject.tsx` and `src/lib/supabase-browser.ts`.
+   - `scripts/database/002_account_org_permissions.sql` bootstraps users, password credentials, sessions, organization members, departments, teams, invitations, platform admins, resource grants, audit events, and Skill/workflow metadata tables.
+   - Browser auth uses first-party BattleFlow routes under `/api/auth/*`; injected Supabase browser config remains for legacy Supabase-backed surfaces until those are migrated.
 
 Agents must preserve the distinction between source files and runtime registry data.
 
@@ -56,6 +57,7 @@ All API handlers use App Router route handlers under `src/app/api`.
 - `/api/supabase-config` exposes browser-safe Supabase config.
 - `/api/prd` reads and writes PRD documents through direct Postgres after workflow authorization.
 - `/api/knowledge` handles knowledge data for the dashboard. Knowledge document indexing/search uses direct Postgres when `BATTLEFLOW_DATABASE_URL` is configured.
+- `/api/auth/*`, `/api/organizations/*`, and `/api/admin/super-admins` provide first-party account, organization, invitation, department, team, and platform admin management.
 
 Route handlers that access the file system or spawn CLI processes must keep `runtime = 'nodejs'`.
 
@@ -80,6 +82,6 @@ The dashboard has a fixed viewport shell in `src/app/dashboard/layout.tsx`:
 - mobile horizontal navigation;
 - bounded main scroll regions;
 - theme toggle using `useTheme`;
-- optional Supabase auth user display.
+- first-party account, active-organization, organization-switching, and capability-gated admin navigation.
 
 Pages must own their scroll regions and avoid body-level layout drift. The static validation scripts enforce required class tokens for this.

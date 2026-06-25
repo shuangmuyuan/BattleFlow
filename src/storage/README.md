@@ -27,3 +27,4 @@ Database and schema boundary.
 - Use `scripts/database/*.sql` plus `pnpm db:postgres:init` for fresh direct-Postgres bootstraps.
 - Use `pnpm db:knowledge:init` when only applying the knowledge-store bootstrap.
 - Use `pnpm db:accounts:init` after the knowledge bootstrap to add first-party account, organization, permission, and Skill/workflow business metadata tables.
+- Use `pnpm db:resources:migrate` after account/bootstrap migrations when an environment already has file-backed Skill or workflow runtime data that needs Postgres resource permission rows.

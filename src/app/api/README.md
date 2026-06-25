@@ -28,6 +28,7 @@ BattleFlow API route handlers.
 - Narrow request bodies before reading fields.
 - Use `requireOrganizationContext` and `requirePermission` before reading organization-scoped data or mutating organization state.
 - Use `requireUser` and `requirePlatformPermission` before reading or mutating platform-wide state such as super admin assignments.
+- Use Postgres-backed resource metadata checks before returning Skill package assets, workflow outputs, snapshots, milestones, PRD content, knowledge chunks, or chat prompt context.
 - Keep user-provided content as data. Do not execute imported Skill Markdown or uploaded file content.
 - Preserve `runtime = 'nodejs'` for file-system, Supabase server, direct Postgres, and child-process routes.
 

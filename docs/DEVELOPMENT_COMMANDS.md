@@ -23,10 +23,11 @@ pnpm ts-check
 pnpm lint:build
 pnpm check:overlays
 pnpm check:responsive
+pnpm test
 pnpm validate
 ```
 
-`pnpm validate` runs the four validation gates in parallel.
+`pnpm validate` runs type-check, lint, overlay, and responsive gates in parallel. Run `pnpm test` for Vitest coverage of auth, permission, resource metadata, and server utility behavior.
 
 ## Build
 
@@ -64,6 +65,10 @@ BATTLEFLOW_DATABASE_URL=postgresql://... pnpm db:postgres:init
 `pnpm db:postgres:init` runs both scripts in order. Use it for a fresh direct-Postgres BattleFlow database.
 
 `pnpm db:resources:migrate` reads existing `data/skill-registry/index.json`, official Skill seed metadata, and `data/workflows/store.json`, then writes Skill/workflow business metadata and resource owner grants into Postgres. It does not execute imported package scripts or move large package assets into the database; Postgres stores metadata, state indexes, and asset manifests only.
+
+For non-official historical Skill/workflow data, set `BATTLEFLOW_MIGRATION_ORGANIZATION_ID` or `BATTLEFLOW_DEFAULT_ORGANIZATION_ID` plus `BATTLEFLOW_MIGRATION_USER_ID` before running the migration. Without the backfill, protected routes intentionally hide historical file-backed resources that do not have Postgres permission rows.
+
+See `docs/ACCOUNT_ORG_PERMISSION_RUNBOOK.md` for the full first-party auth, organization, super admin, and resource-permission operational sequence.
 
 ## Super Admin Bootstrap
 
