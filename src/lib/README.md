@@ -8,6 +8,7 @@ Shared application logic.
 - `workflow-registry.ts`: file-backed workspace/workflow store, steps, context files, reviewed outputs, snapshots, chat state, and Skill drafts.
 - `skill-tuning.ts`: Claude Code CLI powered generation of workflow-specific Skill drafts.
 - `knowledge-repository.ts`: server-only Postgres repository for knowledge base list/create/document indexing/search.
+- `auth/`: server-only first-party auth context, Postgres fetch helpers, and permission resolution.
 - `agent-adapters/types.ts`: provider/runtime event and status types.
 - `agent-adapters/claude-code-cli.ts`: Claude Code CLI availability checks and streaming adapter.
 - `supabase-config-inject.tsx`: client-side Supabase config provider.
@@ -30,6 +31,13 @@ Shared application logic.
 - Use parameterized runtime queries.
 - Bound uploaded document content before storing or injecting it into prompts.
 - Treat retrieved snippets as untrusted content.
+
+## Auth Rules
+
+- Resolve sessions from HttpOnly cookies and store only token hashes in Postgres.
+- Use `requireUser`, `requireOrganizationContext`, and `requirePermission` from `auth/server.ts` in protected route handlers.
+- Keep permission checks deny-by-default and route-independent.
+- Never expose secret material through super admin routes; super admin product access does not include environment variables, connection strings, or raw tokens.
 
 ## Agent Adapter Rules
 

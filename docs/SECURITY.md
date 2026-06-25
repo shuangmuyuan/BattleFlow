@@ -20,10 +20,11 @@ Never commit:
 
 ## Authentication and Authorization
 
-- Browser auth uses Supabase session state through `getSupabaseBrowserClientWithRetry`.
+- First-party auth helpers under `src/lib/auth/` resolve HttpOnly session cookies against Postgres rows through `BATTLEFLOW_DATABASE_URL`.
+- Store only password hashes, session token hashes, and invitation token hashes. Never log or return plaintext auth tokens.
+- Browser Supabase session state remains legacy until affected routes are migrated.
 - Server Supabase access may use the service role key when no user token is provided.
-- Server Postgres access uses `BATTLEFLOW_DATABASE_URL` for knowledge-store operations only.
-- API routes that mutate team/user data should prefer explicit user/session checks before production hardening.
+- Protected API routes must use shared auth context and permission helpers before reading or mutating organization data.
 - Any change that broadens service-role usage requires a security review.
 
 ## Database Access
