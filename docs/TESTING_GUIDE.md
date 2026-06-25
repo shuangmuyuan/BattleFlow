@@ -25,7 +25,15 @@ pnpm test
 pnpm test:watch
 ```
 
-Current coverage starts with `src/lib/auth/permissions.test.ts`, which exercises the server-side authorization decision engine. Do not claim broader automated behavior coverage until more tests are added.
+Current coverage includes:
+
+- `src/lib/auth/permissions.test.ts` for organization, department, team, resource grant, and platform permission decisions.
+- `src/lib/auth/session.test.ts`, `src/lib/auth/password.test.ts`, and `src/lib/auth/redirect.test.ts` for session tokens/cookies, password hashing, and safe redirects.
+- `src/lib/auth/super-admins.test.ts` for super admin bootstrap parsing and last-enabled revoke protection.
+- `src/lib/organization-management.test.ts` for audit-event SQL parameterization.
+- `src/lib/resource-metadata-repository.test.ts` for Postgres-backed Skill/workflow resource authorization behavior.
+
+Route-handler happy paths still need database-backed integration or e2e coverage before claiming full browser/API automation.
 
 ## Proposed Test Convention
 
@@ -58,4 +66,5 @@ Use this only when there is no automated test for the touched behavior:
 2. Exercise the affected dashboard page or API route.
 3. Confirm the empty, loading, success, and failure states that the change touches.
 4. Confirm mobile and desktop layouts if UI changed.
-5. Record exact commands and manual checks in the final report.
+5. For auth and authorization work, follow [AUTHORIZATION_QA.md](AUTHORIZATION_QA.md).
+6. Record exact commands and manual checks in the final report.

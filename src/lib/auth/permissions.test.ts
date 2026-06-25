@@ -155,6 +155,48 @@ describe('permission engine', () => {
     })).toBe(true);
   });
 
+  it('applies inherited department scope consistently across allowed resource actions', () => {
+    const context = makeContext({
+      departments: [
+        {
+          id: 'dept-parent',
+          organizationId: 'org-1',
+          parentDepartmentId: null,
+          name: 'Parent',
+          slug: 'parent',
+        },
+        {
+          id: 'dept-child',
+          organizationId: 'org-1',
+          parentDepartmentId: 'dept-parent',
+          name: 'Child',
+          slug: 'child',
+        },
+      ],
+      departmentMemberships: [{
+        departmentId: 'dept-parent',
+        userId: 'user-1',
+        role: 'department_manager',
+      }],
+    });
+
+    const target = {
+      organizationId: 'org-1',
+      resourceType: 'workflow',
+      resourceId: 'workflow-1',
+      departmentId: 'dept-child',
+    };
+
+    expect(canAccess(context, 'workflow.read', target)).toBe(true);
+    expect(canAccess(context, 'workflow.comment', target)).toBe(true);
+    expect(canAccess(context, 'workflow.run', target)).toBe(true);
+    expect(canAccess(context, 'workflow.create', target)).toBe(true);
+    expect(canAccess(context, 'workflow.update', target)).toBe(true);
+    expect(canAccess(context, 'workflow.publish', target)).toBe(false);
+    expect(canAccess(context, 'workflow.delete', target)).toBe(false);
+    expect(canAccess(context, 'workflow.manage', target)).toBe(false);
+  });
+
   it('allows department grants to reach child department members', () => {
     const context = makeContext({
       departments: [
@@ -213,6 +255,30 @@ describe('permission engine', () => {
       resourceId: 'workflow-1',
       teamId: 'team-1',
     })).toBe(true);
+  });
+
+  it('does not escalate read-only resource grants into mutation permissions', () => {
+    const context = makeContext({
+      resourceGrants: [{
+        id: 'grant-1',
+        organizationId: 'org-1',
+        resourceType: 'workflow',
+        resourceId: 'workflow-1',
+        subjectType: 'user',
+        subjectId: 'user-1',
+        permission: 'read',
+      }],
+    });
+
+    const target = {
+      organizationId: 'org-1',
+      resourceType: 'workflow',
+      resourceId: 'workflow-1',
+    };
+
+    expect(canAccess(context, 'workflow.read', target)).toBe(true);
+    expect(canAccess(context, 'workflow.update', target)).toBe(false);
+    expect(canAccess(context, 'workflow.delete', target)).toBe(false);
   });
 
   it('allows super admins to access organization content but not secret material', () => {

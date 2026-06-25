@@ -93,6 +93,51 @@ describe('business resource authorization', () => {
     expect(canAccessBusinessResource(context, 'skill.read', row)).toBe(false);
   });
 
+  it('authorizes workflow asset reads through explicit resource grants only at the granted level', () => {
+    const context = makeContext({
+      resourceGrants: [{
+        id: 'grant-1',
+        organizationId: 'org-1',
+        resourceType: 'workflow',
+        resourceId: 'workflow-1',
+        subjectType: 'user',
+        subjectId: 'user-1',
+        permission: 'read',
+      }],
+    });
+    const row = makeRow({
+      resource_id: 'workflow-1',
+      owner_user_id: 'user-2',
+      resource_type: 'workflow',
+    });
+
+    expect(canAccessBusinessResource(context, 'workflow.read', row)).toBe(true);
+    expect(canAccessBusinessResource(context, 'workflow.update', row)).toBe(false);
+    expect(canAccessBusinessResource(context, 'workflow.delete', row)).toBe(false);
+  });
+
+  it('denies workflow asset reads across organizations without super admin access', () => {
+    const context = makeContext({
+      resourceGrants: [{
+        id: 'grant-1',
+        organizationId: 'org-1',
+        resourceType: 'workflow',
+        resourceId: 'workflow-1',
+        subjectType: 'user',
+        subjectId: 'user-1',
+        permission: 'read',
+      }],
+    });
+    const row = makeRow({
+      resource_id: 'workflow-1',
+      organization_id: 'org-2',
+      owner_user_id: 'user-2',
+      resource_type: 'workflow',
+    });
+
+    expect(canAccessBusinessResource(context, 'workflow.read', row)).toBe(false);
+  });
+
   it('allows super admins across organizations without secret material', () => {
     const context = makeContext({
       isSuperAdmin: true,
