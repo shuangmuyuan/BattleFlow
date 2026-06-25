@@ -78,6 +78,7 @@ import {
   ShieldCheck,
   CircleStop,
   GripVertical,
+  ExternalLink,
 } from 'lucide-react';
 
 interface Skill {
@@ -238,6 +239,26 @@ interface WorkflowStep {
   completed_at?: string;
 }
 
+type WorkflowDemoHandoffStatus = 'queued' | 'ready' | 'running' | 'succeeded' | 'failed' | 'canceled';
+
+interface WorkflowDemoHandoff {
+  id: string;
+  workflowId: string;
+  stepId: string;
+  externalWorkflowId: string;
+  externalProjectKey: string;
+  title: string;
+  documentTitle: string;
+  documentFormat: 'markdown';
+  handoffId?: string;
+  studioUrl?: string;
+  directStudioUrl?: string;
+  status: WorkflowDemoHandoffStatus;
+  error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 type WorkflowFileContentKind = 'text' | 'image_data_url' | 'metadata';
 
 interface WorkflowContextSelection {
@@ -295,6 +316,7 @@ interface Workflow {
   stepChats?: Record<string, ChatMessage[]>;
   skillDrafts?: Record<string, WorkflowSkillDraft>;
   validationAttempts?: WorkflowStepValidationAttempt[];
+  demoHandoffs?: WorkflowDemoHandoff[];
   created_at?: string;
   updated_at?: string;
 }
@@ -358,6 +380,29 @@ function getLastConfirmableAssistantMessage(messages: ChatMessage[]) {
 
 function hasConfirmableAssistantMessage(messages: ChatMessage[]) {
   return Boolean(getLastConfirmableAssistantMessage(messages));
+}
+
+function getStepDemoHandoff(workflow?: Workflow | null, stepId?: string) {
+  if (!workflow || !stepId) return undefined;
+  return (workflow.demoHandoffs || []).find((handoff) => handoff.stepId === stepId && Boolean(handoff.studioUrl));
+}
+
+function getDemoHandoffStatusLabel(status?: WorkflowDemoHandoffStatus) {
+  switch (status) {
+    case 'queued':
+      return '已排队';
+    case 'running':
+      return '生成中';
+    case 'succeeded':
+      return '已完成';
+    case 'failed':
+      return '失败';
+    case 'canceled':
+      return '已取消';
+    case 'ready':
+    default:
+      return '可打开';
+  }
 }
 
 function sortWorkflowStepsForDisplay(steps: WorkflowStep[]) {
@@ -860,6 +905,7 @@ export default function WorkflowsPage() {
   const [chatPersistenceByStepId, setChatPersistenceByStepId] = useState<Record<string, ChatPersistenceStatus>>({});
   const [isConfirmingStep, setIsConfirmingStep] = useState(false);
   const [validationStageByStepId, setValidationStageByStepId] = useState<Record<string, 'self_checking' | 'agent_validating'>>({});
+  const [demoHandoffLoadingByStepId, setDemoHandoffLoadingByStepId] = useState<Record<string, boolean>>({});
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [draggingWorkflowStepId, setDraggingWorkflowStepId] = useState<string | null>(null);
@@ -2360,6 +2406,69 @@ export default function WorkflowsPage() {
     });
   };
 
+  const handleGenerateDemoHandoff = async () => {
+    const workflow = activeWorkflow;
+    const step = workflow ? getVisibleSteps(workflow)[activeStepIndex] || getVisibleSteps(workflow)[0] : undefined;
+    if (!workflow || !step || demoHandoffLoadingByStepId[step.id]) return;
+
+    const existingHandoff = getStepDemoHandoff(workflow, step.id);
+    if (existingHandoff?.studioUrl) return;
+
+    const hasVerifiedOutput = Boolean(
+      step.status === 'completed'
+      && step.output?.trim()
+      && (!step.validationStatus || step.validationStatus === 'passed'),
+    );
+    if (!hasVerifiedOutput) {
+      toast.error('当前节点还不能生成 Demo');
+      return;
+    }
+
+    setDemoHandoffLoadingByStepId((prev) => ({ ...prev, [step.id]: true }));
+
+    try {
+      const response = await fetch('/api/demos/handoffs', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          workflowId: workflow.id,
+          stepId: step.id,
+        }),
+      });
+      const data = await response.json() as {
+        error?: string;
+        workflow?: Workflow;
+        handoff?: WorkflowDemoHandoff;
+        reused?: boolean;
+      };
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Demo generation failed');
+      }
+
+      const savedWorkflow = data.workflow;
+      if (savedWorkflow?.id) {
+        setWorkflows((prev) => prev.map((item) => (
+          item.id === savedWorkflow.id ? savedWorkflow : item
+        )));
+        setActiveWorkflow((prev) => (prev?.id === savedWorkflow.id ? savedWorkflow : prev));
+      }
+
+      toast.success(data.reused ? '已找到 Demo' : 'Demo 生成成功', {
+        description: data.handoff?.studioUrl ? '可打开查看。' : undefined,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Demo 生成失败';
+      toast.error('Demo 生成失败', { description: message });
+    } finally {
+      setDemoHandoffLoadingByStepId((prev) => {
+        const next = { ...prev };
+        delete next[step.id];
+        return next;
+      });
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -3179,6 +3288,30 @@ export default function WorkflowsPage() {
   // Active workflow view - Pipeline + Chat
   const visibleWorkflowSteps = getVisibleSteps(activeWorkflow);
   const currentStep = visibleWorkflowSteps[activeStepIndex] || visibleWorkflowSteps[0];
+  const currentStepDemoHandoff = currentStep ? getStepDemoHandoff(activeWorkflow, currentStep.id) : undefined;
+  const currentStepDemoLoading = currentStep ? Boolean(demoHandoffLoadingByStepId[currentStep.id]) : false;
+  const currentStepHasVerifiedOutput = Boolean(
+    currentStep?.status === 'completed'
+    && currentStep.output?.trim()
+    && (!currentStep.validationStatus || currentStep.validationStatus === 'passed'),
+  );
+  const canGenerateCurrentStepDemo = Boolean(
+    currentStep
+    && currentStepHasVerifiedOutput
+    && !currentStepDemoHandoff?.studioUrl
+    && !currentStepDemoLoading,
+  );
+  const currentStepDemoHint = (() => {
+    if (currentStepDemoHandoff?.studioUrl) {
+      return `${getDemoHandoffStatusLabel(currentStepDemoHandoff.status)} · ${currentStepDemoHandoff.title || currentStep.name}`;
+    }
+    if (currentStepDemoLoading) return '正在提交当前节点产物';
+    if (!currentStep) return '未选择节点';
+    if (currentStep.status !== 'completed') return '节点通过验证后可生成 Demo';
+    if (currentStep.validationStatus && currentStep.validationStatus !== 'passed') return '验证通过后可生成 Demo';
+    if (!currentStep.output?.trim()) return '当前节点暂无产物';
+    return '当前节点产物可生成 Demo';
+  })();
   const baseCurrentSkill = skills.find((s) => s.id === currentStep?.skill_id);
   const currentSkillDraft = getWorkflowSkillDraft(activeWorkflow, currentStep?.id);
   const currentSkill = getEffectiveSkillForStep(activeWorkflow, currentStep);
@@ -4483,6 +4616,46 @@ export default function WorkflowsPage() {
                 </Tabs>
               </div>
             )}
+          </div>
+
+          <div className="flex flex-col gap-3 rounded-lg border border-border/40 bg-background/70 p-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex min-w-0 items-center gap-2">
+              <Sparkles className="h-4 w-4 shrink-0 text-primary" />
+              <div className="min-w-0">
+                <p className="text-sm font-medium">Demo 生成</p>
+                <p className="truncate text-xs text-muted-foreground">{currentStepDemoHint}</p>
+              </div>
+            </div>
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              {currentStepDemoHandoff?.studioUrl ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 gap-1.5 text-xs"
+                  onClick={() => window.open(currentStepDemoHandoff.studioUrl, '_blank', 'noopener,noreferrer')}
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  打开 Demo
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 gap-1.5 text-xs"
+                  disabled={!canGenerateCurrentStepDemo}
+                  onClick={() => void handleGenerateDemoHandoff()}
+                >
+                  {currentStepDemoLoading ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3.5 w-3.5" />
+                  )}
+                  Demo 生成
+                </Button>
+              )}
+            </div>
           </div>
 
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
