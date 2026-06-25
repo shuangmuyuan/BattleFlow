@@ -9,14 +9,12 @@ import {
   type WorkflowStepRecord,
   type WorkflowStepSnapshotRecord,
   type WorkflowStepValidationAttemptRecord,
-  type WorkflowStepValidationAttemptStatus,
   type WorkflowStepValidationPhaseRecord,
-  type WorkflowStepValidationStatus,
 } from '@/lib/workflow-registry';
 import {
-  aggregateValidationStatus,
   buildValidationCriteria,
   hashStepArtifact,
+  resolveValidationGateResult,
   runWorkflowStepAgentValidation,
   runWorkflowStepSelfCheck,
 } from '@/lib/workflow-validation';
@@ -146,13 +144,6 @@ function upsertAttempt(
 function summarizePhase(phase?: WorkflowStepValidationPhaseRecord) {
   if (!phase) return '';
   return phase.summary || phase.findings.find((finding) => finding.issue)?.issue || '';
-}
-
-function toStepValidationStatus(status: WorkflowStepValidationAttemptStatus): WorkflowStepValidationStatus {
-  if (status === 'passed') return 'passed';
-  if (status === 'error') return 'error';
-  if (status === 'failed') return 'failed';
-  return 'running';
 }
 
 function buildCandidateSnapshot(
@@ -311,21 +302,19 @@ async function runValidation(
   });
 
   const completedAt = new Date().toISOString();
-  const finalStatus = aggregateValidationStatus(selfCheck, agentValidation);
+  const gateResult = resolveValidationGateResult(selfCheck, agentValidation);
   const finalAttempt: WorkflowStepValidationAttemptRecord = {
     ...selfCheckedAttempt,
     agentValidation,
-    status: finalStatus,
+    status: gateResult.attemptStatus,
     updated_at: completedAt,
   };
-  const passed = finalStatus === 'passed';
-  const summary = summarizePhase(agentValidation) || summarizePhase(selfCheck);
   const finalWorkflow = await persistValidationState(upsertAttempt(updateStep(selfCheckedWorkflow, step.id, {
-    status: passed ? 'completed' : 'validation_failed',
-    output: passed ? normalizedOutput : step.output,
-    completed_at: passed ? completedAt : step.completed_at,
-    validationStatus: toStepValidationStatus(finalStatus),
-    validationSummary: summary || (passed ? '验证通过' : '验证未通过'),
+    status: gateResult.stepStatus,
+    output: gateResult.shouldPromoteCandidate ? normalizedOutput : step.output,
+    completed_at: gateResult.shouldPromoteCandidate ? completedAt : step.completed_at,
+    validationStatus: gateResult.validationStatus,
+    validationSummary: gateResult.summary || (gateResult.shouldPromoteCandidate ? '验证通过' : '验证未通过'),
   }, completedAt), finalAttempt, completedAt));
   const finalStep = finalWorkflow.steps.find((item) => item.id === step.id);
 
@@ -335,8 +324,8 @@ async function runValidation(
       step: finalStep,
       attempt: finalAttempt,
       attempts: getValidationAttempts(finalWorkflow, step.id),
-      status: finalStatus,
-      passed,
+      status: gateResult.attemptStatus,
+      passed: gateResult.shouldPromoteCandidate,
     }),
   };
 }

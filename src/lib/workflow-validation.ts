@@ -5,6 +5,8 @@ import type {
   WorkflowStepValidationAttemptStatus,
   WorkflowStepValidationFindingRecord,
   WorkflowStepValidationPhaseRecord,
+  WorkflowStepValidationStatus,
+  WorkflowStepStatus,
   WorkflowValidationOutcome,
   WorkflowSkillDraftRecord,
 } from './workflow-registry';
@@ -59,6 +61,14 @@ export interface ParsedWorkflowValidationResult {
 export type WorkflowValidationParseResult =
   | { ok: true; result: ParsedWorkflowValidationResult }
   | { ok: false; error: string; rawText: string };
+
+export interface WorkflowValidationGateResult {
+  attemptStatus: WorkflowStepValidationAttemptStatus;
+  stepStatus: Extract<WorkflowStepStatus, 'agent_validating' | 'validation_failed' | 'completed'>;
+  validationStatus: WorkflowStepValidationStatus;
+  shouldPromoteCandidate: boolean;
+  summary: string;
+}
 
 const MAX_ARTIFACT_PROMPT_CHARS = 18_000;
 const MAX_SKILL_PROMPT_CHARS = 12_000;
@@ -462,6 +472,35 @@ export function aggregateValidationStatus(
   if (selfCheck.outcome === 'error' || agentValidation.outcome === 'error') return 'error';
   if (selfCheck.outcome === 'pass' && agentValidation.outcome === 'pass') return 'passed';
   return 'failed';
+}
+
+function summarizeValidationPhase(phase?: Pick<WorkflowStepValidationPhaseRecord, 'summary' | 'findings'>) {
+  if (!phase) return '';
+  return phase.summary || phase.findings.find((finding) => finding.issue)?.issue || '';
+}
+
+function toStepValidationStatus(status: WorkflowStepValidationAttemptStatus): WorkflowStepValidationStatus {
+  if (status === 'passed') return 'passed';
+  if (status === 'error') return 'error';
+  if (status === 'failed') return 'failed';
+  return 'running';
+}
+
+export function resolveValidationGateResult(
+  selfCheck?: WorkflowStepValidationPhaseRecord,
+  agentValidation?: WorkflowStepValidationPhaseRecord,
+): WorkflowValidationGateResult {
+  const attemptStatus = aggregateValidationStatus(selfCheck, agentValidation);
+  const summary = summarizeValidationPhase(agentValidation) || summarizeValidationPhase(selfCheck);
+  const shouldPromoteCandidate = attemptStatus === 'passed';
+
+  return {
+    attemptStatus,
+    stepStatus: shouldPromoteCandidate ? 'completed' : attemptStatus === 'running' ? 'agent_validating' : 'validation_failed',
+    validationStatus: toStepValidationStatus(attemptStatus),
+    shouldPromoteCandidate,
+    summary,
+  };
 }
 
 export function toValidationPhaseRecord(
