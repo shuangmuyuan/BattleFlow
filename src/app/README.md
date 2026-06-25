@@ -10,6 +10,7 @@ Next.js App Router root for BattleFlow.
 - `globals.css` holds Tailwind CSS 4 variables and global styling.
 - `dashboard/` contains the authenticated product workspace shell and pages.
 - `login/` contains the sign-in screen.
+- `onboarding/` contains first-organization setup for authenticated users without an organization.
 - `api/` contains route handlers.
 
 ## Rules
@@ -19,4 +20,3 @@ Next.js App Router root for BattleFlow.
 - Keep browser-only behavior inside Client Components.
 - Set route-handler `runtime = 'nodejs'` when using Node APIs, file-system access, or child processes.
 - Preserve hydration safety for locale/time/browser-derived values.
-

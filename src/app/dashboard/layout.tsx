@@ -1,23 +1,22 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
-import { useSupabaseConfig } from '@/lib/supabase-config-inject';
-import { getSupabaseBrowserClientWithRetry } from '@/lib/supabase-browser';
-import type { User } from '@supabase/supabase-js';
 import {
-  FileCode2,
-  Database,
-  LogOut,
+  Building2,
   ChevronLeft,
   ChevronRight,
-  User as UserIcon,
+  Database,
+  FileCode2,
   LayoutDashboard,
+  LogOut,
+  Moon,
   Play,
   Rocket,
+  Shield,
   Sun,
-  Moon,
   Swords,
+  User as UserIcon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useTheme } from '@/hooks/use-theme';
@@ -38,6 +37,40 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+
+interface OrganizationSummary {
+  id: string;
+  name: string;
+  slug: string;
+  role: string;
+  status: string;
+}
+
+interface DashboardAuthState {
+  user: {
+    id: string;
+    email: string;
+    displayName: string | null;
+    avatarUrl: string | null;
+  };
+  isSuperAdmin: boolean;
+  activeOrganizationId: string | null;
+  capabilities: {
+    manageOrganization: boolean;
+    manageMembers: boolean;
+    manageDepartments: boolean;
+    manageTeams: boolean;
+    managePlatformAdmins: boolean;
+  };
+  organizations: OrganizationSummary[];
+}
 
 const navItems = [
   { href: '/dashboard', label: '工作台', icon: LayoutDashboard },
@@ -45,69 +78,153 @@ const navItems = [
   { href: '/dashboard/workflows', label: '工作流', icon: Play },
   { href: '/dashboard/knowledge', label: '知识库', icon: Database },
   { href: '/dashboard/demos', label: 'Demo 生成', icon: Rocket },
+  { href: '/dashboard/admin', label: '管理', icon: Shield, requiresAdmin: true },
 ];
+
+function dashboardTitle(pathname: string): string {
+  if (pathname === '/dashboard') return '工作台';
+  if (pathname === '/dashboard/skills') return 'Skill 仓库';
+  if (pathname === '/dashboard/workflows') return '工作流';
+  if (pathname === '/dashboard/knowledge') return '知识库';
+  if (pathname === '/dashboard/demos') return 'Demo 生成';
+  if (pathname === '/dashboard/admin') return '管理';
+  if (pathname.includes('/dashboard/workflows/')) return '工作流详情';
+  if (pathname.includes('/dashboard/skills/')) return 'Skill 详情';
+  return 'BattleFlow';
+}
+
+function loginPathFor(pathname: string): string {
+  return `/login?next=${encodeURIComponent(pathname || '/dashboard')}`;
+}
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
-  const [user, setUser] = useState<User | null>(null);
+  const [authState, setAuthState] = useState<DashboardAuthState | null>(null);
+  const [authError, setAuthError] = useState('');
   const [authChecked, setAuthChecked] = useState(false);
+  const [isSwitchingOrganization, setIsSwitchingOrganization] = useState(false);
   const [showLogoutDialog, setShowLogoutDialog] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
-  const { config, isLoading: configLoading, error: configError } = useSupabaseConfig();
   const { theme, toggleTheme } = useTheme();
 
   useEffect(() => {
-    async function loadUser() {
-      try {
-        const supabase = await getSupabaseBrowserClientWithRetry();
-        const { data: { user: currentUser } } = await supabase.auth.getUser();
-        if (currentUser) {
-          setUser(currentUser);
-        }
-      } catch {
-        // Auth not available - continue without user
+    let cancelled = false;
+
+    async function loadAuthState() {
+      setAuthError('');
+      const response = await fetch('/api/auth/me', { cache: 'no-store' });
+
+      if (response.status === 401) {
+        router.replace(loginPathFor(pathname));
+        return;
       }
-      setAuthChecked(true);
+
+      const data = await response.json() as DashboardAuthState & { error?: string };
+      if (!response.ok) {
+        throw new Error(data.error || 'Unable to load account');
+      }
+
+      if (!data.organizations.length) {
+        router.replace(`/onboarding?next=${encodeURIComponent(pathname || '/dashboard')}`);
+        return;
+      }
+
+      if (!cancelled) {
+        setAuthState(data);
+        setAuthChecked(true);
+      }
     }
 
-    if (!configLoading && config) {
-      loadUser();
-    } else if (!configLoading && !config) {
-      // No Supabase config available - skip auth
-      setAuthChecked(true);
-    }
-  }, [configLoading, config]);
+    loadAuthState().catch((error) => {
+      if (!cancelled) {
+        setAuthError(error instanceof Error ? error.message : 'Unable to load account');
+        setAuthChecked(true);
+      }
+    });
 
-  const handleLogout = async () => {
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname, router]);
+
+  const visibleNavItems = useMemo(() => (
+    navItems.filter((item) => !item.requiresAdmin || authState?.capabilities.manageOrganization)
+  ), [authState]);
+
+  const activeOrganization = authState?.organizations.find((organization) => (
+    organization.id === authState.activeOrganizationId
+  )) ?? authState?.organizations[0] ?? null;
+
+  async function handleOrganizationChange(organizationId: string) {
+    setIsSwitchingOrganization(true);
+    setAuthError('');
+
     try {
-      const supabase = await getSupabaseBrowserClientWithRetry();
-      await supabase.auth.signOut();
-      setUser(null);
-    } catch (err) {
-      console.error('Logout error:', err);
-    }
-    setShowLogoutDialog(false);
-  };
+      const response = await fetch('/api/auth/organizations/active', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ organizationId }),
+      });
+      const data = await response.json() as { activeOrganizationId?: string; error?: string };
 
-  // Only show loading while config is being fetched
-  if (configLoading) {
+      if (!response.ok || !data.activeOrganizationId) {
+        throw new Error(data.error || 'Unable to switch organization');
+      }
+
+      setAuthState((current) => current ? {
+        ...current,
+        activeOrganizationId: data.activeOrganizationId ?? organizationId,
+      } : current);
+      router.refresh();
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Unable to switch organization');
+    } finally {
+      setIsSwitchingOrganization(false);
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } finally {
+      setShowLogoutDialog(false);
+      setAuthState(null);
+      router.replace('/login');
+      router.refresh();
+    }
+  }
+
+  if (!authChecked) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="text-muted-foreground">Loading...</div>
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="text-sm text-muted-foreground">Loading...</div>
+      </div>
+    );
+  }
+
+  if (authError || !authState || !activeOrganization) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background p-4">
+        <div className="max-w-sm space-y-3 text-center">
+          <p className="text-sm text-destructive">{authError || 'Account context is unavailable'}</p>
+          <Button variant="secondary" onClick={() => router.replace(loginPathFor(pathname))}>
+            Return to Sign In
+          </Button>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="flex h-dvh min-w-0 overflow-hidden bg-background">
-      {/* Sidebar */}
       <aside
         className={`${
           collapsed ? 'w-16' : 'w-60'
         } hidden h-dvh min-h-0 shrink-0 flex-col border-r border-border bg-sidebar transition-all duration-200 md:flex`}
       >
-        {/* Logo area */}
         <div className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
           <div className={`flex items-center gap-2 ${collapsed ? 'hidden' : ''}`}>
             <span className="flex h-8 w-8 items-center justify-center rounded-md bg-brand/15 text-brand">
@@ -118,16 +235,42 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <Button
             variant="ghost"
             size="icon"
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             onClick={() => setCollapsed(!collapsed)}
-            className="text-muted-foreground hover:text-foreground hover:bg-secondary"
+            className="text-muted-foreground hover:bg-secondary hover:text-foreground"
           >
             {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
           </Button>
         </div>
 
-        {/* Navigation */}
+        <div className={`shrink-0 border-b border-border px-2 py-3 ${collapsed ? 'hidden' : ''}`}>
+          {authState.organizations.length > 1 ? (
+            <Select
+              value={activeOrganization.id}
+              onValueChange={handleOrganizationChange}
+              disabled={isSwitchingOrganization}
+            >
+              <SelectTrigger className="h-9 w-full border-border bg-secondary text-left">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {authState.organizations.map((organization) => (
+                  <SelectItem key={organization.id} value={organization.id}>
+                    {organization.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
+            <div className="flex min-w-0 items-center gap-2 rounded-md bg-secondary px-3 py-2">
+              <Building2 className="size-4 shrink-0 text-brand" />
+              <span className="truncate text-sm text-foreground">{activeOrganization.name}</span>
+            </div>
+          )}
+        </div>
+
         <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 py-4">
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href));
             return (
               <Button
@@ -136,8 +279,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 className={`w-full justify-start gap-3 ${
                   isActive
                     ? 'bg-brand/10 text-brand hover:bg-brand/15 hover:text-brand'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
-                } ${collapsed ? 'px-0 justify-center' : ''}`}
+                    : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+                } ${collapsed ? 'justify-center px-0' : ''}`}
                 onClick={() => router.push(item.href)}
               >
                 <item.icon className="h-4 w-4 shrink-0" />
@@ -147,12 +290,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           })}
         </nav>
 
-        {/* Theme toggle */}
         <div className="shrink-0 px-2 pb-2">
           <Button
             variant="ghost"
-            className={`w-full justify-start gap-3 text-muted-foreground hover:text-foreground hover:bg-secondary ${
-              collapsed ? 'px-0 justify-center' : ''
+            className={`w-full justify-start gap-3 text-muted-foreground hover:bg-secondary hover:text-foreground ${
+              collapsed ? 'justify-center px-0' : ''
             }`}
             onClick={toggleTheme}
           >
@@ -167,79 +309,72 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </Button>
         </div>
 
-        {/* User area */}
         <div className="shrink-0 border-t border-border p-2">
-          {user ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  className={`w-full justify-start gap-3 text-muted-foreground hover:text-foreground hover:bg-secondary ${
-                    collapsed ? 'px-0 justify-center' : ''
-                  }`}
-                >
-                  <div className="h-7 w-7 rounded-full bg-brand/20 flex items-center justify-center shrink-0">
-                    <UserIcon className="h-3.5 w-3.5 text-brand" />
-                  </div>
-                  {!collapsed && (
-                    <span className="text-sm truncate">{user.email}</span>
-                  )}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="bg-card border-border">
-                <DropdownMenuItem className="text-muted-foreground">
-                  <UserIcon className="mr-2 h-4 w-4" />
-                  {user.email}
-                </DropdownMenuItem>
-                <DropdownMenuSeparator className="bg-border" />
-                <DropdownMenuItem
-                  className="text-destructive focus:text-destructive cursor-pointer"
-                  onClick={() => setShowLogoutDialog(true)}
-                >
-                  <LogOut className="mr-2 h-4 w-4" />
-                  Sign Out
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : (
-            <Button
-              variant="ghost"
-              className={`w-full justify-start gap-3 text-muted-foreground hover:text-foreground hover:bg-secondary ${
-                collapsed ? 'px-0 justify-center' : ''
-              }`}
-              onClick={() => router.push('/login')}
-            >
-              <div className="h-7 w-7 rounded-full bg-secondary flex items-center justify-center shrink-0">
-                <UserIcon className="h-3.5 w-3.5 text-muted-foreground" />
-              </div>
-              {!collapsed && <span className="text-sm">Sign In</span>}
-            </Button>
-          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                className={`w-full justify-start gap-3 text-muted-foreground hover:bg-secondary hover:text-foreground ${
+                  collapsed ? 'justify-center px-0' : ''
+                }`}
+              >
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand/20">
+                  <UserIcon className="h-3.5 w-3.5 text-brand" />
+                </div>
+                {!collapsed && (
+                  <span className="truncate text-sm">{authState.user.email}</span>
+                )}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="border-border bg-card">
+              <DropdownMenuItem className="text-muted-foreground">
+                <UserIcon className="mr-2 h-4 w-4" />
+                {authState.user.email}
+              </DropdownMenuItem>
+              <DropdownMenuItem className="text-muted-foreground">
+                <Building2 className="mr-2 h-4 w-4" />
+                {activeOrganization.name}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator className="bg-border" />
+              <DropdownMenuItem
+                className="cursor-pointer text-destructive focus:text-destructive"
+                onClick={() => setShowLogoutDialog(true)}
+              >
+                <LogOut className="mr-2 h-4 w-4" />
+                Sign Out
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </aside>
 
-      {/* Main content */}
       <main className="flex h-dvh min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-card/50 px-4 md:px-6">
+        <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border bg-card/50 px-4 md:px-6">
           <div className="flex min-w-0 items-center gap-2">
             <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-brand/15 text-brand md:hidden">
               <Swords className="size-4" />
             </span>
-            <span className="truncate text-sm text-muted-foreground">
-            {pathname === '/dashboard' && '工作台'}
-            {pathname === '/dashboard/skills' && 'Skill 仓库'}
-            {pathname === '/dashboard/workflows' && '工作流'}
-            {pathname === '/dashboard/knowledge' && '知识库'}
-            {pathname === '/dashboard/demos' && 'Demo 生成'}
-            {pathname.includes('/dashboard/workflows/') && pathname !== '/dashboard/workflows' && '工作流详情'}
-            {pathname.includes('/dashboard/skills/') && pathname !== '/dashboard/skills' && 'Skill 详情'}
+            <span className="truncate text-sm text-muted-foreground">{dashboardTitle(pathname)}</span>
+          </div>
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="hidden max-w-48 truncate text-xs text-muted-foreground sm:inline">
+              {activeOrganization.name}
             </span>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Sign out"
+              className="text-muted-foreground hover:bg-secondary hover:text-foreground md:hidden"
+              onClick={() => setShowLogoutDialog(true)}
+            >
+              <LogOut className="size-4" />
+            </Button>
           </div>
         </div>
 
         <div className="shrink-0 border-b border-border bg-card/30 md:hidden">
           <div className="flex gap-2 overflow-x-auto px-3 py-2">
-            {navItems.map((item) => {
+            {visibleNavItems.map((item) => {
               const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href));
               return (
                 <Button
@@ -262,9 +397,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </div>
       </main>
 
-      {/* Logout confirmation dialog */}
       <AlertDialog open={showLogoutDialog} onOpenChange={setShowLogoutDialog}>
-        <AlertDialogContent className="bg-card border-border">
+        <AlertDialogContent className="border-border bg-card">
           <AlertDialogHeader>
             <AlertDialogTitle className="text-card-foreground">Confirm Sign Out</AlertDialogTitle>
             <AlertDialogDescription className="text-muted-foreground">
@@ -272,7 +406,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel className="bg-secondary text-secondary-foreground border-border hover:bg-secondary/80">Cancel</AlertDialogCancel>
+            <AlertDialogCancel className="border-border bg-secondary text-secondary-foreground hover:bg-secondary/80">
+              Cancel
+            </AlertDialogCancel>
             <AlertDialogAction className="bg-destructive text-white hover:bg-destructive/90" onClick={handleLogout}>
               Sign Out
             </AlertDialogAction>
