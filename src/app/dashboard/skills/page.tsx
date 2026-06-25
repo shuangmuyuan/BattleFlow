@@ -48,6 +48,8 @@ type SkillScope = 'personal' | 'team' | 'official';
 type SkillSourceType = 'local' | 'registry' | 'git';
 type SkillStatus = 'imported' | 'pending_review' | 'published' | 'rejected' | 'archived';
 type VersionBump = 'patch' | 'minor' | 'major';
+type SkillReviewOperation = 'create' | 'update';
+type SkillReviewRequestStatus = 'pending' | 'approved' | 'rejected';
 
 interface SkillVersion {
   version: string;
@@ -80,6 +82,8 @@ interface SkillReview {
 
 interface Skill {
   id: string;
+  skill_id?: string;
+  display_name?: string;
   name: string;
   description: string;
   version: string;
@@ -104,9 +108,32 @@ interface Skill {
   review?: SkillReview;
 }
 
+interface SkillReviewRequest {
+  id: string;
+  skill_id: string;
+  display_name: string;
+  description: string;
+  operation: SkillReviewOperation;
+  target_scope: 'team';
+  target_skill_id?: string;
+  target_version?: string;
+  source_skill_id?: string;
+  source_version?: string;
+  submitted_skill: Skill;
+  submitted_at: string;
+  submitted_note?: string;
+  reviewed_at?: string;
+  review_note?: string;
+  decision?: 'approved' | 'rejected';
+  status: SkillReviewRequestStatus;
+  version_bump: VersionBump;
+}
+
 interface ApiSkillResponse {
   skill?: Skill;
   skills?: Skill[];
+  review_request?: SkillReviewRequest;
+  review_requests?: SkillReviewRequest[];
   error?: string;
 }
 
@@ -122,6 +149,17 @@ const statusLabels: Record<SkillStatus, string> = {
   published: '已发布',
   rejected: '已拒绝',
   archived: '已归档',
+};
+
+const reviewOperationLabels: Record<SkillReviewOperation, string> = {
+  create: '新增 Skill',
+  update: '更新 Skill',
+};
+
+const reviewStatusLabels: Record<SkillReviewRequestStatus, string> = {
+  pending: '待审核',
+  approved: '已通过',
+  rejected: '已拒绝',
 };
 
 const sourceLabels: Record<SkillSourceType, string> = {
@@ -205,11 +243,31 @@ function formatSlugLabel(value: string) {
 }
 
 function getSkillDisplayName(skill: Skill) {
-  const name = skill.name?.trim() || skill.id;
+  const name = skill.display_name?.trim() || skill.name?.trim() || skill.id;
   if (isSlugLike(name)) {
     return formatSlugLabel(name);
   }
   return name;
+}
+
+function getSkillLogicalId(skill: Skill) {
+  return skill.skill_id || skill.id;
+}
+
+function getReviewRequestDisplayName(request: SkillReviewRequest) {
+  const name = request.display_name?.trim() || request.submitted_skill.display_name?.trim() || request.submitted_skill.name?.trim() || request.skill_id;
+  if (isSlugLike(name)) {
+    return formatSlugLabel(name);
+  }
+  return name;
+}
+
+function getReviewRequestDescription(request: SkillReviewRequest) {
+  const description = request.description?.trim() || request.submitted_skill.description?.trim();
+  if (!description || emptyDescriptionPattern.test(description)) {
+    return '未填写简介。审核前请重点检查 SKILL.md 的 Purpose、Workflow、Output Contract 和 Acceptance Criteria。';
+  }
+  return description;
 }
 
 function getSourceMeta(skill: Skill) {
@@ -265,7 +323,7 @@ function getStatusDotClassName(status: SkillStatus) {
 function getSkillCapabilities(skill: Skill) {
   const values = [
     ...skill.tags,
-    ...skill.tools.map((tool) => `工具:${tool}`),
+    ...skill.tools.map((tool) => `能力:${tool}`),
   ];
   return Array.from(new Set(values)).slice(0, 5);
 }
@@ -292,8 +350,14 @@ function StatusBadge({ status }: { status: SkillStatus }) {
   return <Badge variant={variant}>{statusLabels[status]}</Badge>;
 }
 
+function ReviewStatusBadge({ status }: { status: SkillReviewRequestStatus }) {
+  const variant = status === 'approved' ? 'default' : status === 'rejected' ? 'destructive' : 'secondary';
+  return <Badge variant={variant}>{reviewStatusLabels[status]}</Badge>;
+}
+
 export default function SkillsPage() {
   const [skills, setSkills] = useState<Skill[]>([]);
+  const [reviewRequests, setReviewRequests] = useState<SkillReviewRequest[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'all' | SkillScope>('all');
   const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -302,7 +366,7 @@ export default function SkillsPage() {
   const [downloadNotice, setDownloadNotice] = useState<{ fileName: string; previewUrl: string } | null>(null);
   const [reviewRequestSkill, setReviewRequestSkill] = useState<Skill | null>(null);
   const [reviewRequestNote, setReviewRequestNote] = useState('');
-  const [reviewDecisionSkill, setReviewDecisionSkill] = useState<Skill | null>(null);
+  const [reviewDecisionRequest, setReviewDecisionRequest] = useState<SkillReviewRequest | null>(null);
   const [reviewDecision, setReviewDecision] = useState<'approved' | 'rejected'>('approved');
   const [reviewDecisionNote, setReviewDecisionNote] = useState('');
   const [loading, setLoading] = useState(true);
@@ -327,9 +391,11 @@ export default function SkillsPage() {
       const data = (await res.json()) as ApiSkillResponse;
       if (!res.ok) throw new Error(data.error || 'Failed to fetch skills');
       setSkills(data.skills || []);
+      setReviewRequests(data.review_requests || []);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
       setSkills([]);
+      setReviewRequests([]);
     } finally {
       setLoading(false);
     }
@@ -341,10 +407,12 @@ export default function SkillsPage() {
 
   const filteredSkills = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    return skills.filter((skill) => {
+    return skills.filter((skill) => skill.status !== 'pending_review').filter((skill) => {
       const matchesSearch =
         !query ||
-        skill.name.toLowerCase().includes(query) ||
+        getSkillDisplayName(skill).toLowerCase().includes(query) ||
+        skill.id.toLowerCase().includes(query) ||
+        getSkillLogicalId(skill).toLowerCase().includes(query) ||
         skill.description.toLowerCase().includes(query) ||
         skill.tags.some((tag) => tag.toLowerCase().includes(query));
       const matchesTab = activeTab === 'all' || skill.scope === activeTab;
@@ -353,7 +421,7 @@ export default function SkillsPage() {
   }, [activeTab, searchQuery, skills]);
 
   const skillCounts = useMemo(() => {
-    return skills.reduce(
+    return skills.filter((skill) => skill.status !== 'pending_review').reduce(
       (counts, skill) => {
         counts.all += 1;
         counts[skill.scope] += 1;
@@ -362,6 +430,10 @@ export default function SkillsPage() {
       { all: 0, official: 0, team: 0, personal: 0 },
     );
   }, [skills]);
+
+  const pendingReviewRequests = useMemo(() => {
+    return reviewRequests.filter((request) => request.status === 'pending');
+  }, [reviewRequests]);
 
   const updateSkillInState = (skill: Skill) => {
     setSkills((prev) => {
@@ -373,7 +445,6 @@ export default function SkillsPage() {
     });
     setDetailSkill((prev) => (prev?.id === skill.id ? skill : prev));
     setVersionSkill((prev) => (prev?.id === skill.id ? skill : prev));
-    setReviewDecisionSkill((prev) => (prev?.id === skill.id ? skill : prev));
   };
 
   const runSkillAction = async (body: Record<string, unknown>, success: string) => {
@@ -389,7 +460,7 @@ export default function SkillsPage() {
       const data = (await res.json()) as ApiSkillResponse;
       if (!res.ok) throw new Error(data.error || 'Skill operation failed');
       if (data.skill) updateSkillInState(data.skill);
-      if (data.skills) await fetchSkills();
+      if (data.skills || data.review_request || data.review_requests) await fetchSkills();
       setSuccessMessage(success);
       return true;
     } catch (error) {
@@ -413,17 +484,21 @@ export default function SkillsPage() {
   };
 
   const handleReviewDecision = async () => {
-    if (!reviewDecisionSkill) return;
+    if (!reviewDecisionRequest) return;
     const ok = await runSkillAction(
       {
         action: reviewDecision === 'approved' ? 'approve_publish' : 'reject_review',
-        id: reviewDecisionSkill.id,
+        id: reviewDecisionRequest.id,
         note: reviewDecisionNote,
       },
-      reviewDecision === 'approved' ? '已通过审核并发布到团队仓库' : '已拒绝该团队审核',
+      reviewDecision === 'approved'
+        ? reviewDecisionRequest.operation === 'update'
+          ? '已通过审核并更新团队 Skill'
+          : '已通过审核并发布到团队仓库'
+        : '已拒绝该团队审核',
     );
     if (ok) {
-      setReviewDecisionSkill(null);
+      setReviewDecisionRequest(null);
       setReviewDecisionNote('');
       setReviewDecision('approved');
     }
@@ -493,8 +568,15 @@ export default function SkillsPage() {
       setServerPath('');
       setImportUrl('');
       setImportChangelogNote('');
-      const importedSummary = (data.skills || []).map((skill) => `${skill.name} v${skill.version}`).join('、');
-      setSuccessMessage(importedSummary ? `已导入/更新 ${importedSummary}` : '未导入 Skill');
+      const importedSummary = (data.skills || []).map((skill) => `${getSkillDisplayName(skill)} v${skill.version}`).join('、');
+      const reviewSummary = (data.review_requests || [])
+        .map((request) => `${getReviewRequestDisplayName(request)}（${reviewOperationLabels[request.operation]}）`)
+        .join('、');
+      const messages = [
+        importedSummary ? `已导入个人 Skill：${importedSummary}` : '',
+        reviewSummary ? `已提交团队审核：${reviewSummary}` : '',
+      ].filter(Boolean);
+      setSuccessMessage(messages.length > 0 ? messages.join('；') : '未导入 Skill');
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     } finally {
@@ -513,7 +595,7 @@ export default function SkillsPage() {
       setSkills((prev) => prev.filter((item) => item.id !== skill.id));
       setDetailSkill((prev) => (prev?.id === skill.id ? null : prev));
       setVersionSkill((prev) => (prev?.id === skill.id ? null : prev));
-      setSuccessMessage(`已移除 ${skill.name}`);
+      setSuccessMessage(`已移除 ${getSkillDisplayName(skill)}`);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     } finally {
@@ -530,7 +612,7 @@ export default function SkillsPage() {
   };
 
   const getDownloadFileName = (skill: Skill, version: SkillVersion) => {
-    return `${skill.name}-v${version.version}.md`.replace(/[\\/:*?"<>|]/g, '-');
+    return `${getSkillDisplayName(skill)}-v${version.version}.md`.replace(/[\\/:*?"<>|]/g, '-');
   };
 
   return (
@@ -751,6 +833,119 @@ export default function SkillsPage() {
             </Alert>
           )}
 
+          {pendingReviewRequests.length > 0 && (
+            <section className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <h2 className="text-base font-semibold tracking-normal">团队审核队列</h2>
+                  <p className="text-sm text-muted-foreground">
+                    {pendingReviewRequests.length} 个待处理提交。审核项不会混入团队 Skill 列表。
+                  </p>
+                </div>
+                <Badge variant="secondary" className="w-fit gap-1.5">
+                  <GitPullRequest />
+                  {pendingReviewRequests.length} pending
+                </Badge>
+              </div>
+              <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+                {pendingReviewRequests.map((request) => {
+                  const displayName = getReviewRequestDisplayName(request);
+                  const isUpdate = request.operation === 'update';
+                  return (
+                    <Card key={request.id} className={`${appCardClassName} border-warning/30 bg-warning/5`}>
+                      <CardHeader className="pb-3">
+                        <div className="flex min-w-0 items-start gap-3">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-warning/30 bg-warning/10 text-warning [&_svg]:h-5 [&_svg]:w-5">
+                            <GitPullRequest />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <CardTitle className="min-w-0 truncate text-base leading-6" title={displayName}>
+                                {displayName}
+                              </CardTitle>
+                              <Badge variant={isUpdate ? 'default' : 'secondary'}>
+                                {reviewOperationLabels[request.operation]}
+                              </Badge>
+                              <ReviewStatusBadge status={request.status} />
+                            </div>
+                            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                              <span className="font-mono">{request.skill_id}</span>
+                              <span>提交于 {formatDate(request.submitted_at)}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <CardDescription className="mt-3 line-clamp-2 text-sm leading-5">
+                          {getReviewRequestDescription(request)}
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="flex flex-col gap-3">
+                        <div className="grid grid-cols-1 overflow-hidden rounded-lg border border-border/50 bg-background/70 text-xs sm:grid-cols-3">
+                          <div className="min-w-0 p-3">
+                            <div className="text-muted-foreground">目标</div>
+                            <div className="mt-1 truncate font-medium">团队 Skill</div>
+                          </div>
+                          <div className="min-w-0 border-t border-border/50 p-3 sm:border-l sm:border-t-0">
+                            <div className="text-muted-foreground">当前版本</div>
+                            <div className="mt-1 truncate font-medium">
+                              {request.target_version ? `v${request.target_version}` : '无，审核后新增'}
+                            </div>
+                          </div>
+                          <div className="min-w-0 border-t border-border/50 p-3 sm:border-l sm:border-t-0">
+                            <div className="text-muted-foreground">提交版本</div>
+                            <div className="mt-1 truncate font-medium">v{request.source_version || request.submitted_skill.version}</div>
+                          </div>
+                        </div>
+
+                        {isUpdate && (
+                          <Alert className="border-warning/30 bg-warning/10">
+                            <AlertCircle />
+                            <AlertTitle>当前 Skill 已存在</AlertTitle>
+                            <AlertDescription>
+                              审核通过后会更新 `{request.skill_id}`，并按“{versionBumpLabels[request.version_bump]}”升级版本。
+                            </AlertDescription>
+                          </Alert>
+                        )}
+
+                        {request.submitted_note && (
+                          <div className="rounded-lg border border-border/50 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                            <div className="mb-1 font-medium text-foreground/80">提交说明</div>
+                            <div className="line-clamp-3 whitespace-pre-wrap">{request.submitted_note}</div>
+                          </div>
+                        )}
+
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setReviewDecisionRequest(request);
+                              setReviewDecision('rejected');
+                              setReviewDecisionNote('');
+                            }}
+                          >
+                            <XCircle data-icon="inline-start" />
+                            拒绝
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              setReviewDecisionRequest(request);
+                              setReviewDecision('approved');
+                              setReviewDecisionNote('');
+                            }}
+                          >
+                            <CheckCircle2 data-icon="inline-start" />
+                            通过
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
           <div className="rounded-xl border border-border/60 bg-card/80 p-3 shadow-sm shadow-foreground/5">
             <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div className="relative min-w-0 flex-1 lg:max-w-xl">
@@ -822,13 +1017,13 @@ export default function SkillsPage() {
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex min-w-0 items-start gap-2">
-                          <CardTitle className="min-w-0 flex-1 truncate text-base leading-6" title={skill.name}>
+                          <CardTitle className="min-w-0 flex-1 truncate text-base leading-6" title={displayName}>
                             {displayName}
                           </CardTitle>
                           <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotClassName(skill.status)}`} aria-label={statusLabels[skill.status]} />
                         </div>
                         <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-                          <span className="min-w-0 truncate font-mono" title={skill.id}>{skill.id}</span>
+                          <span className="min-w-0 truncate font-mono" title={getSkillLogicalId(skill)}>{getSkillLogicalId(skill)}</span>
                           <span className="shrink-0">·</span>
                           <span className="shrink-0 rounded-md border border-border/60 bg-background/70 px-1.5 py-0.5 font-medium text-foreground/80">
                             v{skill.version}
@@ -840,7 +1035,7 @@ export default function SkillsPage() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            aria-label={`${skill.name} 操作菜单`}
+                            aria-label={`${displayName} 操作菜单`}
                             onClick={(event) => event.stopPropagation()}
                           >
                             <MoreVertical />
@@ -943,8 +1138,8 @@ export default function SkillsPage() {
                         <div className="mt-1 truncate font-medium">{sourceLabels[skill.source_type]}</div>
                       </div>
                       <div className="min-w-0 border-l border-border/50 p-3">
-                        <div className="text-muted-foreground">作者</div>
-                        <div className="mt-1 truncate font-medium">{skill.author}</div>
+                        <div className="text-muted-foreground">资源</div>
+                        <div className="mt-1 truncate font-medium">{skill.package_assets?.length || 0} assets</div>
                       </div>
                     </div>
 
@@ -973,7 +1168,7 @@ export default function SkillsPage() {
                           )}
                         </div>
                       ) : (
-                        <div className="text-xs text-muted-foreground">暂无标签或工具声明</div>
+                        <div className="text-xs text-muted-foreground">暂无声明标签</div>
                       )}
                     </div>
 
@@ -1028,13 +1223,15 @@ export default function SkillsPage() {
                     <TabsTrigger value="overview">概要</TabsTrigger>
                     <TabsTrigger value="assets">Package assets</TabsTrigger>
                     <TabsTrigger value="skill-md">skill.md</TabsTrigger>
-                    <TabsTrigger value="meta">meta.json</TabsTrigger>
-                    <TabsTrigger value="changes">变更记录</TabsTrigger>
                   </TabsList>
                 </div>
                 <ScrollArea className="mt-4 max-h-[62vh] min-w-0 pr-4">
                   <TabsContent value="overview" className="flex flex-col gap-5">
                     <div className="grid gap-3 rounded-lg border p-4 text-sm md:grid-cols-2">
+                      <div>
+                        <div className="text-muted-foreground">Skill ID</div>
+                        <div className="mt-1 break-all font-mono text-xs">{detailSkill.id}</div>
+                      </div>
                       <div>
                         <div className="text-muted-foreground">来源</div>
                         <div className="mt-1 break-all">{formatSourceMetaText(detailSkill)}</div>
@@ -1042,14 +1239,6 @@ export default function SkillsPage() {
                       <div>
                         <div className="text-muted-foreground">更新时间</div>
                         <div className="mt-1">{formatDate(detailSkill.updated_at)}</div>
-                      </div>
-                      <div>
-                        <div className="text-muted-foreground">作者</div>
-                        <div className="mt-1">{detailSkill.author}</div>
-                      </div>
-                      <div>
-                        <div className="text-muted-foreground">附件</div>
-                        <div className="mt-1">{detailSkill.attachments.length || 0} 个资源</div>
                       </div>
                       <div>
                         <div className="text-muted-foreground">Package assets</div>
@@ -1097,26 +1286,8 @@ export default function SkillsPage() {
                       )}
                     </div>
 
-                    <div>
-                      <h4 className="mb-2 text-sm font-semibold">方法论框架</h4>
-                      <Textarea readOnly value={detailSkill.methodology} className="min-h-36 resize-none font-mono text-sm" />
-                    </div>
-
-                    <div>
-                      <h4 className="mb-2 text-sm font-semibold">Prompt 模板</h4>
-                      <Textarea readOnly value={detailSkill.prompt_template || '未定义'} className="min-h-24 resize-none font-mono text-sm" />
-                    </div>
-
-                    <div>
-                      <h4 className="mb-2 text-sm font-semibold">质量 Checklist</h4>
-                      <div className="flex flex-col gap-2">
-                        {detailSkill.checklist.map((item) => (
-                          <div key={item} className="flex items-start gap-2 rounded-md border p-2 text-sm">
-                            <CheckCircle2 className="mt-0.5 text-muted-foreground" />
-                            <span>{item}</span>
-                          </div>
-                        ))}
-                      </div>
+                    <div className="rounded-lg border border-border/60 bg-muted/20 p-4 text-sm text-muted-foreground">
+                      `SKILL.md` 是该 Skill 的唯一执行入口。方法论、输出契约和验收标准应优先在 `SKILL.md` 中维护；Package assets 只作为模板、脚本和参考资料随包加载。
                     </div>
                   </TabsContent>
 
@@ -1157,17 +1328,6 @@ export default function SkillsPage() {
                     </pre>
                   </TabsContent>
 
-                  <TabsContent value="meta" className="min-w-0">
-                    <pre className={`${codeBlockClassName} text-xs`}>
-                      {JSON.stringify(detailSkill.meta_json, null, 2)}
-                    </pre>
-                  </TabsContent>
-
-                  <TabsContent value="changes" className="min-w-0">
-                    <pre className={`${codeBlockClassName} text-sm`}>
-                      {detailSkill.changelog || '暂无 CHANGELOG.md'}
-                    </pre>
-                  </TabsContent>
                 </ScrollArea>
               </Tabs>
             </>
@@ -1194,7 +1354,7 @@ export default function SkillsPage() {
                 <Field>
                   <FieldLabel>Skill</FieldLabel>
                   <div className="rounded-md border bg-muted/20 p-3 text-sm">
-                    <div className="font-medium">{reviewRequestSkill.name}</div>
+                    <div className="font-medium">{getSkillDisplayName(reviewRequestSkill)}</div>
                     <div className="mt-1 text-xs text-muted-foreground">
                       {reviewRequestSkill.id} · v{reviewRequestSkill.version}
                     </div>
@@ -1225,35 +1385,48 @@ export default function SkillsPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!reviewDecisionSkill} onOpenChange={(open) => {
+      <Dialog open={!!reviewDecisionRequest} onOpenChange={(open) => {
         if (!open) {
-          setReviewDecisionSkill(null);
+          setReviewDecisionRequest(null);
           setReviewDecisionNote('');
           setReviewDecision('approved');
         }
       }}>
         <DialogContent className="max-w-lg">
-          {reviewDecisionSkill && (
+          {reviewDecisionRequest && (
             <>
               <DialogHeader>
                 <DialogTitle>{reviewDecision === 'approved' ? '审核通过' : '审核拒绝'}</DialogTitle>
                 <DialogDescription>
                   {reviewDecision === 'approved'
-                    ? '通过后这条团队审核副本会进入已发布状态。'
-                    : '拒绝后这条团队审核副本会保留为已拒绝，便于回看原因。'}
+                    ? reviewDecisionRequest.operation === 'update'
+                      ? '通过后会更新已存在的团队 Skill，并写入新的版本历史。'
+                      : '通过后会发布为新的团队 Skill。'
+                    : '拒绝后不会修改任何团队 Skill。'}
                 </DialogDescription>
               </DialogHeader>
               <FieldGroup>
                 <Field>
-                  <FieldLabel>Skill</FieldLabel>
+                  <FieldLabel>审核项</FieldLabel>
                   <div className="rounded-md border bg-muted/20 p-3 text-sm">
-                    <div className="font-medium">{reviewDecisionSkill.name}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      来源 {reviewDecisionSkill.review?.source_skill_id || reviewDecisionSkill.id} · v{reviewDecisionSkill.version}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="font-medium">{getReviewRequestDisplayName(reviewDecisionRequest)}</div>
+                      <Badge variant={reviewDecisionRequest.operation === 'update' ? 'default' : 'secondary'}>
+                        {reviewOperationLabels[reviewDecisionRequest.operation]}
+                      </Badge>
                     </div>
-                    {reviewDecisionSkill.review?.submitted_note && (
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      Skill ID {reviewDecisionRequest.skill_id} · 提交版本 v{reviewDecisionRequest.source_version || reviewDecisionRequest.submitted_skill.version}
+                      {reviewDecisionRequest.target_version ? ` · 当前团队版本 v${reviewDecisionRequest.target_version}` : ''}
+                    </div>
+                    {reviewDecisionRequest.operation === 'update' && (
+                      <div className="mt-3 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning-foreground">
+                        当前 Skill 已存在，确认通过会更新团队 Skill 并按“{versionBumpLabels[reviewDecisionRequest.version_bump]}”升级版本。
+                      </div>
+                    )}
+                    {reviewDecisionRequest.submitted_note && (
                       <div className="mt-3 whitespace-pre-wrap text-xs text-muted-foreground">
-                        {reviewDecisionSkill.review.submitted_note}
+                        {reviewDecisionRequest.submitted_note}
                       </div>
                     )}
                   </div>
@@ -1270,7 +1443,7 @@ export default function SkillsPage() {
                 </Field>
               </FieldGroup>
               <DialogFooter>
-                <Button variant="outline" onClick={() => setReviewDecisionSkill(null)} disabled={actionLoading}>
+                <Button variant="outline" onClick={() => setReviewDecisionRequest(null)} disabled={actionLoading}>
                   取消
                 </Button>
                 <Button
@@ -1297,7 +1470,7 @@ export default function SkillsPage() {
           {versionSkill && (
             <>
               <DialogHeader>
-                <DialogTitle>{versionSkill.name} 版本管理</DialogTitle>
+                <DialogTitle>{getSkillDisplayName(versionSkill)} 版本管理</DialogTitle>
                 <DialogDescription>
                   历史版本不可覆盖。官方模板只允许下载，不允许在本地回滚。
                 </DialogDescription>

@@ -66,6 +66,7 @@ Use `pnpm` only. Do not use `npm` or `yarn` for dependency or script execution i
 ## Mandatory Rules
 
 - Language: code, comments, docs, agent files, and commit messages MUST be in English from this point forward. Existing Chinese UI copy and seeded product Skill content may remain until intentionally localized.
+- Deep Work Plan 产物语言：通过 Deep Work Plan 方法论生成的 `.dwp/` plans、drafts、analysis reports、executive reports 和设计文档，默认必须使用中文；除非用户明确要求其他语言。
 - Commits: use Conventional Commits, `type(scope): description`. Recent repository history already follows this pattern.
 - Package management: use pnpm only. Never add `package-lock.json`, `yarn.lock`, or npm/yarn commands.
 - TypeScript: write with `strict` in mind. Avoid implicit `any`, avoid `as any`, type event objects and error handling, and remove unused imports.

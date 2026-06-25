@@ -447,7 +447,7 @@ function buildSystemPrompt(body: Record<string, unknown>) {
       'User references to the current method package, current workflow capability, or current step rules mean the BattleFlow method package described below.',
       'Do not interpret those references as a request to activate, list, or choose Claude Code or Codex runtime capabilities.',
       'Do not ask the user to provide a slash command or a capability name. Do not mention registered runtime capability lists or unavailable runtime capabilities.',
-      'When the user asks to follow the current method package requirements, directly apply the methodology, prompt template, checklist, and output structure below.',
+      'When the user asks to follow the current method package requirements, directly apply the SKILL.md instructions below.',
       'If an earlier assistant message asked the user to choose a runtime capability, treat it as an obsolete misinterpretation and continue with this active BattleFlow method package.',
     ].map((item) => `- ${item}`).join('\n')}\n`;
 
@@ -455,24 +455,25 @@ function buildSystemPrompt(body: Record<string, unknown>) {
     if (skillDefinition.description) {
       systemPrompt += `\n### Capability Description\n${skillDefinition.description}\n`;
     }
-    if (skillDefinition.methodology) {
-      systemPrompt += `\n### Methodology\n${skillDefinition.methodology}\n`;
-    }
-    if (skillDefinition.outputs) {
-      systemPrompt += `\n### Expected Output Structure\n${JSON.stringify(skillDefinition.outputs, null, 2)}\n`;
-    }
-    if (skillDefinition.checklist && skillDefinition.checklist.length > 0) {
-      systemPrompt += `\n### Quality Checklist\n${skillDefinition.checklist.map((item, index) => `${index + 1}. ${item}`).join('\n')}\n`;
-    }
-    if (skillDefinition.tools && skillDefinition.tools.length > 0) {
-      systemPrompt += `\n### Declared Planning Capabilities\n${skillDefinition.tools.join(', ')}\n`;
-      systemPrompt += 'These tool names describe intended capabilities only. Do not claim you actually executed external tools unless the platform provides tool results in context.\n';
-    }
-    if (skillDefinition.prompt_template) {
-      systemPrompt += `\n### Prompt Template\n${skillDefinition.prompt_template}\n`;
-    }
     if (skillDefinition.skill_md) {
-      systemPrompt += `\n### Full Method Instructions\n${skillDefinition.skill_md}\n`;
+      systemPrompt += `\n### SKILL.md Source Of Truth\n${skillDefinition.skill_md}\n`;
+    } else {
+      if (skillDefinition.methodology) {
+        systemPrompt += `\n### Methodology\n${skillDefinition.methodology}\n`;
+      }
+      if (skillDefinition.outputs) {
+        systemPrompt += `\n### Expected Output Structure\n${JSON.stringify(skillDefinition.outputs, null, 2)}\n`;
+      }
+      if (skillDefinition.checklist && skillDefinition.checklist.length > 0) {
+        systemPrompt += `\n### Quality Checklist\n${skillDefinition.checklist.map((item, index) => `${index + 1}. ${item}`).join('\n')}\n`;
+      }
+      if (skillDefinition.tools && skillDefinition.tools.length > 0) {
+        systemPrompt += `\n### Declared Planning Capabilities\n${skillDefinition.tools.join(', ')}\n`;
+        systemPrompt += 'These tool names describe intended capabilities only. Do not claim you actually executed external tools unless the platform provides tool results in context.\n';
+      }
+      if (skillDefinition.prompt_template) {
+        systemPrompt += `\n### Prompt Template\n${skillDefinition.prompt_template}\n`;
+      }
     }
     if (skillDefinition.package_assets && skillDefinition.package_assets.length > 0) {
       systemPrompt += buildSkillPackageAssetsPrompt(skillDefinition.package_assets);

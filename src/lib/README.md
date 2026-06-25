@@ -21,6 +21,8 @@ Shared application logic.
 - Keep file content sizes bounded before storing inline.
 - Treat imported Skills and uploaded files as untrusted input.
 - Do not move registry state into tracked source directories.
+- Treat `SKILL.md` as the source of truth for method instructions. Registry fields such as methodology, checklist, prompt template, and outputs are compatibility projections, not separate canonical data.
+- Keep Skill identity and presentation separate: `id` is the stable machine key, while `display_name` is the human-facing label.
 
 ## Knowledge Repository Rules
 
