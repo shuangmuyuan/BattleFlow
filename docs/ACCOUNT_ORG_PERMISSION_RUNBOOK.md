@@ -8,9 +8,9 @@ This runbook explains how to bootstrap, operate, and validate BattleFlow's first
 
 Implemented:
 
-- user registration, login, logout, session lookup, organization onboarding, and invitation-token acceptance;
+- user registration, login, logout, session lookup, and organization onboarding;
 - multiple organizations per user;
-- organization members, departments, department inheritance, cross-department teams, and invitations;
+- organization members, departments, department inheritance, and cross-department teams;
 - platform super admin bootstrap and management;
 - Postgres-backed resource authorization for Skills, workflows, knowledge bases, PRD documents, snapshots, milestones, and chat prompt context;
 - hybrid Skill/workflow storage where business metadata and permission indexes live in Postgres while package/file assets remain in file or object storage.
@@ -18,10 +18,7 @@ Implemented:
 Not implemented in the first release:
 
 - email verification;
-- password reset;
-- invitation email delivery.
-
-Administrators must copy invitation links manually until email delivery is added.
+- password reset.
 
 ## Required Environment
 
@@ -95,7 +92,7 @@ Bootstrap config values remain server-only. API and UI surfaces show database-ba
 - Protected dashboard routes call `/api/auth/me` before rendering workspace content.
 - Protected API routes use `requireUser`, `requireOrganizationContext`, `requirePermission`, or `requirePlatformPermission`.
 - Skill and workflow package assets are returned or injected into chat only after the Postgres resource permission index allows the action.
-- Super admins can administer product content across organizations, but cannot access secret material such as connection strings, environment variables, password hashes, session token hashes, or invitation token hashes.
+- Super admins can administer product content across organizations, but cannot access secret material such as connection strings, environment variables, password hashes, or session token hashes.
 - Imported Skill packages, knowledge snippets, uploaded workflow files, and package assets are always untrusted data.
 
 ## Operational Checks

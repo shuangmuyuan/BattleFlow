@@ -6,7 +6,7 @@ Database and schema boundary.
 
 - `database/supabase-client.ts` loads environment configuration and creates server-side Supabase clients for Supabase-backed routes.
 - `database/postgres-client.ts` creates a server-side Postgres pool from `BATTLEFLOW_DATABASE_URL`.
-- `database/shared/schema.ts` defines Drizzle table schemas for first-party users, sessions, organizations, organization members, departments, teams, platform admins, invitations, resource grants, audit events, Skills, workflows, workflow steps, snapshots, milestones, knowledge bases, knowledge documents, and PRD documents.
+- `database/shared/schema.ts` defines Drizzle table schemas for first-party users, sessions, organizations, organization members, departments, teams, platform admins, resource grants, audit events, Skills, workflows, workflow steps, snapshots, milestones, knowledge bases, knowledge documents, and PRD documents.
 - `database/shared/relations.ts` defines schema relations.
 
 ## Security Boundaries
@@ -17,7 +17,7 @@ Database and schema boundary.
 - Do not expose service-role keys through route handlers.
 - Do not log database connection strings.
 - Keep auth/session checks explicit when routes read or mutate user, organization, or grantable resource data.
-- Store only password hashes, session token hashes, and invitation token hashes. Never log or return plaintext tokens.
+- Store only password hashes and session token hashes. Never log or return plaintext tokens.
 
 ## Schema Rules
 

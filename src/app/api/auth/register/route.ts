@@ -23,7 +23,6 @@ export async function POST(request: NextRequest) {
       displayName: readString(body.displayName),
       organizationName: readString(body.organizationName),
       organizationSlug: readString(body.organizationSlug),
-      invitationToken: readString(body.invitationToken),
     });
 
     return authSuccessResponse(result, readString(body.next));

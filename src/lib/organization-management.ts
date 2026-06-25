@@ -1,9 +1,6 @@
 import type { PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { getPostgresPool, queryPostgres } from '../storage/database/postgres-client';
-import { createSessionToken, hashToken } from './auth/session';
 import type { DepartmentRole, OrganizationRole, TeamRole } from './auth/types';
-
-const INVITATION_TTL_DAYS = 7;
 
 interface QueryExecutor {
   query<T extends QueryResultRow = QueryResultRow>(text: string, values?: unknown[]): Promise<QueryResult<T>>;
@@ -69,25 +66,6 @@ interface TeamMemberRow extends QueryResultRow {
   role: TeamRole;
 }
 
-interface InvitationRow extends QueryResultRow {
-  id: string;
-  email: string;
-  role: OrganizationRole;
-  expires_at: Date | string;
-  accepted_at: Date | string | null;
-  created_at: Date | string;
-}
-
-export interface CreateInvitationResult {
-  invitation: {
-    id: string;
-    email: string;
-    role: OrganizationRole;
-    expiresAt: string;
-  };
-  token: string;
-}
-
 function normalizeText(value: string | null | undefined, fieldName: string, maxLength: number): string {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -99,14 +77,6 @@ function normalizeText(value: string | null | undefined, fieldName: string, maxL
 function normalizeOptionalText(value: string | null | undefined, maxLength: number): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed.slice(0, maxLength) : null;
-}
-
-function normalizeEmail(value: string): string {
-  const email = normalizeText(value, 'Email', 255).toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new OrganizationManagementValidationError('Valid email is required');
-  }
-  return email;
 }
 
 function slugify(value: string): string {
@@ -1003,95 +973,5 @@ export async function removeTeamMember(input: {
       targetId: input.teamId,
       metadata: { userId: input.userId },
     }, client);
-  });
-}
-
-export async function listInvitations(organizationId: string) {
-  const result = await queryPostgres<InvitationRow>(
-    `
-      SELECT id, email, role, expires_at, accepted_at, created_at
-      FROM organization_invitations
-      WHERE organization_id = $1
-      ORDER BY created_at DESC
-    `,
-    [organizationId],
-  );
-
-  return result.rows.map((row) => ({
-    id: row.id,
-    email: row.email,
-    role: row.role,
-    expiresAt: toIso(row.expires_at),
-    acceptedAt: row.accepted_at ? toIso(row.accepted_at) : null,
-    createdAt: toIso(row.created_at),
-  }));
-}
-
-export async function createInvitation(input: {
-  organizationId: string;
-  email: string;
-  role: OrganizationRole;
-  departmentIds?: string[];
-  teamIds?: string[];
-  actorUserId: string;
-}): Promise<CreateInvitationResult> {
-  return withTransaction(async (client) => {
-    const departmentIds = uniqueStringIds(input.departmentIds);
-    const teamIds = uniqueStringIds(input.teamIds);
-    await ensureDepartmentIds(client, input.organizationId, departmentIds);
-    await ensureTeamIds(client, input.organizationId, teamIds);
-
-    const token = createSessionToken();
-    const expiresAt = new Date(Date.now() + INVITATION_TTL_DAYS * 24 * 60 * 60 * 1000);
-    const result = await client.query<InvitationRow>(
-      `
-        INSERT INTO organization_invitations (
-          organization_id,
-          email,
-          role,
-          department_ids,
-          team_ids,
-          token_hash,
-          expires_at,
-          created_by,
-          created_at
-        )
-        VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, now())
-        RETURNING id, email, role, expires_at, accepted_at, created_at
-      `,
-      [
-        input.organizationId,
-        normalizeEmail(input.email),
-        input.role,
-        JSON.stringify(departmentIds),
-        JSON.stringify(teamIds),
-        hashToken(token),
-        expiresAt,
-        input.actorUserId,
-      ],
-    );
-    const invitation = result.rows[0];
-    if (!invitation) {
-      throw new OrganizationManagementValidationError('Unable to create invitation');
-    }
-
-    await writeAuditEvent({
-      organizationId: input.organizationId,
-      actorUserId: input.actorUserId,
-      action: 'organization.invitation.create',
-      targetType: 'organization_invitation',
-      targetId: invitation.id,
-      metadata: { email: invitation.email, role: invitation.role, departmentIds, teamIds },
-    }, client);
-
-    return {
-      invitation: {
-        id: invitation.id,
-        email: invitation.email,
-        role: invitation.role,
-        expiresAt: toIso(invitation.expires_at),
-      },
-      token,
-    };
   });
 }

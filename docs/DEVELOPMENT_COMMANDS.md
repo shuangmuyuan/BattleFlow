@@ -60,7 +60,7 @@ BATTLEFLOW_DATABASE_URL=postgresql://... pnpm db:postgres:init
 
 `pnpm db:knowledge:init` applies the direct Postgres knowledge-store bootstrap in `scripts/database/001_knowledge_store.sql`.
 
-`pnpm db:accounts:init` applies `scripts/database/002_account_org_permissions.sql`, which adds first-party users, password credential storage, sessions, organization members, departments, teams, platform admins, invitations, resource grants, audit events, and Skill/workflow business metadata needed by the authorization system.
+`pnpm db:accounts:init` applies `scripts/database/002_account_org_permissions.sql`, which adds first-party users, password credential storage, sessions, organization members, departments, teams, platform admins, resource grants, audit events, and Skill/workflow business metadata needed by the authorization system.
 
 `pnpm db:postgres:init` runs both scripts in order. Use it for a fresh direct-Postgres BattleFlow database.
 

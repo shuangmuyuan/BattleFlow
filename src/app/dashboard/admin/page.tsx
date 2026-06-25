@@ -5,7 +5,6 @@ import {
   AlertTriangle,
   Building2,
   GitBranch,
-  KeyRound,
   Loader2,
   Network,
   Plus,
@@ -28,7 +27,6 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -130,14 +128,6 @@ interface Team {
   members: TeamMember[];
 }
 
-interface Invitation {
-  id: string;
-  email: string;
-  role: OrganizationRole;
-  expiresAt: string;
-  acceptedAt: string | null;
-  createdAt: string;
-}
 
 interface SuperAdminRecord {
   userId: string;
@@ -260,18 +250,11 @@ export default function AdminPage() {
   const [members, setMembers] = useState<OrganizationMember[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
-  const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [superAdmins, setSuperAdmins] = useState<SuperAdminRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [memberSearch, setMemberSearch] = useState('');
-  const [inviteOpen, setInviteOpen] = useState(false);
-  const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteRole, setInviteRole] = useState<OrganizationRole>('org_member');
-  const [inviteDepartmentIds, setInviteDepartmentIds] = useState<string[]>([]);
-  const [inviteTeamIds, setInviteTeamIds] = useState<string[]>([]);
-  const [createdInviteLink, setCreatedInviteLink] = useState('');
   const [departmentOpen, setDepartmentOpen] = useState(false);
   const [editingDepartment, setEditingDepartment] = useState<Department | null>(null);
   const [departmentName, setDepartmentName] = useState('');
@@ -338,7 +321,6 @@ export default function AdminPage() {
         setMembers([]);
         setDepartments([]);
         setTeams([]);
-        setInvitations([]);
         return;
       }
 
@@ -346,18 +328,15 @@ export default function AdminPage() {
         memberData,
         departmentData,
         teamData,
-        invitationData,
       ] = await Promise.all([
         jsonRequest<{ members: OrganizationMember[] }>('/api/organizations/members'),
         jsonRequest<{ departments: Department[] }>('/api/organizations/departments'),
         jsonRequest<{ teams: Team[] }>('/api/organizations/teams'),
-        jsonRequest<{ invitations: Invitation[] }>('/api/organizations/invitations'),
       ]);
 
       setMembers(memberData.members);
       setDepartments(departmentData.departments);
       setTeams(teamData.teams);
-      setInvitations(invitationData.invitations);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Unable to load administration data');
     } finally {
@@ -392,25 +371,6 @@ export default function AdminPage() {
           status: nextStatus,
         }),
       });
-    });
-  }
-
-  async function createInvitation() {
-    await runMutation(async () => {
-      const result = await jsonRequest<{ invitationLink: string }>('/api/organizations/invitations', {
-        method: 'POST',
-        body: JSON.stringify({
-          email: inviteEmail,
-          role: inviteRole,
-          departmentIds: inviteDepartmentIds,
-          teamIds: inviteTeamIds,
-        }),
-      });
-      setCreatedInviteLink(result.invitationLink);
-      setInviteEmail('');
-      setInviteRole('org_member');
-      setInviteDepartmentIds([]);
-      setInviteTeamIds([]);
     });
   }
 
@@ -536,11 +496,6 @@ export default function AdminPage() {
     });
   }
 
-  function setCheckedId(current: string[], id: string, checked: boolean): string[] {
-    if (checked) return [...new Set([...current, id])];
-    return current.filter((value) => value !== id);
-  }
-
   if (loading) {
     return (
       <div className="flex h-full min-h-0 flex-col">
@@ -585,12 +540,6 @@ export default function AdminPage() {
             {authState?.isSuperAdmin && <StatusBadge tone="success">Super admin</StatusBadge>}
           </>
         )}
-        action={(
-          <Button className="gap-2" onClick={() => setInviteOpen(true)}>
-            <Plus className="size-4" />
-            Invite member
-          </Button>
-        )}
       />
 
       <div className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
@@ -603,7 +552,7 @@ export default function AdminPage() {
             </Alert>
           )}
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
             <Card className={appCardClassName}>
               <CardContent className="flex items-center gap-3 p-4">
                 <Users className="size-5 text-brand" />
@@ -628,15 +577,6 @@ export default function AdminPage() {
                 <div>
                   <p className="text-2xl font-semibold">{teams.length}</p>
                   <p className="text-xs text-muted-foreground">Teams</p>
-                </div>
-              </CardContent>
-            </Card>
-            <Card className={appCardClassName}>
-              <CardContent className="flex items-center gap-3 p-4">
-                <KeyRound className="size-5 text-brand" />
-                <div>
-                  <p className="text-2xl font-semibold">{invitations.filter((invite) => !invite.acceptedAt).length}</p>
-                  <p className="text-xs text-muted-foreground">Open invites</p>
                 </div>
               </CardContent>
             </Card>
@@ -705,7 +645,7 @@ export default function AdminPage() {
                     <ProductEmptyState
                       icon={<Users />}
                       title="No matching members"
-                      description="Adjust the search query or invite a new member."
+                      description="Adjust the search query."
                       className="mt-4 min-h-48"
                     />
                   )}
@@ -1080,60 +1020,6 @@ export default function AdminPage() {
         </div>
       </div>
 
-      <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto border-border bg-card">
-          <DialogHeader>
-            <DialogTitle>Invite member</DialogTitle>
-            <DialogDescription>
-              Create a token-backed invitation. Email delivery is outside the first release, so copy the generated link.
-            </DialogDescription>
-          </DialogHeader>
-          <FieldGroup>
-            <Field>
-              <FieldLabel>Email</FieldLabel>
-              <Input value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} placeholder="member@example.com" />
-            </Field>
-            <Field>
-              <FieldLabel>Organization role</FieldLabel>
-              <Select value={inviteRole} onValueChange={(value) => setInviteRole(value as OrganizationRole)}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {organizationRoles.map((role) => (
-                    <SelectItem key={role.value} value={role.value}>{role.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <InviteScopePicker
-              title="Initial departments"
-              items={departments.map((department) => ({ id: department.id, label: department.name }))}
-              selectedIds={inviteDepartmentIds}
-              onChange={(id, checked) => setInviteDepartmentIds((current) => setCheckedId(current, id, checked))}
-            />
-            <InviteScopePicker
-              title="Initial teams"
-              items={teams.map((team) => ({ id: team.id, label: team.name }))}
-              selectedIds={inviteTeamIds}
-              onChange={(id, checked) => setInviteTeamIds((current) => setCheckedId(current, id, checked))}
-            />
-            {createdInviteLink && (
-              <Field>
-                <FieldLabel>Invitation link</FieldLabel>
-                <Textarea value={createdInviteLink} readOnly className="min-h-20" />
-              </Field>
-            )}
-          </FieldGroup>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setInviteOpen(false)}>Close</Button>
-            <Button disabled={!inviteEmail || submitting} onClick={createInvitation}>
-              Create invitation
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       <Dialog open={departmentOpen} onOpenChange={setDepartmentOpen}>
         <DialogContent className="max-h-[90vh] overflow-y-auto border-border bg-card">
           <DialogHeader>
@@ -1374,38 +1260,5 @@ function DepartmentTreeItem({
         />
       ))}
     </div>
-  );
-}
-
-function InviteScopePicker({
-  title,
-  items,
-  selectedIds,
-  onChange,
-}: {
-  title: string;
-  items: Array<{ id: string; label: string }>;
-  selectedIds: string[];
-  onChange: (id: string, checked: boolean) => void;
-}) {
-  if (items.length === 0) {
-    return null;
-  }
-
-  return (
-    <Field>
-      <FieldLabel>{title}</FieldLabel>
-      <div className="grid max-h-40 gap-2 overflow-y-auto rounded-md border border-border/60 p-3">
-        {items.map((item) => (
-          <label key={item.id} className="flex min-w-0 items-center gap-2 text-sm">
-            <Checkbox
-              checked={selectedIds.includes(item.id)}
-              onCheckedChange={(checked) => onChange(item.id, checked === true)}
-            />
-            <span className="truncate">{item.label}</span>
-          </label>
-        ))}
-      </div>
-    </Field>
   );
 }

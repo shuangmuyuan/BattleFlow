@@ -7,7 +7,7 @@ user-invocable: true
 
 # BattleFlow Authz Postgres Skill
 
-Use this skill when changing first-party accounts, sessions, organizations, departments, teams, invitations, platform super admins, resource grants, resource metadata, or API route authorization.
+Use this skill when changing first-party accounts, sessions, organizations, departments, teams, platform super admins, resource grants, resource metadata, or API route authorization.
 
 ## Read First
 
@@ -29,8 +29,8 @@ Use this skill when changing first-party accounts, sessions, organizations, depa
    - use `requirePlatformPermission` for platform super admin routes;
    - use `requireSkillIdAccess` or `requireWorkflowAccess` before returning file-backed assets, workflow outputs, snapshots, milestones, PRD documents, knowledge chunks, or chat prompt context.
 4. Preserve deny-by-default behavior and active-organization boundaries. Super admins may access product data, but never secret material.
-5. Store only password hashes, session token hashes, and invitation token hashes. Do not log or return plaintext auth tokens.
-6. Write audit events for membership, invitation, department, team, platform admin, and destructive authorization changes.
+5. Store only password hashes and session token hashes. Do not log or return plaintext auth tokens.
+6. Write audit events for membership, department, team, platform admin, and destructive authorization changes.
 7. Keep Skill/workflow package assets in file/object storage. Postgres stores business metadata, version/state indexes, asset manifests, and grants.
 8. For historical file-backed Skill/workflow data, update `scripts/migrate-resource-metadata.mjs` and docs instead of silently granting access during reads.
 9. Update docs when env vars, bootstrap steps, migration behavior, authorization semantics, or first-release exclusions change.

@@ -8,9 +8,9 @@ The work also keeps large Skill and workflow package assets in file or object st
 
 ## Product Impact
 
-- Users can register, log in, log out, create an organization during onboarding, accept invitations, and switch active organizations.
+- Users can register, log in, log out, create an organization during onboarding, and switch active organizations.
 - A user can belong to multiple organizations.
-- Organizations can manage members, roles, statuses, departments, cross-department teams, and invitations.
+- Organizations can manage members, roles, statuses, departments, and cross-department teams.
 - Department permissions inherit to child departments for all actions.
 - Team permissions can span departments.
 - Platform super admins can view and manage product content across organizations, but still cannot access secret material.
@@ -20,7 +20,7 @@ The work also keeps large Skill and workflow package assets in file or object st
 
 - Added account and permission schema contracts in Drizzle plus `scripts/database/002_account_org_permissions.sql`.
 - Added Postgres bootstrap commands and resource metadata migration commands.
-- Added first-party auth services for password hashing, session token hashing, secure cookies, safe redirects, registration, login, logout, current-user lookup, onboarding, and invitation acceptance.
+- Added first-party auth services for password hashing, session token hashing, secure cookies, safe redirects, registration, login, logout, current-user lookup, and onboarding.
 - Added route-facing auth helpers: `requireUser`, `requireOrganizationContext`, `requirePermission`, `requirePlatformPermission`, `requireSkillIdAccess`, and `requireWorkflowAccess`.
 - Added organization management repository helpers and APIs under `src/app/api/organizations/`.
 - Added super admin bootstrap and management under `src/lib/auth/super-admins.ts` and `src/app/api/admin/super-admins/route.ts`.
@@ -34,11 +34,11 @@ The work also keeps large Skill and workflow package assets in file or object st
 
 - Direct Postgres is the account and authorization source of truth.
 - First-party auth is used for BattleFlow account flows.
-- Session, invitation, and credential tokens are hash-only at rest.
+- Session and credential tokens are hash-only at rest.
 - Route handlers deny by default and resolve authorization before protected reads or writes.
 - Super admins receive broad product access but no secret access.
 - Skill and workflow package assets stay in file or object storage; Postgres stores metadata, indexes, versions, manifests, and grants.
-- The first release intentionally excludes email verification, password reset, and invitation email delivery.
+- The first release intentionally excludes email verification and password reset.
 
 ## Security Summary
 
@@ -48,9 +48,9 @@ Security properties now include:
 
 - HttpOnly SameSite session cookies, with secure cookies in production.
 - Password hashing with Node `scrypt`.
-- Session and invitation token hashing.
+- Session token hashing.
 - Parameterized SQL for runtime Postgres access.
-- Audit events for membership, invitation, department, team, platform admin, and destructive permission changes.
+- Audit events for membership, department, team, platform admin, and destructive permission changes.
 - Centralized permission checks for organization, department, team, resource, and platform admin decisions.
 - Secret material remains server-side and is not exposed through APIs or UI state.
 
@@ -67,7 +67,7 @@ Use these durable guides for manual and environment-backed QA:
 Key manual flows to run against a non-production Postgres database:
 
 - register, log in, log out, and create the first organization;
-- accept an invitation and switch active organizations;
+- switch active organizations;
 - manage organization members, roles, statuses, departments, and cross-department teams;
 - verify inherited department permissions and team-scoped access;
 - verify unauthorized users receive 401 or 403 before protected content is returned;
@@ -119,7 +119,7 @@ Yes for product content. They still cannot access secrets, database URLs, servic
 ## Residual Risks
 
 - Database-backed successful browser/API happy-path QA was not completed locally because no `BATTLEFLOW_DATABASE_URL` was available in the worktree.
-- First release excludes email verification, password reset, and invitation email delivery.
+- First release excludes email verification and password reset.
 - Dev/tooling dependency advisories remain outside the production audit.
 - Production audit still reports one low-severity advisory.
 - Next `16.2.9` emits a non-blocking NFT trace warning for the Skill tuning route.
@@ -130,4 +130,4 @@ Yes for product content. They still cannot access secrets, database URLs, servic
 2. Execute `docs/AUTHORIZATION_QA.md` and `docs/ADMIN_MANAGEMENT_QA.md` end to end with real data.
 3. Schedule a dependency/tooling hardening pass for remaining dev advisories and the low production advisory.
 4. Review the Next NFT trace warning around `/api/skills/tune`.
-5. Decide when to add email verification, password reset, and invitation email delivery.
+5. Decide when to add email verification and password reset.

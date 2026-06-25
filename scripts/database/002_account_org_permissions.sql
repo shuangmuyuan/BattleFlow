@@ -86,14 +86,12 @@ CREATE TABLE IF NOT EXISTS organization_members (
   user_id varchar(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   role varchar(20) NOT NULL DEFAULT 'org_member',
   status varchar(20) NOT NULL DEFAULT 'active',
-  invited_by varchar(36) REFERENCES users(id),
   joined_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz
 );
 
 ALTER TABLE organization_members
   ADD COLUMN IF NOT EXISTS status varchar(20) DEFAULT 'active',
-  ADD COLUMN IF NOT EXISTS invited_by varchar(36),
   ADD COLUMN IF NOT EXISTS updated_at timestamptz;
 
 CREATE INDEX IF NOT EXISTS org_members_org_id_idx ON organization_members (organization_id);
@@ -170,24 +168,6 @@ CREATE TABLE IF NOT EXISTS platform_admins (
 
 CREATE INDEX IF NOT EXISTS platform_admins_enabled_idx ON platform_admins (enabled);
 
-CREATE TABLE IF NOT EXISTS organization_invitations (
-  id varchar(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  organization_id varchar(36) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  email varchar(255) NOT NULL,
-  role varchar(20) NOT NULL DEFAULT 'org_member',
-  department_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
-  team_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
-  token_hash varchar(128) NOT NULL UNIQUE,
-  expires_at timestamptz NOT NULL,
-  accepted_at timestamptz,
-  accepted_by varchar(36) REFERENCES users(id),
-  created_by varchar(36) REFERENCES users(id),
-  created_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS org_invitations_org_id_idx ON organization_invitations (organization_id);
-CREATE INDEX IF NOT EXISTS org_invitations_email_idx ON organization_invitations (email);
-CREATE INDEX IF NOT EXISTS org_invitations_expires_at_idx ON organization_invitations (expires_at);
 
 CREATE TABLE IF NOT EXISTS skills (
   id varchar(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -523,7 +503,6 @@ BEGIN
     GRANT SELECT, INSERT, UPDATE, DELETE ON teams TO battleflow;
     GRANT SELECT, INSERT, DELETE ON team_members TO battleflow;
     GRANT SELECT, INSERT, UPDATE ON platform_admins TO battleflow;
-    GRANT SELECT, INSERT, UPDATE ON organization_invitations TO battleflow;
     GRANT SELECT, INSERT, UPDATE, DELETE ON skills TO battleflow;
     GRANT SELECT, INSERT, UPDATE, DELETE ON skill_versions TO battleflow;
     GRANT SELECT, INSERT, UPDATE, DELETE ON skill_reviews TO battleflow;

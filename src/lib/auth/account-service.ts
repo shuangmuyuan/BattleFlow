@@ -1,6 +1,5 @@
 import type { PoolClient, QueryResultRow } from 'pg';
 import { getPostgresPool, hasPostgresDatabaseConfig } from '@/storage/database/postgres-client';
-import { writeAuditEvent } from '@/lib/organization-management';
 import { assertPasswordAllowed, hashPassword, verifyPassword } from './password';
 import { createSessionExpiration, createSessionToken, hashToken } from './session';
 import { AuthConfigError, type AuthUser } from './types';
@@ -45,15 +44,6 @@ interface CredentialRow extends QueryResultRow {
   locked_until: Date | string | null;
 }
 
-interface InvitationRow extends QueryResultRow {
-  id: string;
-  organization_id: string;
-  email: string;
-  role: string;
-  department_ids: unknown;
-  team_ids: unknown;
-}
-
 interface AuthSessionIssue {
   token: string;
   expiresAt: Date;
@@ -71,7 +61,6 @@ export interface RegisterAccountInput {
   displayName?: string | null;
   organizationName?: string | null;
   organizationSlug?: string | null;
-  invitationToken?: string | null;
 }
 
 export interface LoginAccountInput {
@@ -122,10 +111,6 @@ function mapUser(row: UserRow): AuthUser {
     avatarUrl: row.avatar_url,
     status: row.status,
   };
-}
-
-function readStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
 
 async function withTransaction<T>(callback: (client: PoolClient) => Promise<T>): Promise<T> {
@@ -223,96 +208,6 @@ async function createOwnedOrganizationWithClient(
   return organizationId;
 }
 
-async function fetchInvitationWithClient(client: PoolClient, invitationToken: string): Promise<InvitationRow> {
-  const result = await client.query<InvitationRow>(
-    `
-      SELECT id, organization_id, email, role, department_ids, team_ids
-      FROM organization_invitations
-      WHERE token_hash = $1
-        AND accepted_at IS NULL
-        AND expires_at > now()
-      LIMIT 1
-    `,
-    [hashToken(invitationToken)],
-  );
-
-  const invitation = result.rows[0];
-  if (!invitation) {
-    throw new AuthInputError('Invitation is invalid or expired');
-  }
-
-  return invitation;
-}
-
-async function acceptInvitationWithClient(
-  client: PoolClient,
-  userId: string,
-  email: string,
-  invitationToken: string,
-): Promise<string> {
-  const invitation = await fetchInvitationWithClient(client, invitationToken);
-  if (invitation.email.toLowerCase() !== email) {
-    throw new AuthInputError('Invitation does not match this account');
-  }
-
-  await client.query(
-    `
-      INSERT INTO organization_members (organization_id, user_id, role, status, joined_at, updated_at)
-      VALUES ($1, $2, $3, 'active', now(), now())
-      ON CONFLICT (organization_id, user_id)
-      DO UPDATE SET role = EXCLUDED.role, status = 'active', updated_at = now()
-    `,
-    [invitation.organization_id, userId, invitation.role],
-  );
-
-  for (const departmentId of readStringArray(invitation.department_ids)) {
-    await client.query(
-      `
-        INSERT INTO department_members (department_id, user_id, role, joined_at)
-        VALUES ($1, $2, 'department_member', now())
-        ON CONFLICT (department_id, user_id) DO NOTHING
-      `,
-      [departmentId, userId],
-    );
-  }
-
-  for (const teamId of readStringArray(invitation.team_ids)) {
-    await client.query(
-      `
-        INSERT INTO team_members (team_id, user_id, role, joined_at)
-        VALUES ($1, $2, 'team_member', now())
-        ON CONFLICT (team_id, user_id) DO NOTHING
-      `,
-      [teamId, userId],
-    );
-  }
-
-  await client.query(
-    `
-      UPDATE organization_invitations
-      SET accepted_at = now(), accepted_by = $1
-      WHERE id = $2
-    `,
-    [userId, invitation.id],
-  );
-
-  await writeAuditEvent({
-    organizationId: invitation.organization_id,
-    actorUserId: userId,
-    action: 'organization.invitation.accept',
-    targetType: 'organization_invitation',
-    targetId: invitation.id,
-    metadata: {
-      email,
-      role: invitation.role,
-      departmentIds: readStringArray(invitation.department_ids),
-      teamIds: readStringArray(invitation.team_ids),
-    },
-  }, client);
-
-  return invitation.organization_id;
-}
-
 async function fetchFirstMembershipOrganizationId(client: PoolClient, userId: string): Promise<string | null> {
   const result = await client.query<{ organization_id: string }>(
     `
@@ -336,10 +231,9 @@ export async function registerAccount(input: RegisterAccountInput): Promise<Auth
   assertPasswordAllowed(input.password);
   const displayName = normalizeOptionalText(input.displayName, 128) || displayNameFromEmail(email);
   const organizationName = normalizeOptionalText(input.organizationName, 128);
-  const invitationToken = normalizeOptionalText(input.invitationToken, 512);
 
-  if (!organizationName && !invitationToken) {
-    throw new AuthInputError('Organization name or invitation token is required');
+  if (!organizationName) {
+    throw new AuthInputError('Organization name is required');
   }
 
   return withTransaction(async (client) => {
@@ -370,9 +264,12 @@ export async function registerAccount(input: RegisterAccountInput): Promise<Auth
       [user.id, passwordHash],
     );
 
-    const activeOrganizationId = invitationToken
-      ? await acceptInvitationWithClient(client, user.id, email, invitationToken)
-      : await createOwnedOrganizationWithClient(client, user.id, organizationName ?? '', input.organizationSlug);
+    const activeOrganizationId = await createOwnedOrganizationWithClient(
+      client,
+      user.id,
+      organizationName,
+      input.organizationSlug,
+    );
 
     return {
       user: mapUser(user),
@@ -462,21 +359,6 @@ export async function createOrganizationForUser(input: {
 }): Promise<string> {
   return withTransaction((client) => (
     createOwnedOrganizationWithClient(client, input.userId, input.organizationName, input.organizationSlug)
-  ));
-}
-
-export async function acceptInvitationForUser(input: {
-  userId: string;
-  email: string;
-  invitationToken: string;
-}): Promise<string> {
-  return withTransaction((client) => (
-    acceptInvitationWithClient(
-      client,
-      input.userId,
-      normalizeEmail(input.email),
-      input.invitationToken,
-    )
   ));
 }
 

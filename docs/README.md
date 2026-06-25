@@ -16,7 +16,7 @@ This directory is the durable context hub for humans and AI agents working on Ba
 | [ACCOUNT_ORG_PERMISSION_RUNBOOK.md](ACCOUNT_ORG_PERMISSION_RUNBOOK.md) | You are bootstrapping, operating, migrating, or recovering the first-party account and permission system. |
 | [ACCOUNT_ORG_PERMISSION_EXECUTIVE_REPORT.md](ACCOUNT_ORG_PERMISSION_EXECUTIVE_REPORT.md) | You need the final delivery summary, validation record, risks, and next steps for the account and permission system. |
 | [AUTHORIZATION_QA.md](AUTHORIZATION_QA.md) | You are manually validating account, organization, resource authorization, prompt context, or super admin behavior. |
-| [ADMIN_MANAGEMENT_QA.md](ADMIN_MANAGEMENT_QA.md) | You are manually validating organization admin, department, team, invitation, resource permission, or platform admin UI flows. |
+| [ADMIN_MANAGEMENT_QA.md](ADMIN_MANAGEMENT_QA.md) | You are manually validating organization admin, department, team, resource permission, or platform admin UI flows. |
 | [PERFORMANCE.md](PERFORMANCE.md) | You are changing dashboard rendering, workflow state, chat streaming, imports, or build output. |
 | [DESIGN.md](DESIGN.md) | You are changing visual UI, tokens, components, layout, or user-facing styling. |
 | [AI_AGENT_ONBOARDING.md](AI_AGENT_ONBOARDING.md) | You are an agent starting a new session in this repo. |

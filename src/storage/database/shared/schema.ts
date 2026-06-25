@@ -82,7 +82,6 @@ export const organizationMembers = pgTable("organization_members", {
   user_id: varchar("user_id", { length: 36 }).notNull().references(() => users.id, { onDelete: "cascade" }),
   role: varchar("role", { length: 20 }).notNull().default("org_member"),
   status: varchar("status", { length: 20 }).notNull().default("active"),
-  invited_by: varchar("invited_by", { length: 36 }).references(() => users.id),
   joined_at: timestamp("joined_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }),
 }, (table) => [
@@ -161,24 +160,6 @@ export const platformAdmins = pgTable("platform_admins", {
   index("platform_admins_enabled_idx").on(table.enabled),
 ]);
 
-export const organizationInvitations = pgTable("organization_invitations", {
-  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()::text`),
-  organization_id: varchar("organization_id", { length: 36 }).notNull().references(() => organizations.id, { onDelete: "cascade" }),
-  email: varchar("email", { length: 255 }).notNull(),
-  role: varchar("role", { length: 20 }).notNull().default("org_member"),
-  department_ids: jsonb("department_ids").$type<string[]>().default(sql`'[]'::jsonb`).notNull(),
-  team_ids: jsonb("team_ids").$type<string[]>().default(sql`'[]'::jsonb`).notNull(),
-  token_hash: varchar("token_hash", { length: 128 }).notNull().unique(),
-  expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
-  accepted_at: timestamp("accepted_at", { withTimezone: true }),
-  accepted_by: varchar("accepted_by", { length: 36 }).references(() => users.id),
-  created_by: varchar("created_by", { length: 36 }).references(() => users.id),
-  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-}, (table) => [
-  index("org_invitations_org_id_idx").on(table.organization_id),
-  index("org_invitations_email_idx").on(table.email),
-  index("org_invitations_expires_at_idx").on(table.expires_at),
-]);
 
 // ============================================
 // Skills

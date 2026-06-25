@@ -38,7 +38,7 @@ BattleFlow currently has two storage styles:
    - `src/storage/database/supabase-client.ts` creates server clients with anon or service-role keys depending on available env.
    - `src/storage/database/postgres-client.ts` creates a server-only Postgres pool from `BATTLEFLOW_DATABASE_URL` for first-party auth, organization management, permission checks, knowledge-store operations, PRD documents, milestones, and resource metadata.
    - `scripts/database/001_knowledge_store.sql` bootstraps organizations, knowledge bases, knowledge documents, and lexical/trigram search indexes.
-   - `scripts/database/002_account_org_permissions.sql` bootstraps users, password credentials, sessions, organization members, departments, teams, invitations, platform admins, resource grants, audit events, and Skill/workflow metadata tables.
+   - `scripts/database/002_account_org_permissions.sql` bootstraps users, password credentials, sessions, organization members, departments, teams, platform admins, resource grants, audit events, and Skill/workflow metadata tables.
    - Browser auth uses first-party BattleFlow routes under `/api/auth/*`; injected Supabase browser config remains for legacy Supabase-backed surfaces until those are migrated.
 
 Agents must preserve the distinction between source files and runtime registry data.
@@ -58,7 +58,7 @@ All API handlers use App Router route handlers under `src/app/api`.
 - `/api/supabase-config` exposes browser-safe Supabase config.
 - `/api/prd` reads and writes PRD documents through direct Postgres after workflow authorization.
 - `/api/knowledge` handles knowledge data for the dashboard. Knowledge document indexing/search uses direct Postgres when `BATTLEFLOW_DATABASE_URL` is configured.
-- `/api/auth/*`, `/api/organizations/*`, and `/api/admin/super-admins` provide first-party account, organization, invitation, department, team, and platform admin management.
+- `/api/auth/*`, `/api/organizations/*`, and `/api/admin/super-admins` provide first-party account, organization, department, team, and platform admin management.
 
 Route handlers that access the file system or spawn CLI processes must keep `runtime = 'nodejs'`.
 

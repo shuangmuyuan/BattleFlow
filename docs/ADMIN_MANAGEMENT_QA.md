@@ -19,8 +19,7 @@ Use this checklist when validating `/dashboard/admin` after account, organizatio
 4. Search members by email, display name, and role.
 5. Change a member role or status and confirm the table refreshes after saving.
 6. Remove a member and confirm the destructive action dialog appears before the request is sent.
-7. Create an invitation with an organization role and optional initial department/team assignments.
-8. Confirm the generated invitation link uses `/login?invite=...`.
+7. Confirm member administration does not show obsolete link-generation controls.
 
 ## Departments
 

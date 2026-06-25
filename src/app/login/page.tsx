@@ -42,6 +42,28 @@ async function submitAuthRequest(endpoint: string, payload: Record<string, strin
   return data;
 }
 
+function authErrorMessage(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : fallback;
+  switch (message) {
+    case 'Authentication failed':
+      return '认证失败，请稍后重试';
+    case 'Email and password are required':
+      return '请输入邮箱和密码';
+    case 'Invalid email or password':
+      return '邮箱或密码不正确';
+    case 'Password must be at least 8 characters':
+      return '密码至少需要 8 个字符';
+    case 'Organization name is required':
+      return '请输入组织名称';
+    case 'Unable to create account':
+      return '无法创建账号，请确认邮箱是否已注册';
+    case 'Registration failed':
+      return '注册失败，请稍后重试';
+    default:
+      return message || fallback;
+  }
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const [mode, setMode] = useState<AuthMode>('login');
@@ -49,7 +71,6 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [organizationName, setOrganizationName] = useState('');
-  const [invitationToken, setInvitationToken] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -58,11 +79,6 @@ export default function LoginPage() {
 
   useEffect(() => {
     setNextPath(readInitialSearchParam('next') || '/dashboard');
-    const invite = readInitialSearchParam('invite');
-    if (invite) {
-      setInvitationToken(invite);
-      setMode('register');
-    }
   }, []);
 
   async function handleLogin(event: React.FormEvent<HTMLFormElement>) {
@@ -79,7 +95,7 @@ export default function LoginPage() {
       router.replace(data.redirectTo || '/dashboard');
       router.refresh();
     } catch (authError) {
-      setError(authError instanceof Error ? authError.message : 'Authentication failed');
+      setError(authErrorMessage(authError, '认证失败，请稍后重试'));
     } finally {
       setIsSubmitting(false);
     }
@@ -90,12 +106,12 @@ export default function LoginPage() {
     setError('');
 
     if (password !== confirmPassword) {
-      setError('Passwords do not match');
+      setError('两次输入的密码不一致');
       return;
     }
 
-    if (!organizationName.trim() && !invitationToken.trim()) {
-      setError('Organization name or invitation token is required');
+    if (!organizationName.trim()) {
+      setError('请输入组织名称');
       return;
     }
 
@@ -107,13 +123,12 @@ export default function LoginPage() {
         password,
         displayName,
         organizationName,
-        invitationToken,
         next: nextPath,
       });
       router.replace(data.redirectTo || '/dashboard');
       router.refresh();
     } catch (authError) {
-      setError(authError instanceof Error ? authError.message : 'Registration failed');
+      setError(authErrorMessage(authError, '注册失败，请稍后重试'));
     } finally {
       setIsSubmitting(false);
     }
@@ -131,15 +146,15 @@ export default function LoginPage() {
           </div>
           <div className="space-y-1">
             <h1 className="text-2xl font-semibold text-foreground">{APP_NAME}</h1>
-            <p className="text-sm text-muted-foreground">AI Native Product Planning Platform</p>
+            <p className="text-sm text-muted-foreground">AI 原生产品规划平台</p>
           </div>
         </div>
 
         <Card className="border-border bg-card">
           <CardHeader className="pb-4">
-            <CardTitle className="text-lg text-card-foreground">Workspace Access</CardTitle>
+            <CardTitle className="text-lg text-card-foreground">账号登录</CardTitle>
             <CardDescription className="text-muted-foreground">
-              Sign in or create a workspace account
+              登录或创建你的工作区账号
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -149,20 +164,20 @@ export default function LoginPage() {
                   value="login"
                   className="data-[state=active]:bg-brand data-[state=active]:text-brand-foreground"
                 >
-                  Sign In
+                  登录
                 </TabsTrigger>
                 <TabsTrigger
                   value="register"
                   className="data-[state=active]:bg-brand data-[state=active]:text-brand-foreground"
                 >
-                  Register
+                  注册
                 </TabsTrigger>
               </TabsList>
 
               <TabsContent value="login" className="mt-4">
                 <form onSubmit={handleLogin} className="space-y-4">
                   <div className="space-y-2">
-                    <Label htmlFor="login-email" className="text-card-foreground">Email</Label>
+                    <Label htmlFor="login-email" className="text-card-foreground">邮箱</Label>
                     <Input
                       id="login-email"
                       type="email"
@@ -175,13 +190,13 @@ export default function LoginPage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="login-password" className="text-card-foreground">Password</Label>
+                    <Label htmlFor="login-password" className="text-card-foreground">密码</Label>
                     <div className="relative">
                       <Input
                         id="login-password"
                         type={showPassword ? 'text' : 'password'}
                         autoComplete="current-password"
-                        placeholder="Enter password"
+                        placeholder="输入密码"
                         value={password}
                         onChange={(event) => setPassword(event.target.value)}
                         required
@@ -191,8 +206,8 @@ export default function LoginPage() {
                         type="button"
                         variant="ghost"
                         size="icon"
-                        aria-label={showPassword ? 'Hide password' : 'Show password'}
-                        title={showPassword ? 'Hide password' : 'Show password'}
+                        aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                        title={showPassword ? '隐藏密码' : '显示密码'}
                         onClick={() => setShowPassword((value) => !value)}
                         className="absolute right-1 top-1/2 size-8 -translate-y-1/2 text-muted-foreground hover:bg-transparent hover:text-foreground"
                       >
@@ -202,7 +217,7 @@ export default function LoginPage() {
                   </div>
                   {error && mode === 'login' && <p className="text-sm text-destructive">{error}</p>}
                   <Button type="submit" className="w-full bg-brand text-brand-foreground hover:bg-brand/90" disabled={isSubmitting}>
-                    {isSubmitting && mode === 'login' ? 'Signing in...' : 'Sign In'}
+                    {isSubmitting && mode === 'login' ? '登录中...' : '登录'}
                   </Button>
                 </form>
               </TabsContent>
@@ -210,7 +225,7 @@ export default function LoginPage() {
               <TabsContent value="register" className="mt-4">
                 <form onSubmit={handleRegister} className="space-y-4">
                   <div className="space-y-2">
-                    <Label htmlFor="register-email" className="text-card-foreground">Email</Label>
+                    <Label htmlFor="register-email" className="text-card-foreground">邮箱</Label>
                     <Input
                       id="register-email"
                       type="email"
@@ -223,47 +238,37 @@ export default function LoginPage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="display-name" className="text-card-foreground">Display Name</Label>
+                    <Label htmlFor="display-name" className="text-card-foreground">显示名称</Label>
                     <Input
                       id="display-name"
                       type="text"
                       autoComplete="name"
-                      placeholder="Your name"
+                      placeholder="你的名字"
                       value={displayName}
                       onChange={(event) => setDisplayName(event.target.value)}
                       className="border-border bg-secondary text-card-foreground placeholder:text-muted-foreground"
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="organization-name" className="text-card-foreground">Organization Name</Label>
+                    <Label htmlFor="organization-name" className="text-card-foreground">组织名称</Label>
                     <Input
                       id="organization-name"
                       type="text"
                       autoComplete="organization"
-                      placeholder="New organization"
+                      placeholder="新组织名称"
                       value={organizationName}
                       onChange={(event) => setOrganizationName(event.target.value)}
+                      required
                       className="border-border bg-secondary text-card-foreground placeholder:text-muted-foreground"
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="invitation-token" className="text-card-foreground">Invitation Token</Label>
-                    <Input
-                      id="invitation-token"
-                      type="text"
-                      placeholder="Paste invitation token"
-                      value={invitationToken}
-                      onChange={(event) => setInvitationToken(event.target.value)}
-                      className="border-border bg-secondary text-card-foreground placeholder:text-muted-foreground"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="register-password" className="text-card-foreground">Password</Label>
+                    <Label htmlFor="register-password" className="text-card-foreground">密码</Label>
                     <Input
                       id="register-password"
                       type="password"
                       autoComplete="new-password"
-                      placeholder="At least 8 characters"
+                      placeholder="至少 8 个字符"
                       value={password}
                       onChange={(event) => setPassword(event.target.value)}
                       required
@@ -271,12 +276,12 @@ export default function LoginPage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="confirm-password" className="text-card-foreground">Confirm Password</Label>
+                    <Label htmlFor="confirm-password" className="text-card-foreground">确认密码</Label>
                     <Input
                       id="confirm-password"
                       type="password"
                       autoComplete="new-password"
-                      placeholder="Repeat password"
+                      placeholder="再次输入密码"
                       value={confirmPassword}
                       onChange={(event) => setConfirmPassword(event.target.value)}
                       required
@@ -285,7 +290,7 @@ export default function LoginPage() {
                   </div>
                   {error && mode === 'register' && <p className="text-sm text-destructive">{error}</p>}
                   <Button type="submit" className="w-full bg-brand text-brand-foreground hover:bg-brand/90" disabled={isSubmitting}>
-                    {isSubmitting && mode === 'register' ? 'Creating account...' : 'Create Account'}
+                    {isSubmitting && mode === 'register' ? '创建中...' : '创建账号'}
                   </Button>
                 </form>
               </TabsContent>

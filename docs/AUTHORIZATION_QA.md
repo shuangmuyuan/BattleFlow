@@ -31,7 +31,6 @@ pnpm build
 ### Registration, Login, And Logout
 
 - Register a new account with a new organization name and verify the user lands in the dashboard under that organization.
-- Register with an invitation token and verify the user joins the invited organization, role, departments, and teams.
 - Log in with a valid password and verify `battleflow_session` and `battleflow_active_org` are HttpOnly cookies.
 - Log out and verify `/dashboard` redirects to `/login?next=/dashboard`.
 - Disable the user in Postgres and verify existing sessions no longer access `/api/auth/me` or dashboard APIs.
@@ -46,7 +45,7 @@ pnpm build
 
 ### Member, Department, And Team Management
 
-- As an organization admin, create an invitation, update a member role, disable a member, and verify audit events are written.
+- As an organization admin, update a member role, disable a member, and verify audit events are written.
 - As a department manager, manage a child department and verify sibling departments remain inaccessible.
 - Assign a user from Department A to a team attached to Department B and verify cross-department team access works.
 - As an ordinary member, attempt member, department, and team mutations and verify 403 responses.
@@ -70,7 +69,7 @@ pnpm build
 
 - Bootstrap a super admin with server-only env configuration.
 - Verify the super admin can see organization content across tenants through product APIs.
-- Verify product responses never include `BATTLEFLOW_DATABASE_URL`, password hashes, session token hashes, invitation tokens, or raw environment values.
+- Verify product responses never include `BATTLEFLOW_DATABASE_URL`, password hashes, session token hashes, or raw environment values.
 - Grant another super admin, revoke it, and verify audit events are written.
 - Attempt to revoke the last enabled super admin and verify the API denies it.
 

@@ -10,7 +10,7 @@ Product workspace UI for BattleFlow.
 - `workflows/page.tsx` manages workspaces, workflow creation, step execution, context files, snapshots, and output review.
 - `knowledge/page.tsx` manages knowledge-base surfaces.
 - `demos/page.tsx` provides demo generation surfaces.
-- `admin/page.tsx` manages organization members, departments, cross-department teams, invitation links, and gated admin readiness surfaces.
+- `admin/page.tsx` manages organization members, departments, cross-department teams, and gated admin readiness surfaces.
 
 ## Layout Rules
 

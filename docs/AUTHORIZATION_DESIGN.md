@@ -2,7 +2,7 @@
 
 ## Purpose
 
-BattleFlow needs first-party account management, organization administration, and resource authorization for product-planning teams. This document is the implementation source of truth for the account, organization, department, team, super admin, invitation, resource grant, and audit model.
+BattleFlow needs first-party account management, organization administration, and resource authorization for product-planning teams. This document is the implementation source of truth for the account, organization, department, team, super admin, resource grant, and audit model.
 
 The first release uses direct Postgres through `BATTLEFLOW_DATABASE_URL`. It does not use Supabase Auth as the new account-system core.
 
@@ -15,7 +15,7 @@ The first release uses direct Postgres through `BATTLEFLOW_DATABASE_URL`. It doe
 - Skills, workflows, knowledge bases, PRD documents, and future organization resources must support department and team authorization.
 - Super admins have maximum product permissions and can view all organization content.
 - Super admins must never be able to read database connection strings, service-role keys, environment variables, or other secret values through product UI or API responses.
-- The first release does not include email verification, password reset, or invitation email sending.
+- The first release does not include email verification or password reset.
 
 ## Storage Direction
 
@@ -29,7 +29,7 @@ The account and authorization system should extend this direction.
 
 Postgres should store:
 
-- users, password credentials, sessions, invitations, and audit events;
+- users, password credentials, sessions, and audit events;
 - organizations, organization memberships, departments, teams, and their memberships;
 - platform admins;
 - resource authorization grants;
@@ -95,7 +95,7 @@ Recommended fields:
 
 Session tokens are only stored as hashes. The browser receives the session through HttpOnly, Secure, SameSite cookies. Client-side JavaScript does not persist plaintext session tokens.
 
-The first release supports registration, login, logout, organization onboarding, and invitation-token acceptance. It does not support email verification, password reset, or invitation email sending.
+The first release supports registration, login, logout, and organization onboarding. It does not support email verification or password reset.
 
 ## Organization Model
 
@@ -115,7 +115,6 @@ Recommended fields:
 - `user_id`
 - `role`
 - `status`
-- `invited_by`
 - `joined_at`
 - `updated_at`
 
@@ -214,25 +213,6 @@ Recommended fields:
 Initial super admins are bootstrapped from server-only environment configuration, such as `BATTLEFLOW_SUPER_ADMIN_EMAILS` or `BATTLEFLOW_SUPER_ADMIN_USER_IDS`. After bootstrap, only an enabled super admin can grant or revoke super admin status.
 
 The system must prevent accidental revocation of the last enabled super admin. Every super admin grant, revoke, and disable operation writes an audit event.
-
-## Invitation Model
-
-`organization_invitations` supports invitation-token onboarding without email delivery in the first release.
-
-Recommended fields:
-
-- `id`
-- `organization_id`
-- `email`
-- `role`
-- optional `department_ids`
-- optional `team_ids`
-- `token_hash`
-- `expires_at`
-- `accepted_at`
-- `created_by`
-
-Invitation tokens are shown as links or copied manually by an administrator. Tokens are stored only as hashes and are never logged.
 
 ## Resource Authorization
 
@@ -342,20 +322,18 @@ Required events include:
 - super admin grant, revoke, and disable;
 - organization role changes;
 - department and team membership changes;
-- invitation creation and acceptance;
 - resource grant changes;
 - destructive organization or resource administration;
 - auth-sensitive session changes where useful.
 
-Audit metadata should be structured and bounded. Do not store secrets, raw session tokens, raw invitation tokens, full private documents, or database credentials in audit metadata.
+Audit metadata should be structured and bounded. Do not store secrets, raw session tokens, full private documents, or database credentials in audit metadata.
 
 ## First Release Exclusions
 
 The first release explicitly does not include:
 
 - email verification;
-- password reset;
-- invitation email sending.
+- password reset.
 
 The UI must not promise these features. If placeholders are needed, they should be disabled and clearly treated as future work.
 
