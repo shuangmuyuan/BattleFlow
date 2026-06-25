@@ -13,6 +13,8 @@
     "check:overlays": "node scripts/check-overlay-bounds.mjs",
     "check:responsive": "node scripts/check-responsive-layout.mjs",
     "db:knowledge:init": "node scripts/apply-postgres-migration.mjs scripts/database/001_knowledge_store.sql",
+    "db:accounts:init": "node scripts/apply-postgres-migration.mjs scripts/database/002_account_org_permissions.sql",
+    "db:postgres:init": "pnpm db:knowledge:init && pnpm db:accounts:init",
     "validate": "pnpm run --parallel '/^(ts-check|lint:build|check:overlays|check:responsive)$/'"
   },
   "dependencies": {
