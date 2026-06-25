@@ -16,7 +16,7 @@ Never commit:
 - generated runtime registry data under `data/`;
 - `.dwp/` plan state or `tmp/` scratch artifacts containing user data.
 
-`BATTLEFLOW_SUPABASE_SERVICE_ROLE_KEY` and `BATTLEFLOW_DATABASE_URL` are server-only. Do not expose them through client components or `/api/supabase-config`.
+`BATTLEFLOW_SUPABASE_SERVICE_ROLE_KEY`, `BATTLEFLOW_DATABASE_URL`, `BATTLEFLOW_SUPER_ADMIN_EMAILS`, and `BATTLEFLOW_SUPER_ADMIN_USER_IDS` are server-only. Do not expose them through client components or `/api/supabase-config`.
 
 ## Authentication and Authorization
 
@@ -25,6 +25,9 @@ Never commit:
 - Browser Supabase session state remains legacy until affected routes are migrated.
 - Server Supabase access may use the service role key when no user token is provided.
 - Protected API routes must use shared auth context and permission helpers before reading or mutating organization data.
+- Platform super admin bootstrap runs only on the server when a signed-in user matches `BATTLEFLOW_SUPER_ADMIN_EMAILS` or `BATTLEFLOW_SUPER_ADMIN_USER_IDS`. API responses and UI state must never return the configured bootstrap values.
+- Super admin product access can view and administer organization content, but it must still be blocked from secret material such as connection strings, service role keys, environment variables, and raw auth tokens.
+- Super admin grant and revoke changes must write audit events, and the last enabled super admin must not be revoked through normal management APIs.
 - Any change that broadens service-role usage requires a security review.
 
 ## Database Access

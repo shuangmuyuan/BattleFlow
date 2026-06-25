@@ -8,7 +8,7 @@ Shared application logic.
 - `workflow-registry.ts`: file-backed workspace/workflow store, steps, context files, reviewed outputs, snapshots, chat state, and Skill drafts.
 - `skill-tuning.ts`: Claude Code CLI powered generation of workflow-specific Skill drafts.
 - `knowledge-repository.ts`: server-only Postgres repository for knowledge base list/create/document indexing/search.
-- `auth/`: server-only first-party auth context, Postgres fetch helpers, and permission resolution.
+- `auth/`: server-only first-party auth context, Postgres fetch helpers, permission resolution, and super admin bootstrap/management helpers.
 - `organization-management.ts`: server-only Postgres repository for organization updates, members, departments, teams, invitations, and audit events.
 - `agent-adapters/types.ts`: provider/runtime event and status types.
 - `agent-adapters/claude-code-cli.ts`: Claude Code CLI availability checks and streaming adapter.
@@ -37,7 +37,9 @@ Shared application logic.
 
 - Resolve sessions from HttpOnly cookies and store only token hashes in Postgres.
 - Use `requireUser`, `requireOrganizationContext`, and `requirePermission` from `auth/server.ts` in protected route handlers.
+- Use `requirePlatformPermission` for platform-wide management routes that do not belong to a single organization.
 - Keep permission checks deny-by-default and route-independent.
+- Keep super admin bootstrap values server-only; expose only database-backed assignment records to the UI.
 - Never expose secret material through super admin routes; super admin product access does not include environment variables, connection strings, or raw tokens.
 - Keep organization management mutations transactional and write audit events for role, membership, invitation, and destructive changes.
 

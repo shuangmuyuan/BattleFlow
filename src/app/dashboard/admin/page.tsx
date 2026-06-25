@@ -139,6 +139,18 @@ interface Invitation {
   createdAt: string;
 }
 
+interface SuperAdminRecord {
+  userId: string;
+  email: string;
+  displayName: string | null;
+  role: 'super_admin';
+  enabled: boolean;
+  grantedBy: string | null;
+  grantedAt: string;
+  revokedBy: string | null;
+  revokedAt: string | null;
+}
+
 interface ApiError {
   error?: string;
 }
@@ -249,6 +261,7 @@ export default function AdminPage() {
   const [departments, setDepartments] = useState<Department[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
+  const [superAdmins, setSuperAdmins] = useState<SuperAdminRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
@@ -275,6 +288,7 @@ export default function AdminPage() {
   const [teamMemberTeamId, setTeamMemberTeamId] = useState('');
   const [teamMemberUserId, setTeamMemberUserId] = useState('');
   const [teamMemberRole, setTeamMemberRole] = useState<TeamRole>('team_member');
+  const [platformGrantEmail, setPlatformGrantEmail] = useState('');
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
 
   const activeOrganization = useMemo(() => {
@@ -304,6 +318,10 @@ export default function AdminPage() {
     ));
   }, [memberSearch, members]);
 
+  const enabledSuperAdminCount = useMemo(() => (
+    superAdmins.filter((admin) => admin.enabled).length
+  ), [superAdmins]);
+
   const loadAdminData = useCallback(async () => {
     setLoading(true);
     setErrorMessage('');
@@ -311,7 +329,12 @@ export default function AdminPage() {
       const auth = await jsonRequest<DashboardAuthState>('/api/auth/me');
       setAuthState(auth);
 
-      if (!auth.capabilities.manageOrganization) {
+      const platformAdminData = auth.capabilities.managePlatformAdmins
+        ? await jsonRequest<{ superAdmins: SuperAdminRecord[] }>('/api/admin/super-admins')
+        : { superAdmins: [] };
+      setSuperAdmins(platformAdminData.superAdmins);
+
+      if (!auth.capabilities.manageOrganization || !auth.activeOrganizationId) {
         setMembers([]);
         setDepartments([]);
         setTeams([]);
@@ -484,6 +507,32 @@ export default function AdminPage() {
       });
       setTeamMemberUserId('');
       setTeamMemberRole('team_member');
+    });
+  }
+
+  async function grantPlatformSuperAdmin() {
+    await runMutation(async () => {
+      await jsonRequest('/api/admin/super-admins', {
+        method: 'POST',
+        body: JSON.stringify({ email: platformGrantEmail }),
+      });
+      setPlatformGrantEmail('');
+    });
+  }
+
+  function revokePlatformSuperAdmin(admin: SuperAdminRecord) {
+    setConfirmAction({
+      title: 'Revoke super admin',
+      description: `${admin.email} will lose platform-wide product administration access. This does not disable the user account.`,
+      label: 'Revoke access',
+      onConfirm: async () => {
+        await runMutation(async () => {
+          await jsonRequest('/api/admin/super-admins', {
+            method: 'DELETE',
+            body: JSON.stringify({ userId: admin.userId }),
+          });
+        });
+      },
     });
   }
 
@@ -941,24 +990,88 @@ export default function AdminPage() {
             {authState?.capabilities.managePlatformAdmins && (
               <TabsContent value="platform" className="mt-4">
                 <Card className={appCardClassName}>
-                  <CardHeader>
+                  <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <CardTitle className="flex items-center gap-2 text-base">
                       <ShieldCheck className="size-4 text-success" />
                       Platform super admins
                     </CardTitle>
+                    <StatusBadge tone="success">{enabledSuperAdminCount} enabled</StatusBadge>
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <Alert>
-                      <AlertTriangle />
-                      <AlertTitle>Bootstrap and management API pending</AlertTitle>
+                      <ShieldCheck />
+                      <AlertTitle>Server-side platform access</AlertTitle>
                       <AlertDescription>
-                        This page is visible only to super admins. Grant and revoke controls stay disabled until the platform-admin bootstrap task lands.
+                        Super admin bootstrap is controlled by server-only configuration. This interface never displays configured bootstrap principals or secret values.
                       </AlertDescription>
                     </Alert>
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto]">
-                      <Input placeholder="user@example.com" disabled />
-                      <Button disabled>Grant super admin</Button>
+                      <Input
+                        value={platformGrantEmail}
+                        onChange={(event) => setPlatformGrantEmail(event.target.value)}
+                        placeholder="user@example.com"
+                        type="email"
+                      />
+                      <Button
+                        disabled={!platformGrantEmail.trim() || submitting}
+                        onClick={grantPlatformSuperAdmin}
+                      >
+                        Grant super admin
+                      </Button>
                     </div>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Account</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Granted</TableHead>
+                          <TableHead>Revoked</TableHead>
+                          <TableHead className="text-right">Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {superAdmins.map((admin) => {
+                          const isLastEnabledAdmin = admin.enabled && enabledSuperAdminCount <= 1;
+                          return (
+                            <TableRow key={admin.userId}>
+                              <TableCell className="min-w-56">
+                                <div className="min-w-0">
+                                  <p className="truncate font-medium">{admin.displayName || admin.email}</p>
+                                  <p className="truncate text-xs text-muted-foreground">{admin.email}</p>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <StatusBadge tone={admin.enabled ? 'success' : 'neutral'}>
+                                  {admin.enabled ? 'Enabled' : 'Revoked'}
+                                </StatusBadge>
+                              </TableCell>
+                              <TableCell>{displayDate(admin.grantedAt)}</TableCell>
+                              <TableCell>{displayDate(admin.revokedAt)}</TableCell>
+                              <TableCell className="text-right">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="gap-2 text-destructive hover:text-destructive"
+                                  disabled={!admin.enabled || isLastEnabledAdmin || submitting}
+                                  onClick={() => revokePlatformSuperAdmin(admin)}
+                                >
+                                  <Trash2 className="size-4" />
+                                  {isLastEnabledAdmin ? 'Last enabled admin' : 'Revoke'}
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                    {superAdmins.length === 0 && (
+                      <ProductEmptyState
+                        icon={<ShieldCheck />}
+                        title="No super admins listed"
+                        description="Sign in as a configured bootstrap user, then refresh this page."
+                        className="min-h-48"
+                      />
+                    )}
                   </CardContent>
                 </Card>
               </TabsContent>

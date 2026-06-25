@@ -62,6 +62,20 @@ BATTLEFLOW_DATABASE_URL=postgresql://... pnpm db:postgres:init
 
 `pnpm db:postgres:init` runs both scripts in order. Use it for a fresh direct-Postgres BattleFlow database.
 
+## Super Admin Bootstrap
+
+Configure at least one server-only bootstrap principal before the first platform-admin sign-in:
+
+```bash
+BATTLEFLOW_SUPER_ADMIN_EMAILS=owner@example.com pnpm dev
+# or
+BATTLEFLOW_SUPER_ADMIN_USER_IDS=user-id-1,user-id-2 pnpm dev
+```
+
+Values are comma-separated. They are read only on the server while resolving the current authenticated user. After the matching user signs in and calls `/api/auth/me` or opens the dashboard, BattleFlow upserts an enabled `platform_admins` row and writes an audit event without returning the configured values to the browser.
+
+Use `/dashboard/admin` as an enabled super admin to grant or revoke additional super admins. The management API prevents revoking the last enabled super admin.
+
 ## Useful Environment Variables
 
 | Variable | Purpose |
@@ -76,6 +90,8 @@ BATTLEFLOW_DATABASE_URL=postgresql://... pnpm db:postgres:init
 | `BATTLEFLOW_DEFAULT_ORGANIZATION_ID` | Default organization used by single-tenant knowledge operations. |
 | `BATTLEFLOW_DATABASE_POOL_MAX` | Optional Postgres pool size, defaults to `5`. |
 | `BATTLEFLOW_DATABASE_SSL` | Optional Postgres SSL mode. Use `true` or `require` to enable SSL. |
+| `BATTLEFLOW_SUPER_ADMIN_EMAILS` | Server-only comma-separated emails that bootstrap matching signed-in users as super admins. |
+| `BATTLEFLOW_SUPER_ADMIN_USER_IDS` | Server-only comma-separated user IDs that bootstrap matching signed-in users as super admins. |
 | `SKILL_REGISTRY_DIR` | File-backed Skill registry root. |
 | `SKILL_IMPORT_ROOTS` | Allowed server-path roots for Skill imports. |
 | `WORKFLOW_REGISTRY_DIR` | File-backed workflow registry root. |

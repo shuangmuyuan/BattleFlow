@@ -6,6 +6,7 @@ BattleFlow API route handlers.
 
 | Route | Responsibility |
 | --- | --- |
+| `admin/super-admins` | Lists, grants, and revokes platform super admins through server-only Postgres access and platform permissions. |
 | `agent-runtime` | Reports Claude Code CLI adapter availability and configured defaults. |
 | `auth/*` | First-party registration, login, logout, current user, onboarding, and invitation acceptance. |
 | `chat` | Streams product-planning chat responses with Skill, workflow, knowledge, and uploaded-file context. |
@@ -26,6 +27,7 @@ BattleFlow API route handlers.
 - Return `Cache-Control: no-store` for dynamic runtime data.
 - Narrow request bodies before reading fields.
 - Use `requireOrganizationContext` and `requirePermission` before reading organization-scoped data or mutating organization state.
+- Use `requireUser` and `requirePlatformPermission` before reading or mutating platform-wide state such as super admin assignments.
 - Keep user-provided content as data. Do not execute imported Skill Markdown or uploaded file content.
 - Preserve `runtime = 'nodejs'` for file-system, Supabase server, direct Postgres, and child-process routes.
 

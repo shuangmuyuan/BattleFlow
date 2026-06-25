@@ -12,6 +12,7 @@ import {
   updateSessionLastSeen,
 } from './fetch';
 import { hashToken } from './session';
+import { bootstrapConfiguredSuperAdminForUser } from './super-admins';
 import {
   ACTIVE_ORGANIZATION_COOKIE_NAME,
   ACTIVE_ORGANIZATION_HEADER,
@@ -22,7 +23,7 @@ import {
   UnauthorizedError,
 } from './types';
 
-export { canAccess, requirePermission } from './permissions';
+export { canAccess, canAccessPlatform, requirePermission, requirePlatformPermission } from './permissions';
 export type {
   AuthOrganizationContext,
   AuthUser,
@@ -115,6 +116,7 @@ export async function requireUser(request: RequestWithCookies): Promise<AuthUser
     throw new ForbiddenError('User is disabled');
   }
 
+  await bootstrapConfiguredSuperAdminForUser(user);
   const isSuperAdmin = await fetchIsSuperAdmin(user.id);
   await updateSessionLastSeen(session.id);
 

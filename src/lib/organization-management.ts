@@ -335,8 +335,8 @@ async function ensureDepartmentCanBeDeleted(
 }
 
 export async function writeAuditEvent(input: {
-  organizationId: string;
-  actorUserId: string;
+  organizationId?: string | null;
+  actorUserId?: string | null;
   action: string;
   targetType: string;
   targetId?: string | null;
@@ -349,8 +349,8 @@ export async function writeAuditEvent(input: {
       VALUES ($1, $2, $3, $4, $5, $6::jsonb, now())
     `,
     [
-      input.organizationId,
-      input.actorUserId,
+      input.organizationId ?? null,
+      input.actorUserId ?? null,
       input.action,
       input.targetType,
       input.targetId ?? null,

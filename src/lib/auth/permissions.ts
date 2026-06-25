@@ -1,4 +1,5 @@
 import {
+  type AuthUserContext,
   type AuthOrganizationContext,
   ForbiddenError,
   type PermissionTarget,
@@ -224,6 +225,30 @@ export function requirePermission(
   target: PermissionTarget = {},
 ): AuthOrganizationContext {
   if (!canAccess(context, action, target)) {
+    throw new ForbiddenError();
+  }
+
+  return context;
+}
+
+export function canAccessPlatform(
+  context: AuthUserContext,
+  action: string,
+  target: PermissionTarget = {},
+): boolean {
+  if (target.containsSecretMaterial) {
+    return false;
+  }
+
+  return context.isSuperAdmin && action.startsWith('platform.');
+}
+
+export function requirePlatformPermission(
+  context: AuthUserContext,
+  action: string,
+  target: PermissionTarget = {},
+): AuthUserContext {
+  if (!canAccessPlatform(context, action, target)) {
     throw new ForbiddenError();
   }
 

@@ -7,7 +7,8 @@ Use this checklist when validating `/dashboard/admin` after account, organizatio
 - Start the app with `pnpm dev`.
 - Use an account with `org_owner` or `org_admin` membership for organization-admin checks.
 - Use a regular `org_member` account for restricted-access checks.
-- Use a platform super admin account for the platform-admin tab after Task 8 enables bootstrap and management APIs.
+- Use a platform super admin account for the platform-admin tab.
+- Configure `BATTLEFLOW_SUPER_ADMIN_EMAILS` or `BATTLEFLOW_SUPER_ADMIN_USER_IDS` server-side before the first bootstrap sign-in.
 - Configure `BATTLEFLOW_DATABASE_URL` and run `pnpm db:postgres:init` before testing successful database-backed flows.
 
 ## Organization Admin
@@ -46,6 +47,16 @@ Use this checklist when validating `/dashboard/admin` after account, organizatio
 3. Navigate directly to `/dashboard/admin`.
 4. Confirm the page shows a restricted-access state and no management controls are operable.
 
+## Platform Super Admins
+
+1. Sign in as a user that matches the server-only bootstrap configuration.
+2. Open `/dashboard/admin` and confirm the Platform admins tab is visible.
+3. Confirm the tab lists enabled super admins but does not show bootstrap environment variable values.
+4. Grant super admin access to an existing user by email and confirm the list refreshes.
+5. Revoke a non-last enabled super admin and confirm the destructive action dialog appears before the request is sent.
+6. Confirm the last enabled super admin cannot be revoked from the UI.
+7. Confirm an organization admin that is not a super admin cannot see the Platform admins tab and receives 403 from `/api/admin/super-admins`.
+
 ## Responsive Checks
 
 1. Validate desktop width around 1440 px.
@@ -56,4 +67,3 @@ Use this checklist when validating `/dashboard/admin` after account, organizatio
 ## Pending Backend Surfaces
 
 - Resource permission grant editing remains disabled until Skill/workflow resource metadata and grant APIs are migrated in Task 9.
-- Platform super admin grant/revoke controls remain disabled until Task 8 adds bootstrap and management APIs.

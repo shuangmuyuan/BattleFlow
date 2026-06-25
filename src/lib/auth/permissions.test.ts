@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { canAccess, requirePermission } from './permissions';
-import { ForbiddenError, type AuthOrganizationContext } from './types';
+import { canAccess, canAccessPlatform, requirePermission, requirePlatformPermission } from './permissions';
+import { ForbiddenError, type AuthOrganizationContext, type AuthUserContext } from './types';
 
 function makeContext(overrides: Partial<AuthOrganizationContext> = {}): AuthOrganizationContext {
   const context: AuthOrganizationContext = {
@@ -46,6 +46,27 @@ function makeContext(overrides: Partial<AuthOrganizationContext> = {}): AuthOrga
 
   return {
     ...context,
+    ...overrides,
+  };
+}
+
+function makeUserContext(overrides: Partial<AuthUserContext> = {}): AuthUserContext {
+  return {
+    user: {
+      id: 'user-1',
+      email: 'user@example.com',
+      displayName: 'User One',
+      avatarUrl: null,
+      status: 'active',
+    },
+    session: {
+      id: 'session-1',
+      userId: 'user-1',
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      lastSeenAt: null,
+    },
+    isSuperAdmin: false,
     ...overrides,
   };
 }
@@ -218,6 +239,23 @@ describe('permission engine', () => {
       organizationId: 'org-1',
       resourceType: 'skill',
       resourceId: 'skill-1',
+    })).toThrow(ForbiddenError);
+  });
+
+  it('allows only super admins to use platform management actions', () => {
+    expect(canAccessPlatform(makeUserContext(), 'platform.super_admins.manage')).toBe(false);
+    expect(canAccessPlatform(makeUserContext({ isSuperAdmin: true }), 'platform.super_admins.manage')).toBe(true);
+    expect(canAccessPlatform(makeUserContext({ isSuperAdmin: true }), 'organization.members.manage')).toBe(false);
+  });
+
+  it('blocks platform management against secret material', () => {
+    const context = makeUserContext({ isSuperAdmin: true });
+
+    expect(canAccessPlatform(context, 'platform.super_admins.manage', {
+      containsSecretMaterial: true,
+    })).toBe(false);
+    expect(() => requirePlatformPermission(context, 'platform.super_admins.manage', {
+      containsSecretMaterial: true,
     })).toThrow(ForbiddenError);
   });
 
