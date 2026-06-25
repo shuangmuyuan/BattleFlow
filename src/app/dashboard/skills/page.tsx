@@ -435,6 +435,16 @@ export default function SkillsPage() {
     return reviewRequests.filter((request) => request.status === 'pending');
   }, [reviewRequests]);
 
+  const reviewRequestTargetSkill = useMemo(() => {
+    if (!reviewRequestSkill) return null;
+    const logicalId = getSkillLogicalId(reviewRequestSkill);
+    return skills.find((skill) => (
+      skill.scope === 'team'
+      && skill.status !== 'archived'
+      && getSkillLogicalId(skill) === logicalId
+    )) || null;
+  }, [reviewRequestSkill, skills]);
+
   const updateSkillInState = (skill: Skill) => {
     setSkills((prev) => {
       const exists = prev.some((item) => item.id === skill.id);
@@ -649,7 +659,7 @@ export default function SkillsPage() {
                   <ToggleGroupItem value="team">提交团队审核</ToggleGroupItem>
                 </ToggleGroup>
                 <FieldDescription>
-                  个人 Skill 导入后立即可用；团队 Skill 会进入待审核状态。
+                  个人 Skill 导入后立即可用；团队导入会进入审核队列，通过后才会新增或更新团队 Skill。
                 </FieldDescription>
               </Field>
 
@@ -784,7 +794,7 @@ export default function SkillsPage() {
                   <ToggleGroupItem value="major">不兼容变更</ToggleGroupItem>
                 </ToggleGroup>
                 <FieldDescription>
-                  新 Skill 首次导入保留包内版本；平台用 Skill ID 判断是否更新已有 Skill。Skill ID 优先读取包内 id 字段，未提供时由 name 自动生成；如果 ID 相同，平台会按“{versionBumpLabels[versionBump]}”递增版本号，{versionBumpDescriptions[versionBump]}
+                  新 Skill 首次发布保留包内版本；平台用 Skill ID 判断是否更新已有团队 Skill。若 ID 已存在，审核项会标记为更新，并在通过后按“{versionBumpLabels[versionBump]}”递增版本号，{versionBumpDescriptions[versionBump]}
                 </FieldDescription>
               </Field>
 
@@ -797,7 +807,7 @@ export default function SkillsPage() {
                   onChange={(event) => setImportChangelogNote(event.target.value)}
                 />
                 <FieldDescription>
-                  当本次导入更新已有 Skill 时，会写入版本历史；留空时平台自动生成一条升级说明。
+                  当本次审核更新已有 Skill 时，会写入版本历史；留空时平台自动生成一条升级说明。
                 </FieldDescription>
               </Field>
 
@@ -1064,32 +1074,6 @@ export default function SkillsPage() {
                               提交团队审核
                             </DropdownMenuItem>
                           )}
-                          {skill.status === 'pending_review' && (
-                            <>
-                              <DropdownMenuItem
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setReviewDecisionSkill(skill);
-                                  setReviewDecision('approved');
-                                  setReviewDecisionNote('');
-                                }}
-                              >
-                                <CheckCircle2 />
-                                审核通过
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setReviewDecisionSkill(skill);
-                                  setReviewDecision('rejected');
-                                  setReviewDecisionNote('');
-                                }}
-                              >
-                                <XCircle />
-                                审核拒绝
-                              </DropdownMenuItem>
-                            </>
-                          )}
                           {skill.scope !== 'official' && (
                             <>
                               <DropdownMenuSeparator />
@@ -1347,7 +1331,7 @@ export default function SkillsPage() {
               <DialogHeader>
                 <DialogTitle>提交团队审核</DialogTitle>
                 <DialogDescription>
-                  会创建一条团队待审核副本，个人 Skill 会继续保留在个人空间。
+                  会创建一条团队审核请求，个人 Skill 会继续保留在个人空间。
                 </DialogDescription>
               </DialogHeader>
               <FieldGroup>
@@ -1356,10 +1340,19 @@ export default function SkillsPage() {
                   <div className="rounded-md border bg-muted/20 p-3 text-sm">
                     <div className="font-medium">{getSkillDisplayName(reviewRequestSkill)}</div>
                     <div className="mt-1 text-xs text-muted-foreground">
-                      {reviewRequestSkill.id} · v{reviewRequestSkill.version}
+                      {getSkillLogicalId(reviewRequestSkill)} · v{reviewRequestSkill.version}
                     </div>
                   </div>
                 </Field>
+                {reviewRequestTargetSkill && (
+                  <Alert className="border-warning/30 bg-warning/10">
+                    <AlertCircle />
+                    <AlertTitle>当前 Skill 已存在</AlertTitle>
+                    <AlertDescription>
+                      提交后会进入更新审核，通过后将更新团队 Skill `{getSkillLogicalId(reviewRequestTargetSkill)}` 当前版本 v{reviewRequestTargetSkill.version}。
+                    </AlertDescription>
+                  </Alert>
+                )}
                 <Field>
                   <FieldLabel htmlFor="review-request-note">提交说明</FieldLabel>
                   <Textarea
