@@ -1,5 +1,6 @@
 import type { PoolClient, QueryResultRow } from 'pg';
 import { getPostgresPool, hasPostgresDatabaseConfig } from '@/storage/database/postgres-client';
+import { writeAuditEvent } from '@/lib/organization-management';
 import { assertPasswordAllowed, hashPassword, verifyPassword } from './password';
 import { createSessionExpiration, createSessionToken, hashToken } from './session';
 import { AuthConfigError, type AuthUser } from './types';
@@ -294,6 +295,20 @@ async function acceptInvitationWithClient(
     `,
     [userId, invitation.id],
   );
+
+  await writeAuditEvent({
+    organizationId: invitation.organization_id,
+    actorUserId: userId,
+    action: 'organization.invitation.accept',
+    targetType: 'organization_invitation',
+    targetId: invitation.id,
+    metadata: {
+      email,
+      role: invitation.role,
+      departmentIds: readStringArray(invitation.department_ids),
+      teamIds: readStringArray(invitation.team_ids),
+    },
+  }, client);
 
   return invitation.organization_id;
 }

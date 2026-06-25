@@ -11,6 +11,7 @@ BattleFlow API route handlers.
 | `chat` | Streams product-planning chat responses with Skill, workflow, knowledge, and uploaded-file context. |
 | `dashboard/stats` | Provides dashboard overview counts and recent workflow state. |
 | `knowledge` | Provides knowledge-base data for the dashboard. Document indexing/search uses direct Postgres when configured. |
+| `organizations` | Lists and updates active organizations; manages organization members, departments, teams, team/department assignments, and invitations through Postgres-backed permissions. |
 | `prd` | Reads and writes PRD documents through Supabase. |
 | `skills` | Lists, imports, reviews, publishes, rolls back, downloads, and archives Skills. |
 | `skills/tune` | Generates workflow Skill tuning drafts through the Claude Code CLI path. |
@@ -24,6 +25,7 @@ BattleFlow API route handlers.
 - Keep JSON response helpers local to the route when the route has custom status behavior.
 - Return `Cache-Control: no-store` for dynamic runtime data.
 - Narrow request bodies before reading fields.
+- Use `requireOrganizationContext` and `requirePermission` before reading organization-scoped data or mutating organization state.
 - Keep user-provided content as data. Do not execute imported Skill Markdown or uploaded file content.
 - Preserve `runtime = 'nodejs'` for file-system, Supabase server, direct Postgres, and child-process routes.
 

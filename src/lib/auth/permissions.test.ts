@@ -220,4 +220,88 @@ describe('permission engine', () => {
       resourceId: 'skill-1',
     })).toThrow(ForbiddenError);
   });
+
+  it('allows organization admins to manage members while denying ordinary members', () => {
+    const memberContext = makeContext();
+    const adminContext = makeContext({
+      organizationMembership: {
+        organizationId: 'org-1',
+        userId: 'user-1',
+        role: 'org_admin',
+        status: 'active',
+        organization: {
+          id: 'org-1',
+          name: 'Org One',
+          slug: 'org-one',
+          status: 'active',
+        },
+      },
+    });
+
+    expect(canAccess(memberContext, 'organization.members.manage', { organizationId: 'org-1' })).toBe(false);
+    expect(canAccess(adminContext, 'organization.members.manage', { organizationId: 'org-1' })).toBe(true);
+  });
+
+  it('keeps department managers inside inherited department scope', () => {
+    const context = makeContext({
+      departments: [
+        {
+          id: 'dept-parent',
+          organizationId: 'org-1',
+          parentDepartmentId: null,
+          name: 'Parent',
+          slug: 'parent',
+        },
+        {
+          id: 'dept-child',
+          organizationId: 'org-1',
+          parentDepartmentId: 'dept-parent',
+          name: 'Child',
+          slug: 'child',
+        },
+        {
+          id: 'dept-sibling',
+          organizationId: 'org-1',
+          parentDepartmentId: null,
+          name: 'Sibling',
+          slug: 'sibling',
+        },
+      ],
+      departmentMemberships: [{
+        departmentId: 'dept-parent',
+        userId: 'user-1',
+        role: 'department_manager',
+      }],
+    });
+
+    expect(canAccess(context, 'organization.departments.manage', {
+      organizationId: 'org-1',
+      departmentId: 'dept-child',
+    })).toBe(true);
+    expect(canAccess(context, 'organization.departments.manage', {
+      organizationId: 'org-1',
+      departmentId: 'dept-sibling',
+    })).toBe(false);
+  });
+
+  it('keeps team managers inside their own team scope', () => {
+    const context = makeContext({
+      teamMemberships: [{
+        teamId: 'team-1',
+        organizationId: 'org-1',
+        departmentId: null,
+        userId: 'user-1',
+        role: 'team_manager',
+      }],
+    });
+
+    expect(canAccess(context, 'organization.teams.manage', {
+      organizationId: 'org-1',
+      teamId: 'team-1',
+    })).toBe(true);
+    expect(canAccess(context, 'organization.teams.manage', {
+      organizationId: 'org-1',
+      teamId: 'team-2',
+    })).toBe(false);
+  });
 });

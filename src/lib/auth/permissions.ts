@@ -88,6 +88,9 @@ function departmentRoleAllowsAction(context: AuthOrganizationContext, action: st
     }
 
     if (DEPARTMENT_ADMIN_ROLES.has(membership.role)) {
+      if (action.startsWith('organization.departments.')) {
+        return true;
+      }
       return required !== 'publish' && required !== 'delete' && required !== 'admin';
     }
 
@@ -112,6 +115,9 @@ function teamRoleAllowsAction(context: AuthOrganizationContext, action: string, 
     }
 
     if (TEAM_ADMIN_ROLES.has(membership.role)) {
+      if (action.startsWith('organization.teams.')) {
+        return true;
+      }
       return required !== 'publish' && required !== 'delete' && required !== 'admin';
     }
 
