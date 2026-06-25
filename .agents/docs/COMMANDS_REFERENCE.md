@@ -15,3 +15,4 @@ Commands are thin delegators. Keep procedure logic in skills or agents.
 | `/agent-create` | `.agents/commands/agent-create.md` | `.agents/skills/deepworkplan/author/SKILL.md` |
 | `/battleflow-ui-change` | `.agents/commands/battleflow-ui-change.md` | `.agents/skills/battleflow-nextjs-ui/SKILL.md` |
 | `/battleflow-skill-registry-change` | `.agents/commands/battleflow-skill-registry-change.md` | `.agents/skills/battleflow-skill-registry/SKILL.md` |
+| `/battleflow-authz-change` | `.agents/commands/battleflow-authz-change.md` | `.agents/skills/battleflow-authz-postgres/SKILL.md` |
