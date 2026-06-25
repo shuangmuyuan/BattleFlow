@@ -167,6 +167,50 @@ function dedupeWorkflowSkillOptions(sourceSkills: Skill[]) {
   return sourceSkills.filter((skill) => preferredByFamily.get(getWorkflowSkillFamilyId(skill))?.id === skill.id);
 }
 
+type WorkflowStepStatus =
+  | 'pending'
+  | 'in_progress'
+  | 'self_checking'
+  | 'agent_validating'
+  | 'validation_failed'
+  | 'completed';
+type WorkflowStepValidationStatus = 'not_started' | 'running' | 'passed' | 'failed' | 'error';
+type WorkflowValidationOutcome = 'pass' | 'needs_revision' | 'blocked' | 'error';
+type WorkflowStepSnapshotType = 'auto' | 'manual' | 'validation_candidate';
+
+interface WorkflowStepValidationFinding {
+  id: string;
+  severity: 'blocking' | 'warning' | 'suggestion';
+  criterion: string;
+  issue: string;
+  recommendation: string;
+  evidence?: string;
+}
+
+interface WorkflowStepValidationPhase {
+  outcome: WorkflowValidationOutcome;
+  summary: string;
+  findings: WorkflowStepValidationFinding[];
+  rawText?: string;
+  generator?: 'claude-code-cli';
+}
+
+interface WorkflowStepValidationAttempt {
+  id: string;
+  workflowId: string;
+  stepId: string;
+  artifactHash: string;
+  artifactSnapshotId?: string;
+  skillId: string;
+  skillVersion?: string;
+  criteria: string[];
+  selfCheck?: WorkflowStepValidationPhase;
+  agentValidation?: WorkflowStepValidationPhase;
+  status: 'running' | 'passed' | 'failed' | 'error';
+  created_at: string;
+  updated_at: string;
+}
+
 interface WorkflowStep {
   id: string;
   name: string;
@@ -177,8 +221,14 @@ interface WorkflowStep {
   parallelGroupName?: string;
   isRemoved?: boolean;
   removedAt?: string;
-  status: 'pending' | 'in_progress' | 'completed';
+  status: WorkflowStepStatus;
   output: string | null;
+  candidateOutput?: string;
+  candidateArtifactHash?: string;
+  candidateSnapshotId?: string;
+  validationAttemptId?: string;
+  validationStatus?: WorkflowStepValidationStatus;
+  validationSummary?: string;
   created_at?: string;
   updated_at?: string;
   completed_at?: string;
@@ -236,6 +286,7 @@ interface Workflow {
   stepSnapshots?: WorkflowStepSnapshot[];
   stepChats?: Record<string, ChatMessage[]>;
   skillDrafts?: Record<string, WorkflowSkillDraft>;
+  validationAttempts?: WorkflowStepValidationAttempt[];
   created_at?: string;
   updated_at?: string;
 }
@@ -359,6 +410,35 @@ function deriveWorkflowStatusFromSteps(steps: WorkflowStep[]): Workflow['status'
   return 'in_progress';
 }
 
+function isValidationGateStatus(status: WorkflowStepStatus) {
+  return status === 'self_checking' || status === 'agent_validating' || status === 'validation_failed';
+}
+
+function isActiveWorkflowStepStatus(status: WorkflowStepStatus) {
+  return status === 'in_progress' || isValidationGateStatus(status);
+}
+
+function isStepConfirmableStatus(status: WorkflowStepStatus) {
+  return status === 'in_progress' || status === 'validation_failed';
+}
+
+function getStepStatusLabel(status: WorkflowStepStatus) {
+  switch (status) {
+    case 'completed':
+      return '已完成';
+    case 'self_checking':
+      return 'Skill 自检中';
+    case 'agent_validating':
+      return 'Agent 校验中';
+    case 'validation_failed':
+      return '验证未通过';
+    case 'in_progress':
+      return '进行中';
+    default:
+      return '未开始';
+  }
+}
+
 function normalizeWorkflowExecutionPlan(workflow: Workflow, updatedAt = new Date().toISOString()): Workflow {
   const visibleSteps = getVisibleWorkflowSteps(workflow);
   const removedSteps = workflow.steps.filter((step) => step.isRemoved);
@@ -389,7 +469,7 @@ function normalizeWorkflowExecutionPlan(workflow: Workflow, updatedAt = new Date
       const nextStatus = step.status === 'completed'
         ? 'completed'
         : isActiveIncompleteGroup
-          ? 'in_progress'
+          ? isValidationGateStatus(step.status) ? step.status : 'in_progress'
           : 'pending';
 
       const nextStep: WorkflowStep = {
@@ -567,6 +647,8 @@ interface WorkflowStepSnapshot {
   stepName: string;
   stepIndex: number;
   output: string;
+  snapshotType?: WorkflowStepSnapshotType;
+  label?: string;
   contextFiles: string[];
   reviewedMaterials: string[];
   reviewComment?: string;
@@ -720,6 +802,7 @@ export default function WorkflowsPage() {
   const [expandedAssistantDocumentIds, setExpandedAssistantDocumentIds] = useState<Record<string, boolean>>({});
   const [chatPersistenceByStepId, setChatPersistenceByStepId] = useState<Record<string, ChatPersistenceStatus>>({});
   const [isConfirmingStep, setIsConfirmingStep] = useState(false);
+  const [validationStageByStepId, setValidationStageByStepId] = useState<Record<string, 'self_checking' | 'agent_validating'>>({});
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [draggingWorkflowStepId, setDraggingWorkflowStepId] = useState<string | null>(null);
@@ -759,6 +842,7 @@ export default function WorkflowsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const reviewedOutputInputRef = useRef<HTMLInputElement>(null);
   const activeChatRequestRef = useRef<AbortController | null>(null);
+  const validationStageTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const workflowStepDragSourceRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -924,7 +1008,7 @@ export default function WorkflowsPage() {
       void persistWorkflow(normalizedWorkflow);
     }
     const visibleSteps = getVisibleSteps(normalizedWorkflow);
-    const firstInProgress = visibleSteps.findIndex((step) => step.status === 'in_progress');
+    const firstInProgress = visibleSteps.findIndex((step) => isActiveWorkflowStepStatus(step.status));
     const nextStepIndex = firstInProgress >= 0 ? firstInProgress : 0;
     switchActiveStep(normalizedWorkflow, nextStepIndex);
   };
@@ -1011,6 +1095,8 @@ export default function WorkflowsPage() {
   useEffect(() => () => {
     activeChatRequestRef.current?.abort();
     activeChatRequestRef.current = null;
+    Object.values(validationStageTimersRef.current).forEach((timer) => clearTimeout(timer));
+    validationStageTimersRef.current = {};
   }, []);
 
   // Auto-scroll chat
@@ -1018,10 +1104,39 @@ export default function WorkflowsPage() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
 
+  const clearValidationStage = useCallback((stepId: string) => {
+    const existingTimer = validationStageTimersRef.current[stepId];
+    if (existingTimer) clearTimeout(existingTimer);
+    delete validationStageTimersRef.current[stepId];
+    setValidationStageByStepId((prev) => {
+      const next = { ...prev };
+      delete next[stepId];
+      return next;
+    });
+  }, []);
+
+  const startValidationStage = useCallback((stepId: string) => {
+    clearValidationStage(stepId);
+    setValidationStageByStepId((prev) => ({ ...prev, [stepId]: 'self_checking' }));
+    validationStageTimersRef.current[stepId] = setTimeout(() => {
+      setValidationStageByStepId((prev) => (
+        prev[stepId] === 'self_checking'
+          ? { ...prev, [stepId]: 'agent_validating' }
+          : prev
+      ));
+      delete validationStageTimersRef.current[stepId];
+    }, 1200);
+  }, [clearValidationStage]);
+
   const getStepIcon = (status: string) => {
     switch (status) {
       case 'completed':
         return <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500" />;
+      case 'self_checking':
+      case 'agent_validating':
+        return <Loader2 className="h-5 w-5 shrink-0 animate-spin text-primary" />;
+      case 'validation_failed':
+        return <CircleStop className="h-5 w-5 shrink-0 text-destructive" />;
       case 'in_progress':
         return <Clock className="h-5 w-5 shrink-0 animate-pulse text-blue-500" />;
       default:
@@ -1737,32 +1852,6 @@ export default function WorkflowsPage() {
     void handleSendMessage();
   }, [handleSendMessage]);
 
-  const completeWorkflowStep = (workflow: Workflow, stepId: string, output: string) => {
-    const currentStep = workflow.steps.find((step) => step.id === stepId);
-    if (!currentStep) return { workflow, nextActiveStepIndex: activeStepIndex };
-
-    const completedAt = new Date().toISOString();
-    const nextSteps = workflow.steps.map((step) => (
-      step.id === stepId
-        ? { ...step, status: 'completed' as const, output, completed_at: completedAt, updated_at: completedAt }
-        : step
-    ));
-
-    const nextWorkflow = normalizeWorkflowExecutionPlan({
-      ...workflow,
-      steps: nextSteps,
-      updated_at: completedAt,
-    }, completedAt);
-    const visibleSteps = getVisibleSteps(nextWorkflow);
-    const nextInProgressIndex = visibleSteps.findIndex((step) => step.status === 'in_progress');
-    const completedStepIndex = visibleSteps.findIndex((step) => step.id === stepId);
-
-    return {
-      workflow: nextWorkflow,
-      nextActiveStepIndex: nextInProgressIndex >= 0 ? nextInProgressIndex : Math.max(completedStepIndex, 0),
-    };
-  };
-
   const handleConfirmStep = async () => {
     if (!activeWorkflow || activeStepIndex < 0 || isConfirmingStep) return;
 
@@ -1783,29 +1872,59 @@ export default function WorkflowsPage() {
 
     try {
       const stepOutputDocument = normalizeSkillOutputDocument(activeWorkflow, currentStep, lastAssistantMsg.content);
-      const { workflow: nextWorkflow, nextActiveStepIndex } = completeWorkflowStep(
-        activeWorkflow,
-        currentStep.id,
-        stepOutputDocument,
-      );
-      const snapshotCreatedAt = new Date().toISOString();
-      const stepSnapshot = buildStepSnapshot(activeWorkflow, currentStep, stepOutputDocument, snapshotCreatedAt);
-      const sanitizedStepChats = sanitizeChatMessages(chatMessages);
-      const workflowWithSnapshot = {
-        ...nextWorkflow,
-        stepChats: {
-          ...(nextWorkflow.stepChats || {}),
-          [currentStep.id]: sanitizedStepChats,
-        },
-        stepSnapshots: [stepSnapshot, ...(nextWorkflow.stepSnapshots || [])],
-        updated_at: snapshotCreatedAt,
-      };
-      const savedWorkflow = await persistWorkflow(workflowWithSnapshot);
-      if (!savedWorkflow) return;
+      setErrorMessage('');
+      startValidationStage(currentStep.id);
+      const response = await fetch('/api/workflows/validation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: currentStep.status === 'validation_failed' ? 'retry_step_validation' : 'start_step_validation',
+          workflowId: activeWorkflow.id,
+          stepId: currentStep.id,
+          candidateOutput: stepOutputDocument,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '验证运行失败');
 
+      const savedWorkflow = data.workflow as Workflow;
+      setWorkflows((prev) => prev.map((workflow) => (
+        workflow.id === savedWorkflow.id ? savedWorkflow : workflow
+      )));
+      setActiveWorkflow(savedWorkflow);
       setRightPanelTab('outputs');
-      switchActiveStep(savedWorkflow, nextActiveStepIndex);
+
+      if (data.passed) {
+        const visibleSteps = getVisibleSteps(savedWorkflow);
+        const nextInProgressIndex = visibleSteps.findIndex((step) => isActiveWorkflowStepStatus(step.status));
+        const completedStepIndex = visibleSteps.findIndex((step) => step.id === currentStep.id);
+        const nextActiveStepIndex = nextInProgressIndex >= 0
+          ? nextInProgressIndex
+          : Math.max(completedStepIndex, 0);
+        setErrorMessage('');
+        toast.success('验证通过', { description: '候选产物已沉淀为步骤输出。' });
+        switchActiveStep(savedWorkflow, nextActiveStepIndex);
+        return;
+      }
+
+      const currentStepIndex = Math.max(
+        getVisibleSteps(savedWorkflow).findIndex((step) => step.id === currentStep.id),
+        0,
+      );
+      setActiveStepIndex(currentStepIndex);
+      syncWorkflowSupportingState(savedWorkflow, currentStepIndex);
+      setChatMessages(getStepChatMessages(savedWorkflow, currentStep.id));
+      const failedStep = savedWorkflow.steps.find((step) => step.id === currentStep.id);
+      const summary = failedStep?.validationSummary || data.attempt?.agentValidation?.summary || data.attempt?.selfCheck?.summary || '';
+      const message = summary ? `验证未通过：${summary}` : '验证未通过，请修订后重新验证。';
+      setErrorMessage(message);
+      toast.error('验证未通过', { description: summary || '请根据验证反馈修订候选产物后重新验证。' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '验证运行失败';
+      setErrorMessage(message);
+      toast.error('验证运行失败', { description: message });
     } finally {
+      clearValidationStage(currentStep.id);
       setIsConfirmingStep(false);
     }
   };
@@ -2823,7 +2942,7 @@ export default function WorkflowsPage() {
                             {step.runMode === 'parallel' && <Badge variant="secondary" className="text-[10px]">并行</Badge>}
                           </div>
                           <p className="text-xs text-muted-foreground">
-                            {step.status === 'completed' ? '已完成' : step.status === 'in_progress' ? '进行中' : '未开始'}
+                            {getStepStatusLabel(step.status)}
                           </p>
                         </div>
                         <div className="flex items-center rounded-md border border-border/50 p-0.5">
@@ -3077,21 +3196,37 @@ export default function WorkflowsPage() {
   const currentStepChatPersistenceStatus = currentStep
     ? chatPersistenceByStepId[currentStep.id] || 'idle'
     : 'idle';
+  const currentStepValidationStage = currentStep ? validationStageByStepId[currentStep.id] : undefined;
+  const currentStepEffectiveStatus = currentStepValidationStage || currentStep?.status;
   const currentStepHasConfirmableOutput = Boolean(
-    currentStep?.status === 'in_progress' && hasConfirmableAssistantMessage(chatMessages),
+    currentStep && isStepConfirmableStatus(currentStep.status) && hasConfirmableAssistantMessage(chatMessages),
   );
   const currentStepCanConfirm = Boolean(
     currentStepHasConfirmableOutput
       && !isStreaming
       && !isConfirmingStep
+      && !currentStepValidationStage
       && currentStepChatPersistenceStatus === 'saved',
   );
   const currentStepConfirmHint = (() => {
     if (currentStepChatPersistenceStatus === 'saving') return '正在保存对话记录，保存完成后才能确认。';
     if (currentStepChatPersistenceStatus === 'failed') return '对话记录保存失败，请重新发送或刷新后再试。';
     if (isStreaming) return 'AI 正在生成，完成后会自动保存对话记录。';
-    if (isConfirmingStep) return '正在确认并保存步骤产物。';
-    return 'AI 已产出并保存，可确认沉淀为 Markdown 文档。';
+    if (currentStepValidationStage === 'self_checking') return 'Skill 正在基于验收标准自检候选产物。';
+    if (currentStepValidationStage === 'agent_validating') return '独立 Agent 正在校验候选产物。';
+    if (isConfirmingStep) return '正在运行验证门禁。';
+    if (currentStep?.status === 'validation_failed') {
+      return currentStep.validationSummary
+        ? `上次验证未通过：${currentStep.validationSummary}`
+        : '上次验证未通过，修订后可重新验证。';
+    }
+    return 'AI 已产出并保存，可运行验证门禁。';
+  })();
+  const currentStepConfirmLabel = (() => {
+    if (currentStepValidationStage === 'self_checking' || currentStepEffectiveStatus === 'self_checking') return 'Skill 自检中';
+    if (currentStepValidationStage === 'agent_validating' || currentStepEffectiveStatus === 'agent_validating') return 'Agent 校验中';
+    if (currentStep?.status === 'validation_failed') return '重新验证';
+    return '运行验证';
   })();
   const updateCurrentContextSelection = (
     nextSelection: Partial<WorkflowContextSelection>,
@@ -3481,6 +3616,7 @@ export default function WorkflowsPage() {
                       const idx = visibleWorkflowSteps.findIndex((item) => item.id === step.id);
                       const isActive = idx === activeStepIndex;
                       const isDisabled = step.status === 'pending' && !isActive;
+                      const displayedStepStatus = validationStageByStepId[step.id] || step.status;
                       const showNodeConfirm = step.id === currentStep?.id && currentStepHasConfirmableOutput;
 
                       return (
@@ -3505,7 +3641,7 @@ export default function WorkflowsPage() {
                             }}
                           >
                             <div className="flex min-w-0 items-center gap-2">
-                              {getStepIcon(step.status)}
+                              {getStepIcon(displayedStepStatus)}
                               <span className={`min-w-0 truncate text-sm font-medium ${isActive ? 'text-primary' : ''}`}>
                                 {step.name}
                               </span>
@@ -3516,6 +3652,11 @@ export default function WorkflowsPage() {
                             {step.output && (
                               <p className="text-xs text-emerald-500/80 mt-1 ml-7 line-clamp-2">
                                 已完成 — {compactMarkdownPreview(step.output, 50)}...
+                              </p>
+                            )}
+                            {step.status === 'validation_failed' && step.validationSummary && (
+                              <p className="mt-1 ml-7 line-clamp-2 text-xs text-destructive/80">
+                                验证未通过 — {compactMarkdownPreview(step.validationSummary, 64)}
                               </p>
                             )}
                             {showNodeConfirm && (
@@ -3534,12 +3675,14 @@ export default function WorkflowsPage() {
                                   void handleConfirmStep();
                                 }}
                               >
-                                {isConfirmingStep ? (
+                                {isConfirmingStep || currentStepValidationStage ? (
                                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : currentStep?.status === 'validation_failed' ? (
+                                  <RotateCcw className="h-3.5 w-3.5" />
                                 ) : (
-                                  <CheckCircle2 className="h-3.5 w-3.5" />
+                                  <ShieldCheck className="h-3.5 w-3.5" />
                                 )}
-                                {isConfirmingStep ? '确认中' : '确认完成'}
+                                {currentStepConfirmLabel}
                               </Button>
                             </div>
                           )}
@@ -3580,7 +3723,19 @@ export default function WorkflowsPage() {
                   status: 'in_progress',
                   steps: activeWorkflow.steps.map((step) => (
                     step.id === currentStep.id
-                      ? { ...step, status: 'in_progress', updated_at: updatedAt }
+                      ? {
+                        ...step,
+                        status: 'in_progress',
+                        output: null,
+                        candidateOutput: undefined,
+                        candidateArtifactHash: undefined,
+                        candidateSnapshotId: undefined,
+                        validationAttemptId: undefined,
+                        validationStatus: 'not_started',
+                        validationSummary: undefined,
+                        completed_at: undefined,
+                        updated_at: updatedAt,
+                      }
                       : step
                   )),
                   updated_at: updatedAt,
