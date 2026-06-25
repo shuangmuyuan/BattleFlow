@@ -28,7 +28,7 @@ pnpm validate
 ```
 
 `pnpm validate` runs the four validation gates in parallel.
-`pnpm test` runs the Vitest unit tests.
+`pnpm test` runs the focused TypeScript logic tests through `tsx --test`.
 
 ## Build
 

@@ -9,7 +9,7 @@
     "lint": "eslint",
     "lint:build": "eslint . --quiet",
     "start": "bash ./scripts/start.sh",
-    "test": "vitest run",
+    "test": "tsx --test src/lib/workflow-validation.test.ts",
     "ts-check": "tsc -p tsconfig.json",
     "check:overlays": "node scripts/check-overlay-bounds.mjs",
     "check:responsive": "node scripts/check-responsive-layout.mjs",
@@ -89,8 +89,7 @@
     "tailwindcss": "^4",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
-    "typescript": "^5",
-    "vitest": "^4.1.9"
+    "typescript": "^5"
   },
   "packageManager": "pnpm@9.0.0",
   "engines": {

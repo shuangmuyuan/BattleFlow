@@ -10,7 +10,7 @@ BattleFlow currently uses static and build validation rather than a full automat
 | Lint | `pnpm lint:build` | Runs quiet ESLint with Next.js and local restrictions. |
 | Overlay checks | `pnpm check:overlays` | Ensures Dialog, Sheet, Popover, Drawer, and AlertDialog wrappers remain viewport-bounded. |
 | Responsive checks | `pnpm check:responsive` | Ensures dashboard pages retain required responsive layout contracts. |
-| Unit tests | `pnpm test` | Runs Vitest tests for focused TypeScript logic. |
+| Unit tests | `pnpm test` | Runs focused TypeScript logic tests through `tsx --test`. |
 | Full validation | `pnpm validate` | Runs the four gates above in parallel. |
 | Production build | `pnpm build` | Installs deps, builds Next.js, and bundles `src/server.ts`. |
 
@@ -18,7 +18,7 @@ Run `pnpm validate` before finishing any source change. Run `pnpm build` for run
 
 ## Automated Tests
 
-Vitest is available for focused TypeScript utility and registry tests.
+`tsx --test` is available for focused TypeScript utility and registry tests without adding a separate test framework dependency.
 
 - `src/lib/workflow-validation.test.ts` covers validation criteria extraction, strict JSON parsing, aggregate gate status, and failed-candidate promotion prevention.
 
@@ -28,7 +28,7 @@ There is still no committed React Testing Library, Playwright, or Cypress setup.
 
 When adding broader automated tests, use:
 
-- Vitest for TypeScript utility and registry tests.
+- Node's built-in test runner through `tsx --test` for TypeScript utility and registry tests.
 - React Testing Library for component behavior that does not need a browser.
 - Playwright for dashboard flows, viewport checks, and chat/workflow interactions.
 - `*.test.ts` for server and registry tests.
@@ -39,7 +39,7 @@ Recommended browser/component scripts when those tools are introduced:
 
 ```json
 {
-  "test:watch": "vitest",
+  "test:watch": "tsx --watch --test",
   "test:e2e": "playwright test"
 }
 ```

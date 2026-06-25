@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import {
   aggregateValidationStatus,
   buildValidationCriteria,
@@ -56,7 +57,7 @@ describe('workflow validation core logic', () => {
       failureConditions: ['Draft failure condition'],
     });
 
-    expect(criteria).toEqual(expect.arrayContaining([
+    for (const expected of [
       'Direct acceptance criterion',
       'Meta acceptance criterion',
       '产物必须包含「结论」章节。',
@@ -69,7 +70,9 @@ describe('workflow validation core logic', () => {
       'Draft checklist criterion',
       '产物输出格式必须符合 Skill 声明的 markdown。',
       '产物必须覆盖 Skill 声明的输出章节：方案。',
-    ]));
+    ]) {
+      assert.ok(criteria.includes(expected), `Expected validation criteria to include: ${expected}`);
+    }
   });
 
   it('parses strict validation JSON and rejects prose-wrapped output', () => {
@@ -87,21 +90,21 @@ describe('workflow validation core logic', () => {
       ],
     }));
 
-    expect(parsed.ok).toBe(true);
+    assert.equal(parsed.ok, true);
     if (parsed.ok) {
-      expect(parsed.result.outcome).toBe('needs_revision');
-      expect(parsed.result.findings[0].severity).toBe('blocking');
+      assert.equal(parsed.result.outcome, 'needs_revision');
+      assert.equal(parsed.result.findings[0].severity, 'blocking');
     }
 
     const prose = parseValidationResult('Result:\n{"outcome":"pass","summary":"ok","findings":[]}');
-    expect(prose.ok).toBe(false);
+    assert.equal(prose.ok, false);
   });
 
   it('aggregates self-check and agent validation outcomes', () => {
-    expect(aggregateValidationStatus({ outcome: 'pass' }, { outcome: 'pass' })).toBe('passed');
-    expect(aggregateValidationStatus({ outcome: 'pass' }, { outcome: 'needs_revision' })).toBe('failed');
-    expect(aggregateValidationStatus({ outcome: 'error' }, { outcome: 'pass' })).toBe('error');
-    expect(aggregateValidationStatus({ outcome: 'pass' })).toBe('running');
+    assert.equal(aggregateValidationStatus({ outcome: 'pass' }, { outcome: 'pass' }), 'passed');
+    assert.equal(aggregateValidationStatus({ outcome: 'pass' }, { outcome: 'needs_revision' }), 'failed');
+    assert.equal(aggregateValidationStatus({ outcome: 'error' }, { outcome: 'pass' }), 'error');
+    assert.equal(aggregateValidationStatus({ outcome: 'pass' }), 'running');
   });
 
   it('keeps failed candidates out of completed workflow output promotion', () => {
@@ -126,10 +129,10 @@ describe('workflow validation core logic', () => {
 
     const result = resolveValidationGateResult(selfCheck, agentValidation);
 
-    expect(result.attemptStatus).toBe('failed');
-    expect(result.stepStatus).toBe('validation_failed');
-    expect(result.validationStatus).toBe('failed');
-    expect(result.shouldPromoteCandidate).toBe(false);
-    expect(result.summary).toBe('The candidate is missing evidence.');
+    assert.equal(result.attemptStatus, 'failed');
+    assert.equal(result.stepStatus, 'validation_failed');
+    assert.equal(result.validationStatus, 'failed');
+    assert.equal(result.shouldPromoteCandidate, false);
+    assert.equal(result.summary, 'The candidate is missing evidence.');
   });
 });

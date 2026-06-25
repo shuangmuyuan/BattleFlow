@@ -25,6 +25,8 @@ export const revalidate = 0;
 
 type ValidationAction = 'start_step_validation' | 'retry_step_validation' | 'clear_failed_validation';
 
+const MAX_CANDIDATE_OUTPUT_CHARS = 250_000;
+
 interface ValidationRequestBody {
   action: ValidationAction;
   workflowId: string;
@@ -80,6 +82,9 @@ function parseValidationRequest(value: unknown): ValidationRequestBody | string 
   const candidateOutput = getString(body.candidateOutput || body.candidate_output || body.output);
   if (action !== 'clear_failed_validation' && !candidateOutput) {
     return 'candidateOutput is required';
+  }
+  if (candidateOutput.length > MAX_CANDIDATE_OUTPUT_CHARS) {
+    return `candidateOutput must be ${MAX_CANDIDATE_OUTPUT_CHARS.toLocaleString('en-US')} characters or fewer`;
   }
 
   return {
