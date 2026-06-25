@@ -13,6 +13,7 @@ This directory is the durable context hub for humans and AI agents working on Ba
 | [TESTING_GUIDE.md](TESTING_GUIDE.md) | You are validating changes or adding the first automated test runner. |
 | [SECURITY.md](SECURITY.md) | You are touching auth, credentials, Skill imports, file-system writes, or external tools. |
 | [AUTHORIZATION_DESIGN.md](AUTHORIZATION_DESIGN.md) | You are changing accounts, sessions, organizations, departments, teams, resource grants, or admin permissions. |
+| [ADMIN_MANAGEMENT_QA.md](ADMIN_MANAGEMENT_QA.md) | You are manually validating organization admin, department, team, invitation, resource permission, or platform admin UI flows. |
 | [PERFORMANCE.md](PERFORMANCE.md) | You are changing dashboard rendering, workflow state, chat streaming, imports, or build output. |
 | [DESIGN.md](DESIGN.md) | You are changing visual UI, tokens, components, layout, or user-facing styling. |
 | [AI_AGENT_ONBOARDING.md](AI_AGENT_ONBOARDING.md) | You are an agent starting a new session in this repo. |
