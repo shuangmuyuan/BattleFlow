@@ -12,6 +12,7 @@
     "ts-check": "tsc -p tsconfig.json",
     "check:overlays": "node scripts/check-overlay-bounds.mjs",
     "check:responsive": "node scripts/check-responsive-layout.mjs",
+    "db:knowledge:init": "node scripts/apply-postgres-migration.mjs scripts/database/001_knowledge_store.sql",
     "validate": "pnpm run --parallel '/^(ts-check|lint:build|check:overlays|check:responsive)$/'"
   },
   "dependencies": {

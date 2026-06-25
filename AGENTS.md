@@ -35,8 +35,8 @@ BattleFlow is a Next.js product-planning workspace for AI-native teams. It turns
 │   │   ├── battleflow/         # Product-specific UI primitives and markdown rendering
 │   │   └── ui/                 # shadcn/ui components based on Radix UI
 │   ├── hooks/                  # Client hooks such as theme and mobile detection
-│   ├── lib/                    # File-backed registries, agent adapters, Supabase config helpers
-│   ├── storage/                # Supabase client and Drizzle schema definitions
+│   ├── lib/                    # File-backed registries, agent adapters, knowledge repository, Supabase config helpers
+│   ├── storage/                # Supabase/Postgres clients and Drizzle schema definitions
 │   └── server.ts               # Custom Node HTTP entrypoint for Next.js
 ├── skills/official/            # Seeded BattleFlow product-planning Skills
 ├── scripts/                    # Build, dev, start, and validation scripts
@@ -76,7 +76,7 @@ Use `pnpm` only. Do not use `npm` or `yarn` for dependency or script execution i
 - Overlay safety: business code must not import raw Radix overlay primitives directly. Use the bounded components in `src/components/ui/`.
 - Validation: run `pnpm validate` before considering a code or UI change complete. Run `pnpm build` for server/runtime, dependency, or deployment-impacting changes.
 - Testing gap: this repo currently has validation scripts but no unit/component/e2e test runner. Behavior changes should either add focused tests if a runner is introduced or document the manual verification performed.
-- Secrets: never commit `.env*`, Supabase service role keys, Anthropic/Claude credentials, imported private Skill packages, or runtime registry data under `data/`.
+- Secrets: never commit `.env*`, Supabase service role keys, direct Postgres connection strings/passwords, Anthropic/Claude credentials, imported private Skill packages, or runtime registry data under `data/`.
 - Runtime data: `data/skill-registry/`, `data/workflows/`, `.dwp/`, and `tmp/` are working state, not product source.
 - Repository boundaries: this is an individual repository. Do not treat it as an orchestrator hub and do not commit unrelated sibling repository changes from here.
 - Progress reporting: for multi-step work, keep the user informed after significant phases. Do not block engineering work on status reporting if the reporting channel is unavailable.

@@ -1,5 +1,11 @@
-import { pgTable, serial, varchar, timestamp, text, boolean, integer, jsonb, index } from "drizzle-orm/pg-core"
+import { pgTable, serial, varchar, timestamp, text, boolean, integer, jsonb, index, customType } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
+
+const tsvector = customType<{ data: string }>({
+  dataType() {
+    return "tsvector";
+  },
+});
 
 // ============================================
 // System Table (DO NOT DELETE)
@@ -195,6 +201,22 @@ export const knowledgeBases = pgTable("knowledge_bases", {
   updated_at: timestamp("updated_at", { withTimezone: true }),
 }, (table) => [
   index("knowledge_bases_org_id_idx").on(table.organization_id),
+]);
+
+export const knowledgeDocuments = pgTable("knowledge_documents", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  knowledge_base_id: varchar("knowledge_base_id", { length: 36 }).notNull().references(() => knowledgeBases.id, { onDelete: "cascade" }),
+  title: varchar("title", { length: 200 }),
+  source_type: varchar("source_type", { length: 32 }).notNull().default("manual"),
+  source: text("source"),
+  content: text("content").notNull(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default(sql`'{}'::jsonb`).notNull(),
+  search_vector: tsvector("search_vector"),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true }),
+}, (table) => [
+  index("knowledge_documents_kb_id_idx").on(table.knowledge_base_id),
+  index("knowledge_documents_created_at_idx").on(table.created_at),
 ]);
 
 // ============================================

@@ -23,7 +23,7 @@ This directory is the durable context hub for humans and AI agents working on Ba
 - [../src/app/api/README.md](../src/app/api/README.md) - API route-handler contracts.
 - [../src/app/dashboard/README.md](../src/app/dashboard/README.md) - Product workspace screens and responsive shell.
 - [../src/components/README.md](../src/components/README.md) - shadcn/ui and BattleFlow component conventions.
-- [../src/lib/README.md](../src/lib/README.md) - Registries, agent adapters, Skill tuning, and config helpers.
-- [../src/storage/README.md](../src/storage/README.md) - Supabase and Drizzle schema boundaries.
+- [../src/lib/README.md](../src/lib/README.md) - Registries, agent adapters, Skill tuning, knowledge repository, and config helpers.
+- [../src/storage/README.md](../src/storage/README.md) - Supabase, direct Postgres, and Drizzle schema boundaries.
 - [../scripts/README.md](../scripts/README.md) - Build, run, and validation scripts.
 - [../skills/official/README.md](../skills/official/README.md) - Seeded product-planning Skills.
