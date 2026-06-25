@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import type { NextRequest } from 'next/server';
 import {
   fetchDepartmentMemberships,
@@ -12,6 +11,7 @@ import {
   fetchTeamMemberships,
   updateSessionLastSeen,
 } from './fetch';
+import { hashToken } from './session';
 import {
   ACTIVE_ORGANIZATION_COOKIE_NAME,
   ACTIVE_ORGANIZATION_HEADER,
@@ -84,10 +84,6 @@ function readCookie(request: RequestWithCookies, name: string): string | null {
   return parseCookieHeader(request.headers.get('cookie')).get(name) ?? null;
 }
 
-function hashSessionToken(token: string): string {
-  return createHash('sha256').update(token).digest('hex');
-}
-
 function readRequestedOrganizationId(
   request: RequestWithCookies,
   options: OrganizationContextOptions,
@@ -103,7 +99,7 @@ export async function requireUser(request: RequestWithCookies): Promise<AuthUser
     throw new UnauthorizedError();
   }
 
-  const sessionUser = await fetchSessionUserByTokenHash(hashSessionToken(sessionToken));
+  const sessionUser = await fetchSessionUserByTokenHash(hashToken(sessionToken));
   if (!sessionUser) {
     throw new UnauthorizedError();
   }

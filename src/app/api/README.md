@@ -7,6 +7,7 @@ BattleFlow API route handlers.
 | Route | Responsibility |
 | --- | --- |
 | `agent-runtime` | Reports Claude Code CLI adapter availability and configured defaults. |
+| `auth/*` | First-party registration, login, logout, current user, onboarding, and invitation acceptance. |
 | `chat` | Streams product-planning chat responses with Skill, workflow, knowledge, and uploaded-file context. |
 | `dashboard/stats` | Provides dashboard overview counts and recent workflow state. |
 | `knowledge` | Provides knowledge-base data for the dashboard. Document indexing/search uses direct Postgres when configured. |
