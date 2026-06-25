@@ -17,6 +17,7 @@ BattleFlow API route handlers.
 | `workflows` | Manages file-backed workspaces and workflows. |
 | `workflows/milestones` | Manages workflow milestone records. |
 | `workflows/snapshots` | Manages step and workflow snapshots. |
+| `workflows/validation` | Runs workflow step self-check and independent Agent validation gates. |
 
 ## Patterns
 
