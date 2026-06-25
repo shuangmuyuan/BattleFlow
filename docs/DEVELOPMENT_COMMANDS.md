@@ -84,6 +84,17 @@ Values are comma-separated. They are read only on the server while resolving the
 
 Use `/dashboard/admin` as an enabled super admin to grant or revoke additional super admins. The management API prevents revoking the last enabled super admin.
 
+## Demo Handoff Integration
+
+Configure the external Frieren Demo platform only on the server:
+
+```bash
+FRIEREN_DEMO_BASE_URL=http://ui.sangfor.com.cn/
+FRIEREN_DEMO_HMAC_SECRET=replace-with-shared-secret
+```
+
+The local route is `POST /api/demos/handoffs` with `{ workflowId, stepId }`. It signs and forwards the completed step output to `POST {FRIEREN_DEMO_BASE_URL}/api/integrations/workflows/handoff`, then stores the returned Demo link on the workflow node. Internal integration environments may use HTTP during joint testing; production should use HTTPS.
+
 ## Useful Environment Variables
 
 | Variable | Purpose |
@@ -102,6 +113,8 @@ Use `/dashboard/admin` as an enabled super admin to grant or revoke additional s
 | `BATTLEFLOW_SUPER_ADMIN_USER_IDS` | Server-only comma-separated user IDs that bootstrap matching signed-in users as super admins. |
 | `BATTLEFLOW_MIGRATION_ORGANIZATION_ID` | Organization ID used by `pnpm db:resources:migrate` when backfilling non-official Skill/workflow metadata. |
 | `BATTLEFLOW_MIGRATION_USER_ID` | User ID used by `pnpm db:resources:migrate` as the owner/admin grant for backfilled runtime resources. |
+| `FRIEREN_DEMO_BASE_URL` | Server-only external Demo platform base URL. Use a trailing slash or no trailing slash; the client normalizes paths. |
+| `FRIEREN_DEMO_HMAC_SECRET` | Server-only shared HMAC secret for Frieren Demo integration requests. Never expose to the browser or commit real values. |
 | `SKILL_REGISTRY_DIR` | File-backed Skill registry root. |
 | `SKILL_IMPORT_ROOTS` | Allowed server-path roots for Skill imports. |
 | `WORKFLOW_REGISTRY_DIR` | File-backed workflow registry root. |

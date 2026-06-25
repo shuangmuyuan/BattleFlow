@@ -11,6 +11,7 @@ BattleFlow API route handlers.
 | `auth/*` | First-party registration, login, logout, current user, and onboarding. |
 | `chat` | Streams product-planning chat responses with authorized Skill, workflow, knowledge, and uploaded-file context. |
 | `dashboard/stats` | Provides dashboard overview counts and recent workflow state. |
+| `demos/handoffs` | Creates and reads workflow-node Demo handoff links through the external Frieren Demo integration after workflow authorization. |
 | `knowledge` | Provides knowledge-base data for the dashboard. Document indexing/search uses direct Postgres when configured. |
 | `organizations` | Lists and updates active organizations; manages organization members, departments, teams, and team/department assignments through Postgres-backed permissions. |
 | `prd` | Reads and writes PRD documents through direct Postgres after workflow authorization. |
@@ -33,6 +34,16 @@ BattleFlow API route handlers.
 `GET /api/workflows/validation?workflow_id=...&step_id=...` returns validation attempts for a workflow or step.
 
 Only a passed final attempt promotes candidate output to `step.output`. Failed or error attempts keep the candidate in candidate fields and leave downstream steps blocked.
+
+## Demo Handoff Route
+
+`POST /api/demos/handoffs` accepts `{ workflowId, stepId }`, requires organization context plus `workflow.update`, and rejects missing workflows, missing or removed steps, non-completed steps, and empty outputs. It sends only durable `step.output` to the external Demo platform and never uses `candidateOutput`.
+
+Successful responses return `{ handoff, workflow }`. If a step already has a handoff with a `studioUrl`, the route returns the saved record without calling the external service again.
+
+`GET /api/demos/handoffs?workflowId=...&stepId=...` requires `workflow.read` and returns saved handoff records for the workflow or selected step.
+
+The route depends on server-only `FRIEREN_DEMO_BASE_URL` and `FRIEREN_DEMO_HMAC_SECRET`; neither value may be returned to the browser.
 
 ## Patterns
 

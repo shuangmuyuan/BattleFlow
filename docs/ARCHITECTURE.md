@@ -54,6 +54,7 @@ All API handlers use App Router route handlers under `src/app/api`.
 - `/api/workflows/snapshots` manages workflow step snapshots after workflow authorization.
 - `/api/workflows/milestones` manages milestones in direct Postgres after workflow authorization.
 - `/api/chat` streams product-planning chat responses with knowledge and workflow context.
+- `/api/demos/handoffs` creates and reads node-level Demo handoff records after workflow authorization. `POST` requires `workflow.update`, sends the current completed step's durable `step.output` to the external Demo platform, and stores the returned link in `workflow.demoHandoffs`; `GET` requires `workflow.read`.
 - `/api/agent-runtime` reports Claude Code CLI adapter availability.
 - `/api/supabase-config` exposes browser-safe Supabase config.
 - `/api/prd` reads and writes PRD documents through direct Postgres after workflow authorization.
@@ -99,6 +100,24 @@ The workflow step status values are:
 - `completed`: candidate passed validation and became durable step output.
 
 Each workflow stores `validationAttempts` with criteria, candidate hash, candidate snapshot ID, self-check result, Agent validation result, final attempt status, and timestamps. The dashboard's `门禁` tab reads these records to show criteria, findings, blockers, candidate download, and retry actions.
+
+## Demo Handoff Integration
+
+Completed workflow nodes can be handed off to the external Frieren Demo platform from the workflow execution UI. The integration is intentionally node-scoped:
+
+- `externalWorkflowId` is the BattleFlow workflow step ID.
+- `externalProjectKey` is the BattleFlow workflow ID.
+- `documents[0]` is the current step's Markdown output from `step.output`.
+- `title` is derived from the first Markdown H1 in the output, then the step name, then a workflow/step fallback.
+
+The server-only client lives in `src/lib/integrations/frieren-demo.ts`. It signs the raw JSON body with HMAC-SHA256, calls `POST /api/integrations/workflows/handoff`, handles non-JSON failures safely, and enforces the documented document count and byte-size limits before making the request.
+
+Required server-side environment variables:
+
+- `FRIEREN_DEMO_BASE_URL`
+- `FRIEREN_DEMO_HMAC_SECRET`
+
+`studioUrl` values returned as relative paths are resolved against `FRIEREN_DEMO_BASE_URL` before storage so the dashboard can render an openable link without exposing the shared secret. Current internal integration environments may use HTTP, but production deployments should use HTTPS because user Markdown requirements are sent to the external Demo platform.
 
 ## UI Architecture
 

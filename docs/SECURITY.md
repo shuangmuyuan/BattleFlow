@@ -11,12 +11,13 @@ Never commit:
 - `.env`, `.env.local`, or environment-specific `.env.*.local` files;
 - Supabase service role keys;
 - direct Postgres connection strings and database passwords;
+- Frieren Demo integration shared secrets;
 - Anthropic, Claude, or Dailybot tokens;
 - private Skill packages;
 - generated runtime registry data under `data/`;
 - `.dwp/` plan state or `tmp/` scratch artifacts containing user data.
 
-`BATTLEFLOW_SUPABASE_SERVICE_ROLE_KEY`, `BATTLEFLOW_DATABASE_URL`, `BATTLEFLOW_SUPER_ADMIN_EMAILS`, and `BATTLEFLOW_SUPER_ADMIN_USER_IDS` are server-only. Do not expose them through client components or `/api/supabase-config`.
+`BATTLEFLOW_SUPABASE_SERVICE_ROLE_KEY`, `BATTLEFLOW_DATABASE_URL`, `BATTLEFLOW_SUPER_ADMIN_EMAILS`, `BATTLEFLOW_SUPER_ADMIN_USER_IDS`, and `FRIEREN_DEMO_HMAC_SECRET` are server-only. Do not expose them through client components or `/api/supabase-config`.
 
 ## Authentication and Authorization
 
@@ -31,6 +32,7 @@ Never commit:
 - Super admin product access can view and administer organization content, but it must still be blocked from secret material such as connection strings, service role keys, environment variables, and raw auth tokens.
 - Super admin grant and revoke changes must write audit events, and the last enabled super admin must not be revoked through normal management APIs.
 - Skill, workflow, knowledge-base, PRD, snapshot, milestone, and chat routes must resolve first-party auth and Postgres-backed resource permissions before returning file-backed package assets, workflow outputs, or prompt context.
+- Demo handoff routes must resolve organization context and workflow resource permissions before reading workflow outputs or writing returned Demo links.
 - Any change that broadens service-role usage requires a security review.
 - Operational bootstrap, backfill, and recovery procedures live in `docs/ACCOUNT_ORG_PERMISSION_RUNBOOK.md`.
 
@@ -71,6 +73,19 @@ Workflow validation uses the same constrained Claude Code CLI boundary. Skill se
 
 Validation failures and runtime errors are stored as bounded summaries and findings. Do not log or surface full uploaded private documents, full candidate artifacts, credentials, raw service-role keys, or raw CLI prompts in validation error messages.
 
+## External Demo Handoff
+
+`POST /api/demos/handoffs` sends the selected workflow step's Markdown `step.output` to the external Frieren Demo platform. Treat that outbound document as user-provided product-planning content leaving BattleFlow's trust boundary.
+
+Security boundaries:
+
+- Require `workflow.update` for creation and `workflow.read` for lookup before accessing workflow data.
+- Send only durable `step.output`; never send `candidateOutput` or failed validation artifacts.
+- Keep `FRIEREN_DEMO_BASE_URL` and `FRIEREN_DEMO_HMAC_SECRET` server-only.
+- Store only returned handoff metadata and openable `studioUrl` values in `workflow.demoHandoffs`.
+- Log IDs, status, short error messages, and error codes only. Do not log full Markdown content or HMAC material.
+- Internal integration environments may temporarily use HTTP. Production should use HTTPS because HTTP exposes user Markdown and integration metadata to network interception.
+
 ## File System Writes
 
 The registries write to local disk. Keep writes scoped to configured registry roots and use temp-file writes plus rename for important state. Never allow arbitrary user-provided paths to escape configured import roots.
@@ -86,6 +101,8 @@ Log enough context for operational debugging, but never log:
 - user session tokens.
 
 For workflow validation, prefer attempt IDs, workflow IDs, step IDs, phase names, and short summaries over raw prompt or candidate content.
+
+For Demo handoff failures, prefer workflow IDs, step IDs, handoff IDs, HTTP status, and integration error codes over raw Markdown document content.
 
 ## User-Provided Content Rendering
 

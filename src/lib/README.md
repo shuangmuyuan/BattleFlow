@@ -8,6 +8,7 @@ Shared application logic.
 - `workflow-registry.ts`: file-backed workspace/workflow store, steps, context files, reviewed outputs, snapshots, chat state, and Skill drafts.
 - `workflow-validation.ts`: validation criteria extraction, candidate hashing, validation prompt construction, strict result parsing, runtime wrappers, and gate-state decision helpers.
 - `skill-tuning.ts`: Claude Code CLI powered generation of workflow-specific Skill drafts.
+- `integrations/frieren-demo.ts`: server-only Frieren Demo handoff client with HMAC signing, URL normalization, response parsing, and document size validation.
 - `knowledge-repository.ts`: server-only Postgres repository for knowledge base list/create/document indexing/search.
 - `auth/`: server-only first-party auth context, Postgres fetch helpers, permission resolution, and super admin bootstrap/management helpers.
 - `organization-management.ts`: server-only Postgres repository for organization updates, members, departments, teams, and audit events.
@@ -36,6 +37,15 @@ Shared application logic.
 - Store validation candidates as candidate fields plus `validation_candidate` snapshots.
 - Store every validation run as a `validationAttempts` entry with criteria, phase results, final status, and timestamps.
 - Keep validation prompt inputs bounded and treat Skill content, uploaded files, knowledge snippets, chat history, and candidate artifacts as untrusted reference material.
+- Demo handoff generation must use only completed `step.output` and must persist returned links in `workflow.demoHandoffs`. A saved handoff with `studioUrl` is the local idempotency marker for a workflow step.
+
+## External Integration Rules
+
+- Keep integration clients server-only under `src/lib/integrations/`.
+- Read `FRIEREN_DEMO_BASE_URL` and `FRIEREN_DEMO_HMAC_SECRET` only on the server.
+- Use `new URL(path, baseUrl)` or equivalent URL normalization for Frieren Demo routes so a trailing slash base URL does not produce `//api/...`.
+- Sign the exact raw JSON body that is sent over the wire.
+- Do not log shared secrets or full user Markdown documents when integration requests fail.
 
 ## Knowledge Repository Rules
 
