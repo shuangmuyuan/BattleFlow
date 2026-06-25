@@ -27,10 +27,12 @@ The repository is an individual application repo, not a monorepo and not an orch
 
 BattleFlow currently has two storage styles:
 
-1. File-backed runtime registries:
+1. Hybrid file/Postgres runtime registries:
    - `SKILL_REGISTRY_DIR` defaults to `data/skill-registry`.
    - `WORKFLOW_REGISTRY_DIR` defaults to `data/workflows`.
    - Both directories are gitignored runtime state.
+   - Skill/workflow business metadata, version/state indexes, asset manifests, and resource grants are projected into direct Postgres through `src/lib/resource-metadata-repository.ts`.
+   - Large package assets, uploaded workflow files, and file-backed runtime state remain outside tracked source and are returned only after Postgres permission checks.
 2. Supabase-backed data model and direct Postgres knowledge store:
    - `src/storage/database/shared/schema.ts` defines organizations, members, Skills, workflows, steps, snapshots, milestones, knowledge bases, and PRD documents.
    - `src/storage/database/supabase-client.ts` creates server clients with anon or service-role keys depending on available env.
@@ -44,15 +46,15 @@ Agents must preserve the distinction between source files and runtime registry d
 
 All API handlers use App Router route handlers under `src/app/api`.
 
-- `/api/skills` manages Skill list/detail/download/import/review/rollback/archive.
+- `/api/skills` manages Skill list/detail/download/import/review/rollback/archive through Postgres-backed resource authorization while preserving file-backed package assets.
 - `/api/skills/tune` generates workflow Skill tuning drafts through the Claude Code CLI.
-- `/api/workflows` manages file-backed workspaces and workflows.
-- `/api/workflows/snapshots` manages workflow step snapshots.
-- `/api/workflows/milestones` manages milestones.
+- `/api/workflows` manages file-backed workspaces and workflows with Postgres metadata and resource grant filtering.
+- `/api/workflows/snapshots` manages workflow step snapshots after workflow authorization.
+- `/api/workflows/milestones` manages milestones in direct Postgres after workflow authorization.
 - `/api/chat` streams product-planning chat responses with knowledge and workflow context.
 - `/api/agent-runtime` reports Claude Code CLI adapter availability.
 - `/api/supabase-config` exposes browser-safe Supabase config.
-- `/api/prd` reads and writes PRD documents through Supabase.
+- `/api/prd` reads and writes PRD documents through direct Postgres after workflow authorization.
 - `/api/knowledge` handles knowledge data for the dashboard. Knowledge document indexing/search uses direct Postgres when `BATTLEFLOW_DATABASE_URL` is configured.
 
 Route handlers that access the file system or spawn CLI processes must keep `runtime = 'nodejs'`.

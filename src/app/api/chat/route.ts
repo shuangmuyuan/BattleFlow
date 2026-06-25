@@ -1,11 +1,14 @@
 import { NextRequest } from 'next/server';
 import { streamClaudeCodeCliTurn } from '@/lib/agent-adapters/claude-code-cli';
 import type { AgentEvent } from '@/lib/agent-adapters/types';
+import { requireOrganizationContext, requirePermission } from '@/lib/auth/server';
+import { AuthError } from '@/lib/auth/types';
 import {
   isKnowledgeDatabaseConfigured,
   KnowledgeDatabaseConfigError,
   searchKnowledgeDocuments,
 } from '@/lib/knowledge-repository';
+import { requireSkillIdAccess, requireWorkflowAccess } from '@/lib/resource-metadata-repository';
 import { cleanExecutableSkillText } from '@/lib/workflow-skill-draft';
 
 export const runtime = 'nodejs';
@@ -18,6 +21,8 @@ interface ChatMessage {
 }
 
 interface SkillDefinition {
+  id?: string;
+  skill_id?: string;
   name?: string;
   description?: string;
   methodology?: string;
@@ -230,6 +235,45 @@ function normalizeSkillPackageAssets(value: unknown): SkillPackageAssetContext[]
       note: typeof record.note === 'string' ? record.note.slice(0, 240) : undefined,
     }];
   }).slice(0, MAX_SKILL_PACKAGE_ASSET_PROMPT_COUNT);
+}
+
+async function authorizeChatBody(
+  context: Awaited<ReturnType<typeof requireOrganizationContext>>,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const nextBody = { ...body };
+  const workflowId = getString(body.workflow_id) || getString(body.workflowId);
+  if (workflowId) {
+    await requireWorkflowAccess(context, workflowId, 'workflow.read');
+  }
+
+  const selectedKnowledgeBases = normalizeSelectedKnowledgeBases(body.selected_knowledge_bases);
+  for (const knowledgeBase of selectedKnowledgeBases) {
+    if (!knowledgeBase.id) continue;
+    requirePermission(context, 'knowledge_base.read', {
+      organizationId: context.activeOrganization.id,
+      resourceType: 'knowledge_base',
+      resourceId: knowledgeBase.id,
+    });
+  }
+
+  const rawSkillDefinition = isRecord(body.skill_definition) ? body.skill_definition : null;
+  if (!rawSkillDefinition) {
+    return nextBody;
+  }
+
+  const skillId = getString(rawSkillDefinition.id) || getString(rawSkillDefinition.skill_id);
+  const hasPackageAssets = Array.isArray(rawSkillDefinition.package_assets) && rawSkillDefinition.package_assets.length > 0;
+  if (skillId) {
+    await requireSkillIdAccess(context, skillId, 'skill.run');
+  }
+
+  nextBody.skill_definition = {
+    ...rawSkillDefinition,
+    package_assets: skillId || !hasPackageAssets ? rawSkillDefinition.package_assets : [],
+  };
+
+  return nextBody;
 }
 
 function buildSkillPackageAssetsPrompt(assets: SkillPackageAssetContext[]) {
@@ -663,7 +707,9 @@ function streamClaudeCodeCli(request: NextRequest, messages: ChatMessage[], syst
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json() as Record<string, unknown>;
+    const context = await requireOrganizationContext(request);
+    const rawBody = await request.json() as Record<string, unknown>;
+    const body = await authorizeChatBody(context, rawBody);
     const messages = boundPromptMessages(Array.isArray(body.messages) ? body.messages.filter(isChatMessage) : []);
 
     if (messages.length === 0) {
@@ -690,6 +736,12 @@ export async function POST(request: NextRequest) {
     return streamClaudeCodeCli(request, claudeMessages, systemPrompt);
   } catch (error) {
     console.error('Chat API error:', error);
+    if (error instanceof AuthError) {
+      return new Response(JSON.stringify({ error: error.message }), {
+        status: error.status,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
     return new Response(JSON.stringify({ error: getSafeChatErrorMessage(error) }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },

@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireOrganizationContext } from '@/lib/auth/server';
+import { AuthError } from '@/lib/auth/types';
+import { filterAuthorizedWorkflows, requireWorkflowAccess } from '@/lib/resource-metadata-repository';
 import { getWorkflow, getWorkflowState } from '@/lib/workflow-registry';
 
 export const runtime = 'nodejs';
@@ -8,6 +11,7 @@ export const revalidate = 0;
 // GET /api/workflows/snapshots?workflow_id=xxx - List step snapshots
 export async function GET(request: NextRequest) {
   try {
+    const context = await requireOrganizationContext(request);
     const { searchParams } = new URL(request.url);
     const workflowId = searchParams.get('workflow_id');
     const stepId = searchParams.get('step_id');
@@ -19,9 +23,13 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    if (workflowId) {
+      await requireWorkflowAccess(context, workflowId, 'workflow.read');
+    }
+
     const workflows = workflowId
       ? [await getWorkflow(workflowId)].filter(Boolean)
-      : (await getWorkflowState()).workflows;
+      : await filterAuthorizedWorkflows(context, (await getWorkflowState()).workflows, 'workflow.read');
 
     const snapshots = workflows
       .flatMap((workflow) => workflow?.stepSnapshots || [])
@@ -34,6 +42,12 @@ export async function GET(request: NextRequest) {
     );
   } catch (error) {
     console.error('Snapshots GET error:', error);
+    if (error instanceof AuthError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.status, headers: { 'Cache-Control': 'no-store' } },
+      );
+    }
     return NextResponse.json(
       { error: 'Failed to fetch snapshots' },
       { status: 500, headers: { 'Cache-Control': 'no-store' } },

@@ -53,6 +53,7 @@ BATTLEFLOW_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start
 ```bash
 BATTLEFLOW_DATABASE_URL=postgresql://... pnpm db:knowledge:init
 BATTLEFLOW_DATABASE_URL=postgresql://... pnpm db:accounts:init
+BATTLEFLOW_DATABASE_URL=postgresql://... BATTLEFLOW_MIGRATION_ORGANIZATION_ID=... BATTLEFLOW_MIGRATION_USER_ID=... pnpm db:resources:migrate
 BATTLEFLOW_DATABASE_URL=postgresql://... pnpm db:postgres:init
 ```
 
@@ -61,6 +62,8 @@ BATTLEFLOW_DATABASE_URL=postgresql://... pnpm db:postgres:init
 `pnpm db:accounts:init` applies `scripts/database/002_account_org_permissions.sql`, which adds first-party users, password credential storage, sessions, organization members, departments, teams, platform admins, invitations, resource grants, audit events, and Skill/workflow business metadata needed by the authorization system.
 
 `pnpm db:postgres:init` runs both scripts in order. Use it for a fresh direct-Postgres BattleFlow database.
+
+`pnpm db:resources:migrate` reads existing `data/skill-registry/index.json`, official Skill seed metadata, and `data/workflows/store.json`, then writes Skill/workflow business metadata and resource owner grants into Postgres. It does not execute imported package scripts or move large package assets into the database; Postgres stores metadata, state indexes, and asset manifests only.
 
 ## Super Admin Bootstrap
 
@@ -92,6 +95,8 @@ Use `/dashboard/admin` as an enabled super admin to grant or revoke additional s
 | `BATTLEFLOW_DATABASE_SSL` | Optional Postgres SSL mode. Use `true` or `require` to enable SSL. |
 | `BATTLEFLOW_SUPER_ADMIN_EMAILS` | Server-only comma-separated emails that bootstrap matching signed-in users as super admins. |
 | `BATTLEFLOW_SUPER_ADMIN_USER_IDS` | Server-only comma-separated user IDs that bootstrap matching signed-in users as super admins. |
+| `BATTLEFLOW_MIGRATION_ORGANIZATION_ID` | Organization ID used by `pnpm db:resources:migrate` when backfilling non-official Skill/workflow metadata. |
+| `BATTLEFLOW_MIGRATION_USER_ID` | User ID used by `pnpm db:resources:migrate` as the owner/admin grant for backfilled runtime resources. |
 | `SKILL_REGISTRY_DIR` | File-backed Skill registry root. |
 | `SKILL_IMPORT_ROOTS` | Allowed server-path roots for Skill imports. |
 | `WORKFLOW_REGISTRY_DIR` | File-backed workflow registry root. |

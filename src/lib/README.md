@@ -10,6 +10,7 @@ Shared application logic.
 - `knowledge-repository.ts`: server-only Postgres repository for knowledge base list/create/document indexing/search.
 - `auth/`: server-only first-party auth context, Postgres fetch helpers, permission resolution, and super admin bootstrap/management helpers.
 - `organization-management.ts`: server-only Postgres repository for organization updates, members, departments, teams, invitations, and audit events.
+- `resource-metadata-repository.ts`: server-only Postgres metadata and authorization index for Skill/workflow resources while preserving file-backed package assets and workflow runtime state.
 - `agent-adapters/types.ts`: provider/runtime event and status types.
 - `agent-adapters/claude-code-cli.ts`: Claude Code CLI availability checks and streaming adapter.
 - `supabase-config-inject.tsx`: client-side Supabase config provider.
@@ -42,6 +43,7 @@ Shared application logic.
 - Keep super admin bootstrap values server-only; expose only database-backed assignment records to the UI.
 - Never expose secret material through super admin routes; super admin product access does not include environment variables, connection strings, or raw tokens.
 - Keep organization management mutations transactional and write audit events for role, membership, invitation, and destructive changes.
+- Keep Skill/workflow package assets in file/object storage; routes must pass Postgres resource permission checks before returning assets or injecting them into prompts.
 
 ## Agent Adapter Rules
 

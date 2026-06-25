@@ -9,17 +9,17 @@ BattleFlow API route handlers.
 | `admin/super-admins` | Lists, grants, and revokes platform super admins through server-only Postgres access and platform permissions. |
 | `agent-runtime` | Reports Claude Code CLI adapter availability and configured defaults. |
 | `auth/*` | First-party registration, login, logout, current user, onboarding, and invitation acceptance. |
-| `chat` | Streams product-planning chat responses with Skill, workflow, knowledge, and uploaded-file context. |
+| `chat` | Streams product-planning chat responses with authorized Skill, workflow, knowledge, and uploaded-file context. |
 | `dashboard/stats` | Provides dashboard overview counts and recent workflow state. |
 | `knowledge` | Provides knowledge-base data for the dashboard. Document indexing/search uses direct Postgres when configured. |
 | `organizations` | Lists and updates active organizations; manages organization members, departments, teams, team/department assignments, and invitations through Postgres-backed permissions. |
-| `prd` | Reads and writes PRD documents through Supabase. |
-| `skills` | Lists, imports, reviews, publishes, rolls back, downloads, and archives Skills. |
+| `prd` | Reads and writes PRD documents through direct Postgres after workflow authorization. |
+| `skills` | Lists, imports, reviews, publishes, rolls back, downloads, and archives Skills through Postgres-backed resource permission filtering. |
 | `skills/tune` | Generates workflow Skill tuning drafts through the Claude Code CLI path. |
 | `supabase-config` | Exposes browser-safe Supabase URL and anon key. |
-| `workflows` | Manages file-backed workspaces and workflows. |
-| `workflows/milestones` | Manages workflow milestone records. |
-| `workflows/snapshots` | Manages step and workflow snapshots. |
+| `workflows` | Manages file-backed workspaces and workflows with Postgres-backed metadata and resource permission filtering. |
+| `workflows/milestones` | Manages workflow milestone records through direct Postgres after workflow authorization. |
+| `workflows/snapshots` | Manages step and workflow snapshots after workflow authorization. |
 
 ## Patterns
 

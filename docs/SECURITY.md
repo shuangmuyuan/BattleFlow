@@ -28,6 +28,7 @@ Never commit:
 - Platform super admin bootstrap runs only on the server when a signed-in user matches `BATTLEFLOW_SUPER_ADMIN_EMAILS` or `BATTLEFLOW_SUPER_ADMIN_USER_IDS`. API responses and UI state must never return the configured bootstrap values.
 - Super admin product access can view and administer organization content, but it must still be blocked from secret material such as connection strings, service role keys, environment variables, and raw auth tokens.
 - Super admin grant and revoke changes must write audit events, and the last enabled super admin must not be revoked through normal management APIs.
+- Skill, workflow, knowledge-base, PRD, snapshot, milestone, and chat routes must resolve first-party auth and Postgres-backed resource permissions before returning file-backed package assets, workflow outputs, or prompt context.
 - Any change that broadens service-role usage requires a security review.
 
 ## Database Access
