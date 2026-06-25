@@ -162,6 +162,10 @@ export interface WorkflowSkillDraftRecord {
   tools: string[];
   outputs: Record<string, unknown>;
   checklist: string[];
+  acceptanceCriteria?: string[];
+  requiredSections?: string[];
+  evidenceRules?: string[];
+  failureConditions?: string[];
   tags: string[];
   prompt_template?: string;
   skill_md: string;
@@ -544,6 +548,10 @@ function normalizeSkillDrafts(value: unknown): Record<string, WorkflowSkillDraft
           tools: normalizeStringArray(draft.tools),
           outputs: normalizeUnknownRecord(draft.outputs),
           checklist: normalizeStringArray(draft.checklist),
+          acceptanceCriteria: normalizeStringArray(draft.acceptanceCriteria),
+          requiredSections: normalizeStringArray(draft.requiredSections),
+          evidenceRules: normalizeStringArray(draft.evidenceRules),
+          failureConditions: normalizeStringArray(draft.failureConditions),
           tags: normalizeStringArray(draft.tags),
           prompt_template: typeof draft.prompt_template === 'string'
             ? cleanExecutableSkillText(draft.prompt_template, '', draft.tuning_request)

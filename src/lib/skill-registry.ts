@@ -48,7 +48,14 @@ export interface SkillReview {
   decision?: 'approved' | 'rejected';
 }
 
-export interface SkillRecord {
+export interface SkillValidationContract {
+  acceptanceCriteria?: string[];
+  requiredSections?: string[];
+  evidenceRules?: string[];
+  failureConditions?: string[];
+}
+
+export interface SkillRecord extends SkillValidationContract {
   id: string;
   skill_id: string;
   display_name: string;
@@ -297,6 +304,41 @@ function toRecord(value: unknown): Record<string, unknown> {
 
 function getString(value: unknown, fallback = '') {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function addUniqueStrings(target: string[], values: string[]) {
+  const seen = new Set(target.map((item) => item.trim().toLowerCase()));
+  values.forEach((value) => {
+    const normalized = value.trim();
+    if (!normalized) return;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    target.push(normalized);
+  });
+}
+
+function getSkillValidationContract(...sources: Record<string, unknown>[]): SkillValidationContract {
+  const contract: Required<SkillValidationContract> = {
+    acceptanceCriteria: [],
+    requiredSections: [],
+    evidenceRules: [],
+    failureConditions: [],
+  };
+
+  sources.forEach((source) => {
+    addUniqueStrings(contract.acceptanceCriteria, toStringArray(source.acceptanceCriteria));
+    addUniqueStrings(contract.requiredSections, toStringArray(source.requiredSections));
+    addUniqueStrings(contract.evidenceRules, toStringArray(source.evidenceRules));
+    addUniqueStrings(contract.failureConditions, toStringArray(source.failureConditions));
+  });
+
+  return {
+    ...(contract.acceptanceCriteria.length > 0 ? { acceptanceCriteria: contract.acceptanceCriteria } : {}),
+    ...(contract.requiredSections.length > 0 ? { requiredSections: contract.requiredSections } : {}),
+    ...(contract.evidenceRules.length > 0 ? { evidenceRules: contract.evidenceRules } : {}),
+    ...(contract.failureConditions.length > 0 ? { failureConditions: contract.failureConditions } : {}),
+  };
 }
 
 function getScope(value: unknown, fallback: SkillScope): SkillScope {
@@ -734,6 +776,16 @@ function normalizeSkillRecord(value: unknown): SkillRecord | null {
 
   const skillMd = getString(record.skill_md);
   const meta = toRecord(record.meta_json);
+  const definition = toRecord(meta.definition);
+  const validationContract = getSkillValidationContract(
+    record,
+    meta,
+    definition,
+    toRecord(meta.validation),
+    toRecord(meta.validationContract),
+    toRecord(definition.validation),
+    toRecord(definition.validationContract),
+  );
   const runtime = deriveSkillRuntimeFields(skillMd, meta);
   const fallbackDisplayName = getString(record.display_name, getString(record.name, id));
   const displayName = deriveSkillDisplayName(skillMd, meta, fallbackDisplayName);
@@ -772,6 +824,7 @@ function normalizeSkillRecord(value: unknown): SkillRecord | null {
     tools: toStringArray(record.tools).length > 0 ? toStringArray(record.tools) : runtime.tools,
     outputs: Object.keys(toRecord(record.outputs)).length > 0 ? toRecord(record.outputs) : runtime.outputs,
     checklist: toStringArray(record.checklist).length > 0 ? toStringArray(record.checklist) : runtime.checklist,
+    ...validationContract,
     prompt_template: getString(record.prompt_template, runtime.prompt_template) || undefined,
     skill_md: skillMd,
     meta_json: meta,
@@ -811,6 +864,10 @@ function serializeSkillRecord(skill: SkillRecord): Record<string, unknown> {
     scope: skill.scope,
     status: skill.status,
     skill_md: skill.skill_md,
+    acceptanceCriteria: skill.acceptanceCriteria,
+    requiredSections: skill.requiredSections,
+    evidenceRules: skill.evidenceRules,
+    failureConditions: skill.failureConditions,
     package_assets: normalizeStoredPackageAssets(skill.package_assets),
     created_at: skill.created_at,
     updated_at: skill.updated_at,
@@ -1032,6 +1089,14 @@ async function loadSkillFromPackage(packagePath: string, options: ImportOptions 
   const outputs = Object.keys(toRecord(definition.outputs)).length
     ? toRecord(definition.outputs)
     : toRecord(meta.outputs);
+  const validationContract = getSkillValidationContract(
+    meta,
+    definition,
+    toRecord(meta.validation),
+    toRecord(meta.validationContract),
+    toRecord(definition.validation),
+    toRecord(definition.validationContract),
+  );
 
   const timestamp = nowIso();
   const changelogVersions = parseChangelog(changelog);
@@ -1063,6 +1128,7 @@ async function loadSkillFromPackage(packagePath: string, options: ImportOptions 
     tools,
     outputs,
     checklist,
+    ...validationContract,
     prompt_template: getString(definition.prompt_template, extractMarkdownSection(contentMd, ['Prompt', '提示词模板', 'Prompt Template'])),
     skill_md: skillMd,
     meta_json: meta,

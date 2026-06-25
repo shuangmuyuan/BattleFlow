@@ -49,6 +49,10 @@ export interface GeneratedWorkflowSkillDraft {
   tools: string[];
   outputs: Record<string, unknown>;
   checklist: string[];
+  acceptanceCriteria?: string[];
+  requiredSections?: string[];
+  evidenceRules?: string[];
+  failureConditions?: string[];
   tags: string[];
   prompt_template?: string;
   skill_md: string;
@@ -72,6 +76,10 @@ interface RawGeneratedDraft {
   tools?: unknown;
   outputs?: unknown;
   checklist?: unknown;
+  acceptanceCriteria?: unknown;
+  requiredSections?: unknown;
+  evidenceRules?: unknown;
+  failureConditions?: unknown;
   tags?: unknown;
   prompt_template?: unknown;
   skill_md?: unknown;
@@ -186,6 +194,10 @@ function extractGeneratedDraft(text: string): RawGeneratedDraft {
       tools: parseSectionList(extractSectionValue(sections, 'TOOLS')),
       outputs,
       checklist: parseSectionList(extractSectionValue(sections, 'CHECKLIST')),
+      acceptanceCriteria: parseSectionList(extractSectionValue(sections, 'ACCEPTANCE_CRITERIA')),
+      requiredSections: parseSectionList(extractSectionValue(sections, 'REQUIRED_SECTIONS')),
+      evidenceRules: parseSectionList(extractSectionValue(sections, 'EVIDENCE_RULES')),
+      failureConditions: parseSectionList(extractSectionValue(sections, 'FAILURE_CONDITIONS')),
       tags: parseSectionList(extractSectionValue(sections, 'TAGS')),
       prompt_template: extractSectionValue(sections, 'PROMPT_TEMPLATE'),
       skill_md: extractSectionValue(sections, 'SKILL_MD'),
@@ -345,6 +357,10 @@ function buildPrompt(input: GenerateWorkflowSkillDraftInput) {
     tools: baseSkill.tools,
     outputs: baseSkill.outputs,
     checklist: baseSkill.checklist,
+    acceptanceCriteria: baseSkill.acceptanceCriteria || [],
+    requiredSections: baseSkill.requiredSections || [],
+    evidenceRules: baseSkill.evidenceRules || [],
+    failureConditions: baseSkill.failureConditions || [],
     tags: baseSkill.tags,
     prompt_template: baseSkill.prompt_template,
     skill_md: truncateText(baseSkill.skill_md, 5000),
@@ -361,8 +377,9 @@ function buildPrompt(input: GenerateWorkflowSkillDraftInput) {
     '4. METHODOLOGY、PROMPT_TEMPLATE、SKILL_MD 必须像正式团队 Skill 一样描述执行方法，不要出现“分析当前 Skill”“调优目标”“验证此调优草稿”“工作流调优要求”等元话语。',
     '5. 不要编造工具能力；tools 默认沿用基线，只有在调优目标明确要求时才调整。',
     '6. change_items 应该是 3-6 条面向审核人的具体变更点。',
-    '7. quality_gates 应该是验证这个草稿是否生效的检查点。',
-    '8. 只返回下方固定分区格式，不要 Markdown 代码块，不要解释文字。',
+    '7. acceptance criteria、required sections、evidence rules、failure conditions 应该描述该 Skill 产物的可验证验收契约；默认保留基线契约，并结合调优目标让标准更明确。',
+    '8. quality_gates 应该是验证这个草稿是否生效的检查点。',
+    '9. 只返回下方固定分区格式，不要 Markdown 代码块，不要解释文字。',
     '',
     '固定分区格式：',
     '=== NAME ===',
@@ -377,6 +394,14 @@ function buildPrompt(input: GenerateWorkflowSkillDraftInput) {
     '{"format":"structured_markdown"}',
     '=== CHECKLIST ===',
     '- 检查点',
+    '=== ACCEPTANCE_CRITERIA ===',
+    '- 可验证验收标准',
+    '=== REQUIRED_SECTIONS ===',
+    '- 必须包含的章节',
+    '=== EVIDENCE_RULES ===',
+    '- 证据、来源或假设标注规则',
+    '=== FAILURE_CONDITIONS ===',
+    '- 一旦出现就必须判定失败的情况',
     '=== TAGS ===',
     '- tag',
     '=== PROMPT_TEMPLATE ===',
@@ -454,6 +479,18 @@ export async function generateWorkflowSkillDraft(input: GenerateWorkflowSkillDra
   );
   const changeItems = asStringArray(rawDraft.change_items, []);
   const qualityGates = asStringArray(rawDraft.quality_gates, []);
+  const outputs = asRecord(rawDraft.outputs, baseSkill.outputs);
+  const outputSections = asStringArray(asRecord(outputs).sections);
+  const acceptanceCriteria = asStringArray(
+    rawDraft.acceptanceCriteria,
+    baseSkill.acceptanceCriteria?.length ? baseSkill.acceptanceCriteria : qualityGates,
+  );
+  const requiredSections = asStringArray(
+    rawDraft.requiredSections,
+    baseSkill.requiredSections?.length ? baseSkill.requiredSections : outputSections,
+  );
+  const evidenceRules = asStringArray(rawDraft.evidenceRules, baseSkill.evidenceRules || []);
+  const failureConditions = asStringArray(rawDraft.failureConditions, baseSkill.failureConditions || []);
   const checklist = Array.from(new Set([
     ...asStringArray(rawDraft.checklist, baseSkill.checklist),
     ...qualityGates,
@@ -472,8 +509,12 @@ export async function generateWorkflowSkillDraft(input: GenerateWorkflowSkillDra
     description: asString(rawDraft.description, baseSkill.description),
     methodology,
     tools: asStringArray(rawDraft.tools, baseSkill.tools),
-    outputs: asRecord(rawDraft.outputs, baseSkill.outputs),
+    outputs,
     checklist,
+    acceptanceCriteria,
+    requiredSections,
+    evidenceRules,
+    failureConditions,
     tags,
     prompt_template: promptTemplate || undefined,
     skill_md: skillMd,

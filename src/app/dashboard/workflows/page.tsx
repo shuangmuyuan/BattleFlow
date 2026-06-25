@@ -88,6 +88,10 @@ interface Skill {
   tools: string[];
   outputs: Record<string, unknown>;
   checklist: string[];
+  acceptanceCriteria?: string[];
+  requiredSections?: string[];
+  evidenceRules?: string[];
+  failureConditions?: string[];
   tags: string[];
   version?: string;
   prompt_template?: string;
@@ -254,6 +258,10 @@ interface WorkflowSkillDraft {
   tools: string[];
   outputs: Record<string, unknown>;
   checklist: string[];
+  acceptanceCriteria?: string[];
+  requiredSections?: string[];
+  evidenceRules?: string[];
+  failureConditions?: string[];
   tags: string[];
   prompt_template?: string;
   skill_md: string;
@@ -1531,6 +1539,10 @@ export default function WorkflowsPage() {
       tools: draft.tools,
       outputs: draft.outputs,
       checklist: draft.checklist,
+      acceptanceCriteria: draft.acceptanceCriteria,
+      requiredSections: draft.requiredSections,
+      evidenceRules: draft.evidenceRules,
+      failureConditions: draft.failureConditions,
       tags: draft.tags,
       methodology: cleanExecutableSkillText(draft.methodology, baseSkill?.methodology || '', draft.tuning_request),
       prompt_template: cleanExecutableSkillText(draft.prompt_template, baseSkill?.prompt_template || '', draft.tuning_request),
@@ -3243,9 +3255,16 @@ export default function WorkflowsPage() {
       ? (activeWorkflow.stepSnapshots || []).find((snapshot) => snapshot.id === currentStep.candidateSnapshotId)
       : undefined;
   const currentValidationCandidate = currentStep?.candidateOutput || currentCandidateSnapshot?.output || '';
+  const currentSkillCriteria = [
+    ...(currentSkill?.acceptanceCriteria || []),
+    ...(currentSkill?.requiredSections || []).map((section) => `产物必须包含「${section}」章节。`),
+    ...(currentSkill?.evidenceRules || []),
+    ...(currentSkill?.failureConditions || []).map((condition) => `若出现以下情况必须判定为未通过：${condition}`),
+    ...(currentSkill?.checklist || []),
+  ];
   const currentValidationCriteria = currentValidationAttempt?.criteria?.length
     ? currentValidationAttempt.criteria
-    : currentSkill?.checklist || [];
+    : currentSkillCriteria;
   const currentValidationFindings = [
     ...(currentValidationAttempt?.selfCheck?.findings || []),
     ...(currentValidationAttempt?.agentValidation?.findings || []),
