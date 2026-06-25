@@ -3,8 +3,51 @@ import path from 'path';
 import { cleanExecutableSkillText } from './workflow-skill-draft';
 
 export type WorkflowStatus = 'draft' | 'in_progress' | 'completed';
-export type WorkflowStepStatus = 'pending' | 'in_progress' | 'completed';
+export type WorkflowStepStatus =
+  | 'pending'
+  | 'in_progress'
+  | 'self_checking'
+  | 'agent_validating'
+  | 'validation_failed'
+  | 'completed';
 export type WorkflowRunMode = 'serial' | 'parallel';
+export type WorkflowValidationOutcome = 'pass' | 'needs_revision' | 'blocked' | 'error';
+export type WorkflowStepValidationStatus = 'not_started' | 'running' | 'passed' | 'failed' | 'error';
+export type WorkflowStepValidationAttemptStatus = 'running' | 'passed' | 'failed' | 'error';
+export type WorkflowStepSnapshotType = 'auto' | 'manual' | 'validation_candidate';
+
+export interface WorkflowStepValidationFindingRecord {
+  id: string;
+  severity: 'blocking' | 'warning' | 'suggestion';
+  criterion: string;
+  issue: string;
+  recommendation: string;
+  evidence?: string;
+}
+
+export interface WorkflowStepValidationPhaseRecord {
+  outcome: WorkflowValidationOutcome;
+  summary: string;
+  findings: WorkflowStepValidationFindingRecord[];
+  rawText?: string;
+  generator?: 'claude-code-cli';
+}
+
+export interface WorkflowStepValidationAttemptRecord {
+  id: string;
+  workflowId: string;
+  stepId: string;
+  artifactHash: string;
+  artifactSnapshotId?: string;
+  skillId: string;
+  skillVersion?: string;
+  criteria: string[];
+  selfCheck?: WorkflowStepValidationPhaseRecord;
+  agentValidation?: WorkflowStepValidationPhaseRecord;
+  status: WorkflowStepValidationAttemptStatus;
+  created_at: string;
+  updated_at: string;
+}
 
 export interface WorkspaceRecord {
   id: string;
@@ -26,6 +69,12 @@ export interface WorkflowStepRecord {
   removedAt?: string;
   status: WorkflowStepStatus;
   output: string | null;
+  candidateOutput?: string;
+  candidateArtifactHash?: string;
+  candidateSnapshotId?: string;
+  validationAttemptId?: string;
+  validationStatus?: WorkflowStepValidationStatus;
+  validationSummary?: string;
   created_at: string;
   updated_at: string;
   completed_at?: string;
@@ -72,6 +121,8 @@ export interface WorkflowStepSnapshotRecord {
   stepName: string;
   stepIndex: number;
   output: string;
+  snapshotType?: WorkflowStepSnapshotType;
+  label?: string;
   contextFiles: string[];
   reviewedMaterials: string[];
   reviewComment?: string;
@@ -143,6 +194,7 @@ export interface WorkflowRecord {
   stepSnapshots: WorkflowStepSnapshotRecord[];
   stepChats: Record<string, WorkflowChatMessageRecord[]>;
   skillDrafts: Record<string, WorkflowSkillDraftRecord>;
+  validationAttempts: WorkflowStepValidationAttemptRecord[];
   created_at: string;
   updated_at: string;
 }
@@ -222,8 +274,36 @@ async function writeStore(store: WorkflowStore) {
   await fs.rename(tempPath, storePath);
 }
 
+function normalizeStepStatus(value: unknown): WorkflowStepStatus {
+  return value === 'completed'
+    || value === 'in_progress'
+    || value === 'self_checking'
+    || value === 'agent_validating'
+    || value === 'validation_failed'
+    ? value
+    : 'pending';
+}
+
+function normalizeStepValidationStatus(value: unknown, stepStatus: WorkflowStepStatus): WorkflowStepValidationStatus {
+  if (
+    value === 'not_started'
+    || value === 'running'
+    || value === 'passed'
+    || value === 'failed'
+    || value === 'error'
+  ) {
+    return value;
+  }
+
+  if (stepStatus === 'completed') return 'passed';
+  if (stepStatus === 'self_checking' || stepStatus === 'agent_validating') return 'running';
+  if (stepStatus === 'validation_failed') return 'failed';
+  return 'not_started';
+}
+
 function normalizeStep(step: Partial<WorkflowStepRecord>, index: number): WorkflowStepRecord {
   const now = nowIso();
+  const status = normalizeStepStatus(step.status);
   return {
     id: step.id || uniqueId('step', step.name || `step-${index + 1}`),
     name: step.name || `步骤 ${index + 1}`,
@@ -234,8 +314,14 @@ function normalizeStep(step: Partial<WorkflowStepRecord>, index: number): Workfl
     parallelGroupName: step.parallelGroupName,
     isRemoved: Boolean(step.isRemoved),
     removedAt: step.removedAt,
-    status: step.status === 'completed' || step.status === 'in_progress' ? step.status : 'pending',
+    status,
     output: typeof step.output === 'string' ? step.output : null,
+    candidateOutput: typeof step.candidateOutput === 'string' ? step.candidateOutput : undefined,
+    candidateArtifactHash: typeof step.candidateArtifactHash === 'string' ? step.candidateArtifactHash : undefined,
+    candidateSnapshotId: typeof step.candidateSnapshotId === 'string' ? step.candidateSnapshotId : undefined,
+    validationAttemptId: typeof step.validationAttemptId === 'string' ? step.validationAttemptId : undefined,
+    validationStatus: normalizeStepValidationStatus(step.validationStatus, status),
+    validationSummary: typeof step.validationSummary === 'string' ? step.validationSummary : undefined,
     created_at: step.created_at || now,
     updated_at: step.updated_at || now,
     completed_at: step.completed_at,
@@ -314,6 +400,10 @@ function normalizeStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
 
+function normalizeStepSnapshotType(value: unknown): WorkflowStepSnapshotType {
+  return value === 'manual' || value === 'validation_candidate' ? value : 'auto';
+}
+
 function normalizeStepSnapshot(
   snapshot: Partial<WorkflowStepSnapshotRecord>,
   index: number,
@@ -327,6 +417,8 @@ function normalizeStepSnapshot(
     stepName: snapshot.stepName || `步骤 ${index + 1}`,
     stepIndex: typeof snapshot.stepIndex === 'number' ? snapshot.stepIndex : index,
     output: typeof snapshot.output === 'string' ? snapshot.output : '',
+    snapshotType: normalizeStepSnapshotType(snapshot.snapshotType),
+    label: typeof snapshot.label === 'string' ? snapshot.label : undefined,
     contextFiles: normalizeStringArray(snapshot.contextFiles),
     reviewedMaterials: normalizeStringArray(snapshot.reviewedMaterials),
     reviewComment: typeof snapshot.reviewComment === 'string' ? snapshot.reviewComment : undefined,
@@ -362,6 +454,74 @@ function normalizeUnknownRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function normalizeValidationOutcome(value: unknown): WorkflowValidationOutcome {
+  return value === 'needs_revision' || value === 'blocked' || value === 'error' ? value : 'pass';
+}
+
+function normalizeValidationAttemptStatus(value: unknown): WorkflowStepValidationAttemptStatus {
+  return value === 'passed' || value === 'failed' || value === 'error' ? value : 'running';
+}
+
+function normalizeValidationFinding(
+  value: Record<string, unknown>,
+  index: number,
+): WorkflowStepValidationFindingRecord {
+  return {
+    id: typeof value.id === 'string' && value.id ? value.id : uniqueId('validation-finding', `finding-${index + 1}`),
+    severity: value.severity === 'blocking' || value.severity === 'suggestion' ? value.severity : 'warning',
+    criterion: typeof value.criterion === 'string' ? value.criterion : '',
+    issue: typeof value.issue === 'string' ? value.issue : '',
+    recommendation: typeof value.recommendation === 'string' ? value.recommendation : '',
+    evidence: typeof value.evidence === 'string' ? value.evidence : undefined,
+  };
+}
+
+function normalizeValidationPhase(value: unknown): WorkflowStepValidationPhaseRecord | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const phase = value as Record<string, unknown>;
+  return {
+    outcome: normalizeValidationOutcome(phase.outcome),
+    summary: typeof phase.summary === 'string' ? phase.summary : '',
+    findings: Array.isArray(phase.findings)
+      ? phase.findings
+        .filter((finding): finding is Record<string, unknown> => (
+          Boolean(finding) && typeof finding === 'object' && !Array.isArray(finding)
+        ))
+        .map((finding, index) => normalizeValidationFinding(finding, index))
+      : [],
+    rawText: typeof phase.rawText === 'string' ? phase.rawText : undefined,
+    generator: phase.generator === 'claude-code-cli' ? 'claude-code-cli' : undefined,
+  };
+}
+
+function normalizeValidationAttempts(
+  value: unknown,
+  workflowId: string,
+): WorkflowStepValidationAttemptRecord[] {
+  if (!Array.isArray(value)) return [];
+  const now = nowIso();
+
+  return value
+    .filter((attempt): attempt is Partial<WorkflowStepValidationAttemptRecord> => (
+      Boolean(attempt) && typeof attempt === 'object' && !Array.isArray(attempt)
+    ))
+    .map((attempt, index) => ({
+      id: attempt.id || uniqueId('validation-attempt', `attempt-${index + 1}`),
+      workflowId: attempt.workflowId || workflowId,
+      stepId: attempt.stepId || '',
+      artifactHash: attempt.artifactHash || '',
+      artifactSnapshotId: typeof attempt.artifactSnapshotId === 'string' ? attempt.artifactSnapshotId : undefined,
+      skillId: attempt.skillId || '',
+      skillVersion: typeof attempt.skillVersion === 'string' ? attempt.skillVersion : undefined,
+      criteria: normalizeStringArray(attempt.criteria),
+      selfCheck: normalizeValidationPhase(attempt.selfCheck),
+      agentValidation: normalizeValidationPhase(attempt.agentValidation),
+      status: normalizeValidationAttemptStatus(attempt.status),
+      created_at: attempt.created_at || now,
+      updated_at: attempt.updated_at || now,
+    }));
 }
 
 function normalizeSkillDrafts(value: unknown): Record<string, WorkflowSkillDraftRecord> {
@@ -410,7 +570,7 @@ function deriveWorkflowStatus(workflow: WorkflowRecord): WorkflowStatus {
   const activeSteps = workflow.steps.filter((step) => !step.isRemoved);
   if (activeSteps.length === 0) return 'draft';
   if (activeSteps.every((step) => step.status === 'completed')) return 'completed';
-  if (activeSteps.some((step) => step.status === 'completed' || step.status === 'in_progress')) {
+  if (activeSteps.some((step) => step.status !== 'pending')) {
     return 'in_progress';
   }
   return workflow.status === 'draft' ? 'draft' : 'in_progress';
@@ -459,6 +619,7 @@ function normalizeWorkflow(workflow: Partial<WorkflowRecord>): WorkflowRecord {
       : [],
     stepChats: normalizeStepChats(workflow.stepChats),
     skillDrafts: normalizeSkillDrafts(workflow.skillDrafts),
+    validationAttempts: normalizeValidationAttempts(workflow.validationAttempts, workflow.id || ''),
     created_at: workflow.created_at || now,
     updated_at: now,
   };
@@ -485,6 +646,7 @@ function buildSteps(inputs: CreateWorkflowStepInput[]): WorkflowStepRecord[] {
     parallelGroupName: input.parallelGroupName,
     status: inputStepIndexes[index] === firstStepIndex ? 'in_progress' : 'pending',
     output: null,
+    validationStatus: 'not_started',
     created_at: now,
     updated_at: now,
   }));
