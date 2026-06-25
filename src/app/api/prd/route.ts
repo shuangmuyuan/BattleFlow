@@ -1,11 +1,57 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import type { QueryResultRow } from 'pg';
+import { requireOrganizationContext, requirePermission } from '@/lib/auth/server';
+import { AuthError } from '@/lib/auth/types';
+import { requireWorkflowAccess } from '@/lib/resource-metadata-repository';
+import { getWorkflow } from '@/lib/workflow-registry';
+import { queryPostgres } from '@/storage/database/postgres-client';
+
+export const runtime = 'nodejs';
+
+interface PrdDocumentRow extends QueryResultRow {
+  id: string;
+  workflow_id: string;
+  organization_id: string;
+  title: string;
+  content: string;
+  version: string;
+  created_by: string | null;
+  created_at: Date | string;
+  updated_at: Date | string | null;
+}
+
+function toIso(value: Date | string | null): string | null {
+  if (!value) return null;
+  return value instanceof Date ? value.toISOString() : value;
+}
+
+function mapPrdDocument(row: PrdDocumentRow) {
+  return {
+    id: row.id,
+    workflow_id: row.workflow_id,
+    organization_id: row.organization_id,
+    title: row.title,
+    content: row.content,
+    version: row.version,
+    created_by: row.created_by,
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+  };
+}
+
+function jsonError(error: unknown, fallback: string) {
+  if (error instanceof AuthError) {
+    return NextResponse.json({ error: error.message }, { status: error.status });
+  }
+
+  console.error('PRD route error:', error);
+  return NextResponse.json({ error: fallback }, { status: 500 });
+}
 
 // GET /api/prd?workflow_id=xxx - Get PRD for a workflow
 export async function GET(request: NextRequest) {
   try {
-    const token = request.headers.get('x-session') || undefined;
-    const client = getSupabaseClient(token);
+    const context = await requireOrganizationContext(request);
     const { searchParams } = new URL(request.url);
     const workflowId = searchParams.get('workflow_id');
 
@@ -13,88 +59,89 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Workflow ID is required' }, { status: 400 });
     }
 
-    const { data, error } = await client
-      .from('prd_documents')
-      .select('*')
-      .eq('workflow_id', workflowId)
-      .order('created_at', { ascending: false });
+    await requireWorkflowAccess(context, workflowId, 'workflow.read');
 
-    if (error) throw new Error(`Failed to fetch PRD: ${error.message}`);
+    const result = await queryPostgres<PrdDocumentRow>(
+      `
+        SELECT id, workflow_id, organization_id, title, content, version, created_by, created_at, updated_at
+        FROM prd_documents
+        WHERE workflow_id = $1
+          AND organization_id = $2
+        ORDER BY created_at DESC
+      `,
+      [workflowId, context.activeOrganization.id],
+    );
 
-    return NextResponse.json({ documents: data });
+    return NextResponse.json({ documents: result.rows.map(mapPrdDocument) }, {
+      headers: { 'Cache-Control': 'no-store' },
+    });
   } catch (error) {
-    console.error('PRD GET error:', error);
-    return NextResponse.json({ error: 'Failed to fetch PRD documents' }, { status: 500 });
+    return jsonError(error, 'Failed to fetch PRD documents');
   }
 }
 
 // POST /api/prd - Generate PRD from workflow
 export async function POST(request: NextRequest) {
   try {
-    const token = request.headers.get('x-session') || undefined;
-    const client = getSupabaseClient(token);
-    const body = await request.json();
-    const { workflow_id, title } = body;
+    const context = await requireOrganizationContext(request);
+    const body = await request.json() as Record<string, unknown>;
+    const workflowId = typeof body.workflow_id === 'string' ? body.workflow_id.trim() : '';
+    const requestedTitle = typeof body.title === 'string' ? body.title.trim() : '';
 
-    if (!workflow_id) {
+    if (!workflowId) {
       return NextResponse.json({ error: 'Workflow ID is required' }, { status: 400 });
     }
 
-    // Get workflow
-    const { data: workflow, error: wfError } = await client
-      .from('workflows')
-      .select('*')
-      .eq('id', workflow_id)
-      .maybeSingle();
+    await requireWorkflowAccess(context, workflowId, 'workflow.read');
+    requirePermission(context, 'prd_document.create', {
+      organizationId: context.activeOrganization.id,
+      resourceType: 'prd_document',
+      resourceId: workflowId,
+      ownerUserId: context.user.id,
+    });
 
-    if (wfError) throw new Error(`Failed to fetch workflow: ${wfError.message}`);
-    if (!workflow) return NextResponse.json({ error: 'Workflow not found' }, { status: 404 });
+    const workflow = await getWorkflow(workflowId);
+    if (!workflow) {
+      return NextResponse.json({ error: 'Workflow not found' }, { status: 404 });
+    }
 
-    // Get all steps with their outputs
-    const { data: steps, error: stepsError } = await client
-      .from('workflow_steps')
-      .select('*')
-      .eq('workflow_id', workflow_id)
-      .order('step_index', { ascending: true });
-
-    if (stepsError) throw new Error(`Failed to fetch steps: ${stepsError.message}`);
-
-    // Compile PRD content from all step outputs
-    const completedSteps = (steps || []).filter((s: { status: string; output: string | null }) => s.status === 'completed' && s.output);
-
+    const completedSteps = workflow.steps.filter((step) => step.status === 'completed' && step.output);
     if (completedSteps.length === 0) {
       return NextResponse.json({ error: 'No completed steps with output to generate PRD from' }, { status: 400 });
     }
 
-    let prdContent = `# ${title || workflow.name}\n\n`;
-    prdContent += `> Generated by BattleFlow on ${new Date().toLocaleDateString()}\n\n`;
-    prdContent += `---\n\n`;
+    const title = requestedTitle || workflow.name;
+    const generatedDate = new Date().toISOString().slice(0, 10);
+    const prdContent = [
+      `# ${title}`,
+      '',
+      `> Generated by BattleFlow on ${generatedDate}`,
+      '',
+      '---',
+      '',
+      ...completedSteps.flatMap((step) => [
+        `## ${step.name}`,
+        '',
+        step.output || '',
+        '',
+        '---',
+        '',
+      ]),
+    ].join('\n');
 
-    for (const step of completedSteps) {
-      prdContent += `## ${step.name}\n\n`;
-      prdContent += `${step.output}\n\n`;
-      prdContent += `---\n\n`;
-    }
+    const result = await queryPostgres<PrdDocumentRow>(
+      `
+        INSERT INTO prd_documents (workflow_id, organization_id, title, content, version, created_by, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, '1.0.0', $5, now(), now())
+        RETURNING id, workflow_id, organization_id, title, content, version, created_by, created_at, updated_at
+      `,
+      [workflowId, context.activeOrganization.id, title, prdContent, context.user.id],
+    );
 
-    // Save PRD document
-    const { data: prd, error: prdError } = await client
-      .from('prd_documents')
-      .insert({
-        workflow_id,
-        organization_id: workflow.organization_id,
-        title: title || workflow.name,
-        content: prdContent,
-        version: '1.0.0',
-        created_by: 'current_user',
-      })
-      .select()
-      .single();
-
-    if (prdError) throw new Error(`Failed to save PRD: ${prdError.message}`);
-
-    return NextResponse.json({ document: prd });
+    return NextResponse.json({ document: mapPrdDocument(result.rows[0]) }, {
+      headers: { 'Cache-Control': 'no-store' },
+    });
   } catch (error) {
-    console.error('PRD POST error:', error);
-    return NextResponse.json({ error: 'Failed to generate PRD' }, { status: 500 });
+    return jsonError(error, 'Failed to generate PRD');
   }
 }

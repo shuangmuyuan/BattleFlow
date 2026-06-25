@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
-import { getSkill } from '@/lib/skill-registry';
+import { requireOrganizationContext } from '@/lib/auth/server';
+import { AuthError } from '@/lib/auth/types';
+import { requireSkillIdAccess, requireSkillRecordAccess, requireWorkflowAccess } from '@/lib/resource-metadata-repository';
+import { getSkill, type SkillRecord } from '@/lib/skill-registry';
 import {
   generateWorkflowSkillDraft,
   type SkillTuningContextMessage,
@@ -38,8 +41,31 @@ function getStepOutputs(value: unknown): SkillTuningStepOutput[] {
     .filter((item) => item.name && item.output);
 }
 
+async function getAuthorizedBaseSkill(
+  context: Awaited<ReturnType<typeof requireOrganizationContext>>,
+  baseSkillId: string,
+): Promise<SkillRecord | null> {
+  try {
+    await requireSkillIdAccess(context, baseSkillId, 'skill.run');
+  } catch (error) {
+    if (!(error instanceof AuthError) || error.status !== 403) {
+      throw error;
+    }
+
+    const fallbackSkill = await getSkill(baseSkillId);
+    if (!fallbackSkill) {
+      throw error;
+    }
+    await requireSkillRecordAccess(context, fallbackSkill, 'skill.run');
+    return fallbackSkill;
+  }
+
+  return getSkill(baseSkillId);
+}
+
 export async function POST(request: Request) {
   try {
+    const context = await requireOrganizationContext(request);
     const body = await request.json() as Record<string, unknown>;
     const baseSkillId = getString(body.baseSkillId);
     const instruction = getString(body.instruction);
@@ -52,7 +78,8 @@ export async function POST(request: Request) {
     if (!instruction) return jsonError('instruction is required');
     if (!workflowId || !stepId) return jsonError('workflowId and stepId are required');
 
-    const baseSkill = await getSkill(baseSkillId);
+    await requireWorkflowAccess(context, workflowId, 'workflow.read');
+    const baseSkill = await getAuthorizedBaseSkill(context, baseSkillId);
     if (!baseSkill) return jsonError(`Skill not found: ${baseSkillId}`, 404);
 
     const draft = await generateWorkflowSkillDraft({
@@ -70,6 +97,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ draft });
   } catch (error) {
     console.error('Skill tuning API error:', error);
+    if (error instanceof AuthError) {
+      return jsonError(error.message, error.status);
+    }
     const message = error instanceof Error ? error.message : 'Failed to generate Skill tuning draft';
     return jsonError(message, 500);
   }

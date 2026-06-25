@@ -1,0 +1,411 @@
+import { describe, expect, it } from 'vitest';
+import { canAccess, canAccessPlatform, requirePermission, requirePlatformPermission } from './permissions';
+import { ForbiddenError, type AuthOrganizationContext, type AuthUserContext } from './types';
+
+function makeContext(overrides: Partial<AuthOrganizationContext> = {}): AuthOrganizationContext {
+  const context: AuthOrganizationContext = {
+    user: {
+      id: 'user-1',
+      email: 'user@example.com',
+      displayName: 'User One',
+      avatarUrl: null,
+      status: 'active',
+    },
+    session: {
+      id: 'session-1',
+      userId: 'user-1',
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      lastSeenAt: null,
+    },
+    isSuperAdmin: false,
+    activeOrganization: {
+      id: 'org-1',
+      name: 'Org One',
+      slug: 'org-one',
+      status: 'active',
+    },
+    organizationMembership: {
+      organizationId: 'org-1',
+      userId: 'user-1',
+      role: 'org_member',
+      status: 'active',
+      organization: {
+        id: 'org-1',
+        name: 'Org One',
+        slug: 'org-one',
+        status: 'active',
+      },
+    },
+    organizationMemberships: [],
+    departments: [],
+    departmentMemberships: [],
+    teamMemberships: [],
+    resourceGrants: [],
+  };
+
+  return {
+    ...context,
+    ...overrides,
+  };
+}
+
+function makeUserContext(overrides: Partial<AuthUserContext> = {}): AuthUserContext {
+  return {
+    user: {
+      id: 'user-1',
+      email: 'user@example.com',
+      displayName: 'User One',
+      avatarUrl: null,
+      status: 'active',
+    },
+    session: {
+      id: 'session-1',
+      userId: 'user-1',
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      lastSeenAt: null,
+    },
+    isSuperAdmin: false,
+    ...overrides,
+  };
+}
+
+describe('permission engine', () => {
+  it('denies resource access by default for ordinary organization members', () => {
+    const context = makeContext();
+
+    expect(canAccess(context, 'skill.read', {
+      organizationId: 'org-1',
+      resourceType: 'skill',
+      resourceId: 'skill-1',
+    })).toBe(false);
+  });
+
+  it('allows direct user resource grants', () => {
+    const context = makeContext({
+      resourceGrants: [{
+        id: 'grant-1',
+        organizationId: 'org-1',
+        resourceType: 'skill',
+        resourceId: 'skill-1',
+        subjectType: 'user',
+        subjectId: 'user-1',
+        permission: 'read',
+      }],
+    });
+
+    expect(canAccess(context, 'skill.read', {
+      organizationId: 'org-1',
+      resourceType: 'skill',
+      resourceId: 'skill-1',
+    })).toBe(true);
+  });
+
+  it('keeps active organization boundaries even when resource ids match', () => {
+    const context = makeContext({
+      resourceGrants: [{
+        id: 'grant-1',
+        organizationId: 'org-1',
+        resourceType: 'workflow',
+        resourceId: 'workflow-1',
+        subjectType: 'user',
+        subjectId: 'user-1',
+        permission: 'read',
+      }],
+    });
+
+    expect(canAccess(context, 'workflow.read', {
+      organizationId: 'org-2',
+      resourceType: 'workflow',
+      resourceId: 'workflow-1',
+    })).toBe(false);
+  });
+
+  it('allows department role permissions to inherit to child departments', () => {
+    const context = makeContext({
+      departments: [
+        {
+          id: 'dept-parent',
+          organizationId: 'org-1',
+          parentDepartmentId: null,
+          name: 'Parent',
+          slug: 'parent',
+        },
+        {
+          id: 'dept-child',
+          organizationId: 'org-1',
+          parentDepartmentId: 'dept-parent',
+          name: 'Child',
+          slug: 'child',
+        },
+      ],
+      departmentMemberships: [{
+        departmentId: 'dept-parent',
+        userId: 'user-1',
+        role: 'department_manager',
+      }],
+    });
+
+    expect(canAccess(context, 'workflow.update', {
+      organizationId: 'org-1',
+      resourceType: 'workflow',
+      resourceId: 'workflow-1',
+      departmentId: 'dept-child',
+    })).toBe(true);
+  });
+
+  it('applies inherited department scope consistently across allowed resource actions', () => {
+    const context = makeContext({
+      departments: [
+        {
+          id: 'dept-parent',
+          organizationId: 'org-1',
+          parentDepartmentId: null,
+          name: 'Parent',
+          slug: 'parent',
+        },
+        {
+          id: 'dept-child',
+          organizationId: 'org-1',
+          parentDepartmentId: 'dept-parent',
+          name: 'Child',
+          slug: 'child',
+        },
+      ],
+      departmentMemberships: [{
+        departmentId: 'dept-parent',
+        userId: 'user-1',
+        role: 'department_manager',
+      }],
+    });
+
+    const target = {
+      organizationId: 'org-1',
+      resourceType: 'workflow',
+      resourceId: 'workflow-1',
+      departmentId: 'dept-child',
+    };
+
+    expect(canAccess(context, 'workflow.read', target)).toBe(true);
+    expect(canAccess(context, 'workflow.comment', target)).toBe(true);
+    expect(canAccess(context, 'workflow.run', target)).toBe(true);
+    expect(canAccess(context, 'workflow.create', target)).toBe(true);
+    expect(canAccess(context, 'workflow.update', target)).toBe(true);
+    expect(canAccess(context, 'workflow.publish', target)).toBe(false);
+    expect(canAccess(context, 'workflow.delete', target)).toBe(false);
+    expect(canAccess(context, 'workflow.manage', target)).toBe(false);
+  });
+
+  it('allows department grants to reach child department members', () => {
+    const context = makeContext({
+      departments: [
+        {
+          id: 'dept-parent',
+          organizationId: 'org-1',
+          parentDepartmentId: null,
+          name: 'Parent',
+          slug: 'parent',
+        },
+        {
+          id: 'dept-child',
+          organizationId: 'org-1',
+          parentDepartmentId: 'dept-parent',
+          name: 'Child',
+          slug: 'child',
+        },
+      ],
+      departmentMemberships: [{
+        departmentId: 'dept-child',
+        userId: 'user-1',
+        role: 'department_member',
+      }],
+      resourceGrants: [{
+        id: 'grant-1',
+        organizationId: 'org-1',
+        resourceType: 'knowledge_base',
+        resourceId: 'kb-1',
+        subjectType: 'department',
+        subjectId: 'dept-parent',
+        permission: 'read',
+      }],
+    });
+
+    expect(canAccess(context, 'knowledge_base.read', {
+      organizationId: 'org-1',
+      resourceType: 'knowledge_base',
+      resourceId: 'kb-1',
+    })).toBe(true);
+  });
+
+  it('allows cross-department team membership without department membership', () => {
+    const context = makeContext({
+      teamMemberships: [{
+        teamId: 'team-1',
+        organizationId: 'org-1',
+        departmentId: 'dept-other',
+        userId: 'user-1',
+        role: 'team_member',
+      }],
+    });
+
+    expect(canAccess(context, 'workflow.run', {
+      organizationId: 'org-1',
+      resourceType: 'workflow',
+      resourceId: 'workflow-1',
+      teamId: 'team-1',
+    })).toBe(true);
+  });
+
+  it('does not escalate read-only resource grants into mutation permissions', () => {
+    const context = makeContext({
+      resourceGrants: [{
+        id: 'grant-1',
+        organizationId: 'org-1',
+        resourceType: 'workflow',
+        resourceId: 'workflow-1',
+        subjectType: 'user',
+        subjectId: 'user-1',
+        permission: 'read',
+      }],
+    });
+
+    const target = {
+      organizationId: 'org-1',
+      resourceType: 'workflow',
+      resourceId: 'workflow-1',
+    };
+
+    expect(canAccess(context, 'workflow.read', target)).toBe(true);
+    expect(canAccess(context, 'workflow.update', target)).toBe(false);
+    expect(canAccess(context, 'workflow.delete', target)).toBe(false);
+  });
+
+  it('allows super admins to access organization content but not secret material', () => {
+    const context = makeContext({
+      isSuperAdmin: true,
+      organizationMembership: null,
+    });
+
+    expect(canAccess(context, 'workflow.read', {
+      organizationId: 'org-2',
+      resourceType: 'workflow',
+      resourceId: 'workflow-1',
+    })).toBe(true);
+
+    expect(canAccess(context, 'platform.super_admins.manage', {
+      containsSecretMaterial: true,
+    })).toBe(false);
+  });
+
+  it('throws ForbiddenError from requirePermission on denied access', () => {
+    const context = makeContext();
+
+    expect(() => requirePermission(context, 'skill.publish', {
+      organizationId: 'org-1',
+      resourceType: 'skill',
+      resourceId: 'skill-1',
+    })).toThrow(ForbiddenError);
+  });
+
+  it('allows only super admins to use platform management actions', () => {
+    expect(canAccessPlatform(makeUserContext(), 'platform.super_admins.manage')).toBe(false);
+    expect(canAccessPlatform(makeUserContext({ isSuperAdmin: true }), 'platform.super_admins.manage')).toBe(true);
+    expect(canAccessPlatform(makeUserContext({ isSuperAdmin: true }), 'organization.members.manage')).toBe(false);
+  });
+
+  it('blocks platform management against secret material', () => {
+    const context = makeUserContext({ isSuperAdmin: true });
+
+    expect(canAccessPlatform(context, 'platform.super_admins.manage', {
+      containsSecretMaterial: true,
+    })).toBe(false);
+    expect(() => requirePlatformPermission(context, 'platform.super_admins.manage', {
+      containsSecretMaterial: true,
+    })).toThrow(ForbiddenError);
+  });
+
+  it('allows organization admins to manage members while denying ordinary members', () => {
+    const memberContext = makeContext();
+    const adminContext = makeContext({
+      organizationMembership: {
+        organizationId: 'org-1',
+        userId: 'user-1',
+        role: 'org_admin',
+        status: 'active',
+        organization: {
+          id: 'org-1',
+          name: 'Org One',
+          slug: 'org-one',
+          status: 'active',
+        },
+      },
+    });
+
+    expect(canAccess(memberContext, 'organization.members.manage', { organizationId: 'org-1' })).toBe(false);
+    expect(canAccess(adminContext, 'organization.members.manage', { organizationId: 'org-1' })).toBe(true);
+  });
+
+  it('keeps department managers inside inherited department scope', () => {
+    const context = makeContext({
+      departments: [
+        {
+          id: 'dept-parent',
+          organizationId: 'org-1',
+          parentDepartmentId: null,
+          name: 'Parent',
+          slug: 'parent',
+        },
+        {
+          id: 'dept-child',
+          organizationId: 'org-1',
+          parentDepartmentId: 'dept-parent',
+          name: 'Child',
+          slug: 'child',
+        },
+        {
+          id: 'dept-sibling',
+          organizationId: 'org-1',
+          parentDepartmentId: null,
+          name: 'Sibling',
+          slug: 'sibling',
+        },
+      ],
+      departmentMemberships: [{
+        departmentId: 'dept-parent',
+        userId: 'user-1',
+        role: 'department_manager',
+      }],
+    });
+
+    expect(canAccess(context, 'organization.departments.manage', {
+      organizationId: 'org-1',
+      departmentId: 'dept-child',
+    })).toBe(true);
+    expect(canAccess(context, 'organization.departments.manage', {
+      organizationId: 'org-1',
+      departmentId: 'dept-sibling',
+    })).toBe(false);
+  });
+
+  it('keeps team managers inside their own team scope', () => {
+    const context = makeContext({
+      teamMemberships: [{
+        teamId: 'team-1',
+        organizationId: 'org-1',
+        departmentId: null,
+        userId: 'user-1',
+        role: 'team_manager',
+      }],
+    });
+
+    expect(canAccess(context, 'organization.teams.manage', {
+      organizationId: 'org-1',
+      teamId: 'team-1',
+    })).toBe(true);
+    expect(canAccess(context, 'organization.teams.manage', {
+      organizationId: 'org-1',
+      teamId: 'team-2',
+    })).toBe(false);
+  });
+});

@@ -16,15 +16,23 @@ Never commit:
 - generated runtime registry data under `data/`;
 - `.dwp/` plan state or `tmp/` scratch artifacts containing user data.
 
-`BATTLEFLOW_SUPABASE_SERVICE_ROLE_KEY` and `BATTLEFLOW_DATABASE_URL` are server-only. Do not expose them through client components or `/api/supabase-config`.
+`BATTLEFLOW_SUPABASE_SERVICE_ROLE_KEY`, `BATTLEFLOW_DATABASE_URL`, `BATTLEFLOW_SUPER_ADMIN_EMAILS`, and `BATTLEFLOW_SUPER_ADMIN_USER_IDS` are server-only. Do not expose them through client components or `/api/supabase-config`.
 
 ## Authentication and Authorization
 
-- Browser auth uses Supabase session state through `getSupabaseBrowserClientWithRetry`.
+- First-party auth helpers under `src/lib/auth/` resolve HttpOnly session cookies against Postgres rows through `BATTLEFLOW_DATABASE_URL`.
+- Passwords are hashed with Node's built-in `scrypt` KDF. Store only password hashes, session token hashes, and invitation token hashes. Never log or return plaintext auth tokens.
+- Session cookies and active-organization cookies are HttpOnly, SameSite Lax, path-scoped to `/`, and Secure in production.
+- The first release intentionally excludes email verification, password reset, and invitation email delivery; do not document or expose those flows as available product behavior.
+- Browser Supabase session state remains legacy until affected routes are migrated.
 - Server Supabase access may use the service role key when no user token is provided.
-- Server Postgres access uses `BATTLEFLOW_DATABASE_URL` for knowledge-store operations only.
-- API routes that mutate team/user data should prefer explicit user/session checks before production hardening.
+- Protected API routes must use shared auth context and permission helpers before reading or mutating organization data.
+- Platform super admin bootstrap runs only on the server when a signed-in user matches `BATTLEFLOW_SUPER_ADMIN_EMAILS` or `BATTLEFLOW_SUPER_ADMIN_USER_IDS`. API responses and UI state must never return the configured bootstrap values.
+- Super admin product access can view and administer organization content, but it must still be blocked from secret material such as connection strings, service role keys, environment variables, and raw auth tokens.
+- Super admin grant and revoke changes must write audit events, and the last enabled super admin must not be revoked through normal management APIs.
+- Skill, workflow, knowledge-base, PRD, snapshot, milestone, and chat routes must resolve first-party auth and Postgres-backed resource permissions before returning file-backed package assets, workflow outputs, or prompt context.
 - Any change that broadens service-role usage requires a security review.
+- Operational bootstrap, backfill, and recovery procedures live in `docs/ACCOUNT_ORG_PERMISSION_RUNBOOK.md`.
 
 ## Database Access
 

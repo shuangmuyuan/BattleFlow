@@ -4,16 +4,19 @@ Product workspace UI for BattleFlow.
 
 ## Pages
 
-- `layout.tsx` provides the fixed dashboard shell, sidebar, mobile nav, theme toggle, and optional auth menu.
+- `layout.tsx` provides the fixed protected dashboard shell, sidebar, mobile nav, organization selector, theme toggle, and account menu.
 - `page.tsx` shows aggregate counts, quick actions, recent workflows, and recent Skills.
 - `skills/page.tsx` manages Skill listing, import, review, version history, rollback, and archive flows.
 - `workflows/page.tsx` manages workspaces, workflow creation, step execution, context files, snapshots, and output review.
 - `knowledge/page.tsx` manages knowledge-base surfaces.
 - `demos/page.tsx` provides demo generation surfaces.
+- `admin/page.tsx` manages organization members, departments, cross-department teams, invitation links, and gated admin readiness surfaces.
 
 ## Layout Rules
 
 - Keep the outer shell fixed to the viewport with internal scroll regions.
+- Load `/api/auth/me` before rendering protected dashboard content; redirect unauthenticated users to `/login`.
+- Redirect authenticated users without organizations to `/onboarding`.
 - Preserve mobile navigation and horizontal overflow behavior.
 - Avoid layout shifts caused by dynamic content.
 - When adding overlays, use `src/components/ui` wrappers so viewport-boundary checks remain valid.

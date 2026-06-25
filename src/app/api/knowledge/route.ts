@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { canAccess, requireOrganizationContext, requirePermission } from '@/lib/auth/server';
+import { AuthError } from '@/lib/auth/types';
 import {
   addKnowledgeDocuments,
   createKnowledgeBase,
@@ -77,25 +79,50 @@ function parseDocuments(value: unknown): KnowledgeDocumentInput[] {
   });
 }
 
+function canAccessKnowledgeBase(
+  context: Awaited<ReturnType<typeof requireOrganizationContext>>,
+  action: string,
+  knowledgeBase: { id: string; organization_id: string; created_by: string | null },
+): boolean {
+  return canAccess(context, action, {
+    organizationId: knowledgeBase.organization_id,
+    resourceType: 'knowledge_base',
+    resourceId: knowledgeBase.id,
+    ownerUserId: knowledgeBase.created_by,
+  });
+}
+
 // GET /api/knowledge - List knowledge bases or search
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const query = searchParams.get('query');
-
   try {
+    const context = await requireOrganizationContext(request);
+    const { searchParams } = new URL(request.url);
+    const query = searchParams.get('query');
+
     if (!isKnowledgeDatabaseConfigured()) {
       return query ? knowledgeUnavailableResponse(503) : knowledgeUnavailableResponse(200);
     }
 
     // List knowledge bases
     if (!query) {
-      const knowledgeBases = await listKnowledgeBases();
+      const knowledgeBases = (await listKnowledgeBases())
+        .filter((knowledgeBase) => knowledgeBase.organization_id === context.activeOrganization.id)
+        .filter((knowledgeBase) => canAccessKnowledgeBase(context, 'knowledge_base.read', knowledgeBase));
       return NextResponse.json({ knowledgeBases });
+    }
+
+    const allKnowledgeBases = (await listKnowledgeBases())
+      .filter((knowledgeBase) => knowledgeBase.organization_id === context.activeOrganization.id)
+      .filter((knowledgeBase) => canAccessKnowledgeBase(context, 'knowledge_base.read', knowledgeBase));
+    const allowedKnowledgeBaseIds = allKnowledgeBases.map((knowledgeBase) => knowledgeBase.id);
+    if (allowedKnowledgeBaseIds.length === 0) {
+      return NextResponse.json({ results: [], serviceUnavailable: false }, { status: 200 });
     }
 
     const results = await searchKnowledgeDocuments({
       query,
       topK: readTopK(searchParams.get('topK')),
+      knowledgeBaseIds: allowedKnowledgeBaseIds,
     });
 
     return NextResponse.json({
@@ -104,8 +131,11 @@ export async function GET(request: NextRequest) {
     }, { status: 200 });
   } catch (error) {
     console.error('Knowledge GET error:', error);
+    if (error instanceof AuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    }
     if (isKnowledgeServiceConfigError(error)) {
-      return query ? knowledgeUnavailableResponse(503) : knowledgeUnavailableResponse(200);
+      return knowledgeUnavailableResponse(503);
     }
     return NextResponse.json({ error: 'Failed to access knowledge base' }, { status: 500 });
   }
@@ -114,6 +144,7 @@ export async function GET(request: NextRequest) {
 // POST /api/knowledge - Create knowledge base or add documents
 export async function POST(request: NextRequest) {
   try {
+    const context = await requireOrganizationContext(request);
     if (!isKnowledgeDatabaseConfigured()) {
       return knowledgeUnavailableResponse(503);
     }
@@ -137,14 +168,21 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Name is required' }, { status: 400 });
       }
 
+      requirePermission(context, 'knowledge_base.create', {
+        organizationId: context.activeOrganization.id,
+        resourceType: 'knowledge_base',
+        resourceId: 'new',
+        ownerUserId: context.user.id,
+      });
+
       const knowledgeBase = await createKnowledgeBase({
         name,
         description: readString(body.description) ?? null,
-        organizationId: readString(body.organization_id) ?? null,
+        organizationId: context.activeOrganization.id,
         sourceType: readString(body.source_type) ?? null,
         connectionConfig: readRecord(body.connection_config),
         datasetName: readString(body.dataset_name) ?? null,
-        createdBy: readString(body.created_by) ?? null,
+        createdBy: context.user.id,
       });
 
       return NextResponse.json({ knowledgeBase });
@@ -158,6 +196,17 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Knowledge base ID and documents are required' }, { status: 400 });
       }
 
+      const knowledgeBase = (await listKnowledgeBases()).find((item) => item.id === knowledgeBaseId) ?? null;
+      if (!knowledgeBase || knowledgeBase.organization_id !== context.activeOrganization.id) {
+        return NextResponse.json({ error: 'Knowledge base not found' }, { status: 404 });
+      }
+      requirePermission(context, 'knowledge_base.update', {
+        organizationId: knowledgeBase.organization_id,
+        resourceType: 'knowledge_base',
+        resourceId: knowledgeBase.id,
+        ownerUserId: knowledgeBase.created_by,
+      });
+
       const result = await addKnowledgeDocuments(knowledgeBaseId, parseDocuments(body.documents));
 
       return NextResponse.json({
@@ -170,6 +219,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
   } catch (error) {
     console.error('Knowledge POST error:', error);
+    if (error instanceof AuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    }
     if (isKnowledgeServiceConfigError(error)) {
       return knowledgeUnavailableResponse(503);
     }
