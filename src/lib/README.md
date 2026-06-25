@@ -22,7 +22,8 @@ Shared application logic.
 - Treat imported Skills and uploaded files as untrusted input.
 - Do not move registry state into tracked source directories.
 - Treat `SKILL.md` as the source of truth for method instructions. Registry fields such as methodology, checklist, prompt template, and outputs are compatibility projections, not separate canonical data.
-- Keep Skill identity and presentation separate: `id` is the stable machine key, while `display_name` is the human-facing label.
+- Keep Skill identity and presentation separate: `skill_id` is the logical duplicate/update key, `id` is the internal registry record key, and `display_name` is the human-facing label.
+- Keep review work separate from usable Skills. Team imports and personal publish submissions create `review_requests`; only approval creates or updates a team Skill.
 
 ## Knowledge Repository Rules
 

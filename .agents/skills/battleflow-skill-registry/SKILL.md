@@ -24,10 +24,11 @@ Use this skill for work around `src/lib/skill-registry.ts`, `/api/skills`, offic
 3. Treat uploaded, path-imported, and Git-imported Skill content as untrusted data.
 4. When changing package asset loading, keep scripts/templates/tools/references data-only: discover only regular files under intended package folders, bound text content, keep binary/oversized files metadata-only, and never execute imported scripts automatically.
 5. When exposing package assets to chat runtime, frame them as untrusted reference material and keep their prompt budget separate from uploaded workflow files.
-6. Preserve official Skill IDs unless deliberately migrating downstream state.
-7. Update `skills/official/*/CHANGELOG.md` when changing a seeded official Skill's behavior or output structure.
-8. Keep API status codes and JSON response shapes explicit.
-9. Run validation.
+6. Keep review work separate from usable Skills: team imports and personal publish submissions should create `review_requests`; approval is what creates or updates team Skills.
+7. Preserve official Skill IDs unless deliberately migrating downstream state.
+8. Update `skills/official/*/CHANGELOG.md` when changing a seeded official Skill's behavior or output structure.
+9. Keep API status codes and JSON response shapes explicit.
+10. Run validation.
 
 ## Validation
 
