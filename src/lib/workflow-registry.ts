@@ -15,6 +15,7 @@ export type WorkflowValidationOutcome = 'pass' | 'needs_revision' | 'blocked' | 
 export type WorkflowStepValidationStatus = 'not_started' | 'running' | 'passed' | 'failed' | 'error';
 export type WorkflowStepValidationAttemptStatus = 'running' | 'passed' | 'failed' | 'error';
 export type WorkflowStepSnapshotType = 'auto' | 'manual' | 'validation_candidate';
+export type WorkflowDemoHandoffStatus = 'queued' | 'ready' | 'running' | 'succeeded' | 'failed' | 'canceled';
 
 export interface WorkflowStepValidationFindingRecord {
   id: string;
@@ -129,6 +130,24 @@ export interface WorkflowStepSnapshotRecord {
   created_at: string;
 }
 
+export interface WorkflowDemoHandoffRecord {
+  id: string;
+  workflowId: string;
+  stepId: string;
+  externalWorkflowId: string;
+  externalProjectKey: string;
+  title: string;
+  documentTitle: string;
+  documentFormat: 'markdown';
+  handoffId?: string;
+  studioUrl?: string;
+  directStudioUrl?: string;
+  status: WorkflowDemoHandoffStatus;
+  error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface WorkflowChatMessageRecord {
   role: 'user' | 'assistant';
   content: string;
@@ -199,6 +218,7 @@ export interface WorkflowRecord {
   stepChats: Record<string, WorkflowChatMessageRecord[]>;
   skillDrafts: Record<string, WorkflowSkillDraftRecord>;
   validationAttempts: WorkflowStepValidationAttemptRecord[];
+  demoHandoffs: WorkflowDemoHandoffRecord[];
   created_at: string;
   updated_at: string;
 }
@@ -430,6 +450,89 @@ function normalizeStepSnapshot(
   };
 }
 
+function normalizeDemoHandoffStatus(value: unknown): WorkflowDemoHandoffStatus {
+  return value === 'queued'
+    || value === 'running'
+    || value === 'succeeded'
+    || value === 'failed'
+    || value === 'canceled'
+    ? value
+    : 'ready';
+}
+
+function normalizeDemoHandoff(
+  value: Partial<WorkflowDemoHandoffRecord>,
+  index: number,
+  workflowId: string,
+): WorkflowDemoHandoffRecord {
+  const now = nowIso();
+  const stepId = typeof value.stepId === 'string' ? value.stepId : '';
+  const title = typeof value.title === 'string' ? value.title : 'Untitled Demo';
+  return {
+    id: value.id || uniqueId('demo-handoff', `${stepId || 'step'}-${index + 1}`),
+    workflowId: value.workflowId || workflowId,
+    stepId,
+    externalWorkflowId: typeof value.externalWorkflowId === 'string' ? value.externalWorkflowId : stepId,
+    externalProjectKey: typeof value.externalProjectKey === 'string' ? value.externalProjectKey : workflowId,
+    title,
+    documentTitle: typeof value.documentTitle === 'string' ? value.documentTitle : title,
+    documentFormat: 'markdown',
+    handoffId: typeof value.handoffId === 'string' ? value.handoffId : undefined,
+    studioUrl: typeof value.studioUrl === 'string' ? value.studioUrl : undefined,
+    directStudioUrl: typeof value.directStudioUrl === 'string' ? value.directStudioUrl : undefined,
+    status: normalizeDemoHandoffStatus(value.status),
+    error: typeof value.error === 'string' ? value.error : undefined,
+    created_at: value.created_at || now,
+    updated_at: value.updated_at || now,
+  };
+}
+
+export function normalizeWorkflowDemoHandoffs(
+  value: unknown,
+  workflowId: string,
+): WorkflowDemoHandoffRecord[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is Partial<WorkflowDemoHandoffRecord> => (
+      Boolean(item) && typeof item === 'object' && !Array.isArray(item)
+    ))
+    .map((item, index) => normalizeDemoHandoff(item, index, workflowId));
+}
+
+export function getWorkflowDemoHandoffForStep(
+  workflow: Pick<WorkflowRecord, 'demoHandoffs'>,
+  stepId: string,
+): WorkflowDemoHandoffRecord | undefined {
+  return workflow.demoHandoffs.find((handoff) => handoff.stepId === stepId && Boolean(handoff.studioUrl));
+}
+
+export function upsertWorkflowDemoHandoff(
+  workflow: WorkflowRecord,
+  handoff: Partial<WorkflowDemoHandoffRecord>,
+): WorkflowRecord {
+  const now = nowIso();
+  const normalized = normalizeDemoHandoff({
+    ...handoff,
+    workflowId: handoff.workflowId || workflow.id,
+    externalProjectKey: handoff.externalProjectKey || workflow.id,
+    updated_at: handoff.updated_at || now,
+  }, workflow.demoHandoffs.length, workflow.id);
+  const hasSameStep = (item: WorkflowDemoHandoffRecord) => (
+    Boolean(normalized.stepId) && item.stepId === normalized.stepId
+  );
+  const replaced = workflow.demoHandoffs.some((item) => item.id === normalized.id || hasSameStep(item));
+
+  return {
+    ...workflow,
+    demoHandoffs: replaced
+      ? workflow.demoHandoffs.map((item) => (
+        item.id === normalized.id || hasSameStep(item) ? normalized : item
+      ))
+      : [normalized, ...workflow.demoHandoffs],
+    updated_at: now,
+  };
+}
+
 function normalizeStepChats(value: unknown): Record<string, WorkflowChatMessageRecord[]> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return Object.fromEntries(
@@ -628,6 +731,7 @@ function normalizeWorkflow(workflow: Partial<WorkflowRecord>): WorkflowRecord {
     stepChats: normalizeStepChats(workflow.stepChats),
     skillDrafts: normalizeSkillDrafts(workflow.skillDrafts),
     validationAttempts: normalizeValidationAttempts(workflow.validationAttempts, workflow.id || ''),
+    demoHandoffs: normalizeWorkflowDemoHandoffs(workflow.demoHandoffs, workflow.id || ''),
     created_at: workflow.created_at || now,
     updated_at: now,
   };
