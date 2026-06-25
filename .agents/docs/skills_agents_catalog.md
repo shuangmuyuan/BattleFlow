@@ -9,6 +9,7 @@ This catalog must match `.agents/skills` and `.agents/agents`.
 | DeepWorkPlan | `.agents/skills/deepworkplan/SKILL.md` | Installed DWP router and sub-skills for create, execute, refine, resume, status, verify, onboard, and author. |
 | BattleFlow Next.js UI | `.agents/skills/battleflow-nextjs-ui/SKILL.md` | Procedure for dashboard, component, responsive, overlay, styling, and hydration-safe UI changes. |
 | BattleFlow Skill Registry | `.agents/skills/battleflow-skill-registry/SKILL.md` | Procedure for Skill registry, import, review, publishing, rollback, and official seed changes. |
+| BattleFlow Workflow Validation | `.agents/skills/battleflow-workflow-validation/SKILL.md` | Procedure for workflow validation gates, candidate isolation, read-only Agent checks, and step progression. |
 
 ## Agents
 
@@ -18,4 +19,3 @@ This catalog must match `.agents/skills` and `.agents/agents`.
 | product-planning-reviewer | `.agents/agents/product-planning-reviewer.md` | standard | Reviews Skill methodology, workflow outputs, and PRD-oriented planning content. |
 | security-reviewer | `.agents/agents/security-reviewer.md` | heavy | Reviews auth, secrets, imports, file-system, and agent/CLI permission changes. |
 | docs-maintainer | `.agents/agents/docs-maintainer.md` | light | Keeps docs and agent-kit catalogs synchronized with code changes. |
-
