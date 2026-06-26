@@ -63,6 +63,26 @@ Use `pnpm` only. Do not use `npm` or `yarn` for dependency or script execution i
 | Production build | `pnpm build` | Installs dependencies, runs `next build`, then bundles `src/server.ts` with `tsup`. |
 | Production start | `BATTLEFLOW_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start` | Runs `dist/server.js`; requires a prior build. |
 
+## Remote Test Deployment
+
+After code development and local validation, test BattleFlow through the shared remote Linux host instead of relying only on a local unauthenticated dev server.
+
+Required flow:
+
+1. Connect to the remote server with `ssh boxhub-r`.
+2. Deploy the service under `/root/data/BattleFlow` on that server.
+3. Install or refresh dependencies with `pnpm install` when `package.json` or `pnpm-lock.yaml` changed.
+4. Run the repository validation gate before serving test traffic:
+   - `pnpm validate`
+   - `pnpm build` for server/runtime, dependency, route-handler, or deployment-impacting changes.
+5. Start the remote service from `/root/data/BattleFlow`. Prefer the production-like command for feature verification:
+   - `BATTLEFLOW_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start`
+6. Establish a local SSH tunnel and access the service through the tunnel:
+   - `ssh -N -L 5001:127.0.0.1:5100 boxhub-r`
+   - open `http://localhost:5001`
+
+Keep secrets on the remote server only. Do not paste or commit `BATTLEFLOW_DATABASE_URL`, `FRIEREN_DEMO_HMAC_SECRET`, Supabase service-role keys, or other credentials. If port `5001` is already in use locally, choose another local port for the left side of the tunnel, for example `ssh -N -L 5011:127.0.0.1:5100 boxhub-r`.
+
 ## Mandatory Rules
 
 - Language: code, comments, docs, agent files, and commit messages MUST be in English from this point forward. Existing Chinese UI copy and seeded product Skill content may remain until intentionally localized.
