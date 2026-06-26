@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireOrganizationContext } from '@/lib/auth/server';
 import { AuthError } from '@/lib/auth/types';
 import {
+  deleteWorkflowBusinessMetadata,
+  deleteWorkspaceBusinessMetadata,
   filterAuthorizedWorkspaces,
   filterAuthorizedWorkflows,
   requireOwnedCreatePermission,
@@ -17,6 +19,7 @@ import {
   deleteWorkspace,
   getWorkflow,
   getWorkflowState,
+  updateWorkspace,
   upsertWorkflow,
 } from '@/lib/workflow-registry';
 
@@ -105,7 +108,21 @@ export async function POST(request: NextRequest) {
       if (!id) return jsonError('Workspace ID is required', 400);
       await requireWorkspaceAccess(context, id, 'workflow.delete');
       await deleteWorkspace(id);
+      await deleteWorkspaceBusinessMetadata(id);
       return jsonOk({ success: true });
+    }
+
+    if (action === 'update_workspace') {
+      const id = String(body.id || '');
+      if (!id) return jsonError('Workspace ID is required', 400);
+      await requireWorkspaceAccess(context, id, 'workflow.update');
+      const workspace = await updateWorkspace({
+        id,
+        name: String(body.name || ''),
+        description: typeof body.description === 'string' ? body.description : '',
+      });
+      await upsertWorkspaceBusinessMetadata(context, workspace);
+      return jsonOk({ workspace });
     }
 
     if (action === 'create_workflow') {
@@ -161,6 +178,7 @@ export async function DELETE(request: NextRequest) {
 
     await requireWorkflowAccess(context, id, 'workflow.delete');
     await deleteWorkflow(id);
+    await deleteWorkflowBusinessMetadata(id);
     return jsonOk({ success: true });
   } catch (error) {
     console.error('Workflows DELETE error:', error);

@@ -3,13 +3,28 @@
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-CREATE OR REPLACE FUNCTION battleflow_set_updated_at()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
+DO $$
 BEGIN
-  NEW.updated_at = now();
-  RETURN NEW;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE p.proname = 'battleflow_set_updated_at'
+      AND n.nspname = current_schema()
+      AND pg_get_function_identity_arguments(p.oid) = ''
+  ) THEN
+    EXECUTE $function$
+      CREATE FUNCTION battleflow_set_updated_at()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $body$
+      BEGIN
+        NEW.updated_at = now();
+        RETURN NEW;
+      END;
+      $body$;
+    $function$;
+  END IF;
 END;
 $$;
 
@@ -168,9 +183,8 @@ CREATE TABLE IF NOT EXISTS platform_admins (
 
 CREATE INDEX IF NOT EXISTS platform_admins_enabled_idx ON platform_admins (enabled);
 
-
 CREATE TABLE IF NOT EXISTS skills (
-  id varchar(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  id varchar(128) PRIMARY KEY DEFAULT gen_random_uuid()::text,
   organization_id varchar(36) REFERENCES organizations(id) ON DELETE CASCADE,
   name varchar(128) NOT NULL,
   description text,
@@ -212,8 +226,8 @@ CREATE INDEX IF NOT EXISTS skills_owner_user_id_idx ON skills (owner_user_id);
 CREATE INDEX IF NOT EXISTS skills_created_by_idx ON skills (created_by);
 
 CREATE TABLE IF NOT EXISTS skill_versions (
-  id varchar(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  skill_id varchar(36) NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+  id varchar(128) PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  skill_id varchar(128) NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
   version varchar(20) NOT NULL,
   definition jsonb NOT NULL,
   asset_manifest jsonb NOT NULL DEFAULT '[]'::jsonb,
@@ -226,24 +240,38 @@ CREATE INDEX IF NOT EXISTS skill_versions_skill_id_idx ON skill_versions (skill_
 CREATE UNIQUE INDEX IF NOT EXISTS skill_versions_skill_version_idx ON skill_versions (skill_id, version);
 
 CREATE TABLE IF NOT EXISTS skill_reviews (
-  id varchar(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  skill_id varchar(36) NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
-  version_id varchar(36) REFERENCES skill_versions(id) ON DELETE SET NULL,
+  id varchar(128) PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  skill_id varchar(128) NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+  version_id varchar(128) REFERENCES skill_versions(id) ON DELETE SET NULL,
   status varchar(24) NOT NULL DEFAULT 'pending_review',
   note text,
+  payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+  is_active boolean NOT NULL DEFAULT true,
   requested_by varchar(36) REFERENCES users(id),
   reviewed_by varchar(36) REFERENCES users(id),
   requested_at timestamptz NOT NULL DEFAULT now(),
   reviewed_at timestamptz
 );
 
+ALTER TABLE skill_reviews
+  ADD COLUMN IF NOT EXISTS payload jsonb DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS is_active boolean DEFAULT true;
+
+UPDATE skill_reviews SET payload = '{}'::jsonb WHERE payload IS NULL;
+UPDATE skill_reviews SET is_active = true WHERE is_active IS NULL;
+
+ALTER TABLE skill_reviews
+  ALTER COLUMN payload SET NOT NULL,
+  ALTER COLUMN is_active SET NOT NULL;
+
 CREATE INDEX IF NOT EXISTS skill_reviews_skill_id_idx ON skill_reviews (skill_id);
 CREATE INDEX IF NOT EXISTS skill_reviews_status_idx ON skill_reviews (status);
+CREATE INDEX IF NOT EXISTS skill_reviews_active_idx ON skill_reviews (is_active);
 
 CREATE TABLE IF NOT EXISTS skill_assets (
-  id varchar(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  skill_id varchar(36) NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
-  version_id varchar(36) REFERENCES skill_versions(id) ON DELETE SET NULL,
+  id varchar(128) PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  skill_id varchar(128) NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+  version_id varchar(128) REFERENCES skill_versions(id) ON DELETE SET NULL,
   path text NOT NULL,
   uri text,
   content_type varchar(128),
@@ -258,7 +286,7 @@ CREATE INDEX IF NOT EXISTS skill_assets_version_id_idx ON skill_assets (version_
 CREATE INDEX IF NOT EXISTS skill_assets_checksum_idx ON skill_assets (checksum);
 
 CREATE TABLE IF NOT EXISTS workflow_workspaces (
-  id varchar(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  id varchar(128) PRIMARY KEY DEFAULT gen_random_uuid()::text,
   organization_id varchar(36) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   name varchar(160) NOT NULL,
   description text,
@@ -271,31 +299,39 @@ CREATE INDEX IF NOT EXISTS workflow_workspaces_org_id_idx ON workflow_workspaces
 CREATE INDEX IF NOT EXISTS workflow_workspaces_created_by_idx ON workflow_workspaces (created_by);
 
 CREATE TABLE IF NOT EXISTS workflows (
-  id varchar(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  workspace_id varchar(36) REFERENCES workflow_workspaces(id) ON DELETE SET NULL,
+  id varchar(128) PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  workspace_id varchar(128) REFERENCES workflow_workspaces(id) ON DELETE SET NULL,
   organization_id varchar(36) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   name varchar(200) NOT NULL,
   description text,
   status varchar(20) NOT NULL DEFAULT 'draft',
   current_step_index integer DEFAULT 0,
   model_id varchar(64) DEFAULT 'doubao-seed-2-0-pro-260215',
+  state jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_by varchar(36) NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz
 );
 
 ALTER TABLE workflows
-  ADD COLUMN IF NOT EXISTS workspace_id varchar(36);
+  ADD COLUMN IF NOT EXISTS workspace_id varchar(128),
+  ADD COLUMN IF NOT EXISTS state jsonb DEFAULT '{}'::jsonb;
+
+UPDATE workflows SET state = '{}'::jsonb WHERE state IS NULL;
+
+ALTER TABLE workflows
+  ALTER COLUMN state SET NOT NULL;
 
 CREATE INDEX IF NOT EXISTS workflows_org_id_idx ON workflows (organization_id);
 CREATE INDEX IF NOT EXISTS workflows_workspace_id_idx ON workflows (workspace_id);
 CREATE INDEX IF NOT EXISTS workflows_created_by_idx ON workflows (created_by);
 CREATE INDEX IF NOT EXISTS workflows_status_idx ON workflows (status);
+CREATE INDEX IF NOT EXISTS workflows_updated_at_idx ON workflows (updated_at);
 
 CREATE TABLE IF NOT EXISTS workflow_steps (
-  id varchar(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  workflow_id varchar(36) NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
-  skill_id varchar(36) REFERENCES skills(id),
+  id varchar(128) PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  workflow_id varchar(128) NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+  skill_id varchar(128) REFERENCES skills(id),
   step_index integer NOT NULL,
   name varchar(200) NOT NULL,
   description text,
@@ -313,9 +349,9 @@ CREATE INDEX IF NOT EXISTS workflow_steps_workflow_id_idx ON workflow_steps (wor
 CREATE INDEX IF NOT EXISTS workflow_steps_skill_id_idx ON workflow_steps (skill_id);
 
 CREATE TABLE IF NOT EXISTS step_snapshots (
-  id varchar(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  step_id varchar(36) NOT NULL REFERENCES workflow_steps(id) ON DELETE CASCADE,
-  workflow_id varchar(36) NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+  id varchar(128) PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  step_id varchar(128) NOT NULL REFERENCES workflow_steps(id) ON DELETE CASCADE,
+  workflow_id varchar(128) NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
   output text NOT NULL,
   conversation jsonb,
   snapshot_type varchar(20) NOT NULL DEFAULT 'auto',
@@ -328,8 +364,8 @@ CREATE INDEX IF NOT EXISTS step_snapshots_step_id_idx ON step_snapshots (step_id
 CREATE INDEX IF NOT EXISTS step_snapshots_workflow_id_idx ON step_snapshots (workflow_id);
 
 CREATE TABLE IF NOT EXISTS workflow_snapshots (
-  id varchar(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  workflow_id varchar(36) NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+  id varchar(128) PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  workflow_id varchar(128) NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
   snapshot jsonb NOT NULL,
   snapshot_type varchar(20) NOT NULL DEFAULT 'auto',
   label varchar(128),
@@ -341,9 +377,9 @@ CREATE INDEX IF NOT EXISTS workflow_snapshots_workflow_id_idx ON workflow_snapsh
 
 CREATE TABLE IF NOT EXISTS milestones (
   id varchar(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  workflow_id varchar(36) NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
-  workflow_snapshot_id varchar(36) REFERENCES workflow_snapshots(id),
-  step_snapshot_id varchar(36) REFERENCES step_snapshots(id),
+  workflow_id varchar(128) NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+  workflow_snapshot_id varchar(128) REFERENCES workflow_snapshots(id),
+  step_snapshot_id varchar(128) REFERENCES step_snapshots(id),
   name varchar(128) NOT NULL,
   description text,
   milestone_type varchar(20) NOT NULL DEFAULT 'manual',
@@ -355,7 +391,7 @@ CREATE INDEX IF NOT EXISTS milestones_workflow_id_idx ON milestones (workflow_id
 
 CREATE TABLE IF NOT EXISTS prd_documents (
   id varchar(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  workflow_id varchar(36) NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+  workflow_id varchar(128) NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
   organization_id varchar(36) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   title varchar(200) NOT NULL,
   content text NOT NULL,
@@ -370,7 +406,7 @@ CREATE INDEX IF NOT EXISTS prd_documents_org_id_idx ON prd_documents (organizati
 
 CREATE TABLE IF NOT EXISTS workflow_assets (
   id varchar(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  workflow_id varchar(36) NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+  workflow_id varchar(128) NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
   asset_type varchar(32) NOT NULL,
   path text,
   uri text,
@@ -384,6 +420,90 @@ CREATE TABLE IF NOT EXISTS workflow_assets (
 
 CREATE INDEX IF NOT EXISTS workflow_assets_workflow_id_idx ON workflow_assets (workflow_id);
 CREATE INDEX IF NOT EXISTS workflow_assets_type_idx ON workflow_assets (asset_type);
+
+-- Business resources use readable registry IDs such as
+-- workflow-体验优化工作流-mqswquxy-76c6bb, not only UUIDs.
+ALTER TABLE IF EXISTS skills
+  ALTER COLUMN id TYPE varchar(128);
+
+ALTER TABLE IF EXISTS skill_reviews
+  DROP CONSTRAINT IF EXISTS skill_reviews_version_id_fkey;
+
+ALTER TABLE IF EXISTS skill_assets
+  DROP CONSTRAINT IF EXISTS skill_assets_version_id_fkey;
+
+ALTER TABLE IF EXISTS skill_versions
+  ALTER COLUMN id TYPE varchar(128),
+  ALTER COLUMN skill_id TYPE varchar(128);
+
+ALTER TABLE IF EXISTS skill_reviews
+  ALTER COLUMN id TYPE varchar(128),
+  ALTER COLUMN skill_id TYPE varchar(128),
+  ALTER COLUMN version_id TYPE varchar(128);
+
+ALTER TABLE IF EXISTS skill_assets
+  ALTER COLUMN id TYPE varchar(128),
+  ALTER COLUMN skill_id TYPE varchar(128),
+  ALTER COLUMN version_id TYPE varchar(128);
+
+DO $$
+BEGIN
+  IF to_regclass('public.skill_reviews') IS NOT NULL
+     AND NOT EXISTS (
+       SELECT 1
+       FROM pg_constraint
+       WHERE conname = 'skill_reviews_version_id_fkey'
+         AND conrelid = 'public.skill_reviews'::regclass
+     ) THEN
+    ALTER TABLE skill_reviews
+      ADD CONSTRAINT skill_reviews_version_id_fkey
+      FOREIGN KEY (version_id) REFERENCES skill_versions(id) ON DELETE SET NULL;
+  END IF;
+
+  IF to_regclass('public.skill_assets') IS NOT NULL
+     AND NOT EXISTS (
+       SELECT 1
+       FROM pg_constraint
+       WHERE conname = 'skill_assets_version_id_fkey'
+         AND conrelid = 'public.skill_assets'::regclass
+     ) THEN
+    ALTER TABLE skill_assets
+      ADD CONSTRAINT skill_assets_version_id_fkey
+      FOREIGN KEY (version_id) REFERENCES skill_versions(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+ALTER TABLE IF EXISTS workflow_workspaces
+  ALTER COLUMN id TYPE varchar(128);
+
+ALTER TABLE IF EXISTS workflows
+  ALTER COLUMN id TYPE varchar(128),
+  ALTER COLUMN workspace_id TYPE varchar(128);
+
+ALTER TABLE IF EXISTS workflow_steps
+  ALTER COLUMN id TYPE varchar(128),
+  ALTER COLUMN workflow_id TYPE varchar(128),
+  ALTER COLUMN skill_id TYPE varchar(128);
+
+ALTER TABLE IF EXISTS step_snapshots
+  ALTER COLUMN id TYPE varchar(128),
+  ALTER COLUMN step_id TYPE varchar(128),
+  ALTER COLUMN workflow_id TYPE varchar(128);
+
+ALTER TABLE IF EXISTS workflow_snapshots
+  ALTER COLUMN id TYPE varchar(128),
+  ALTER COLUMN workflow_id TYPE varchar(128);
+
+ALTER TABLE IF EXISTS milestones
+  ALTER COLUMN workflow_id TYPE varchar(128),
+  ALTER COLUMN workflow_snapshot_id TYPE varchar(128),
+  ALTER COLUMN step_snapshot_id TYPE varchar(128);
+
+ALTER TABLE IF EXISTS prd_documents
+  ALTER COLUMN workflow_id TYPE varchar(128);
+
+ALTER TABLE IF EXISTS workflow_assets
+  ALTER COLUMN workflow_id TYPE varchar(128);
 
 CREATE TABLE IF NOT EXISTS resource_access_grants (
   id varchar(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,

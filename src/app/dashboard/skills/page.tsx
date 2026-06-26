@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Archive, CheckCircle2, Clock3, Download, FileCode2, GitBranch, GitPullRequest, Globe, LockKeyhole, MoreVertical, PackageCheck, RotateCcw, Search, ShieldCheck, Star, Tag, Upload, Users, XCircle } from 'lucide-react';
+import { AlertCircle, Archive, CheckCircle2, Clock3, Download, FileCode2, GitBranch, GitPullRequest, Globe, LockKeyhole, MoreVertical, PackageCheck, RotateCcw, Search, ShieldCheck, Star, Tag, Upload, Users } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -156,12 +156,6 @@ const reviewOperationLabels: Record<SkillReviewOperation, string> = {
   update: '更新 Skill',
 };
 
-const reviewStatusLabels: Record<SkillReviewRequestStatus, string> = {
-  pending: '待审核',
-  approved: '已通过',
-  rejected: '已拒绝',
-};
-
 const sourceLabels: Record<SkillSourceType, string> = {
   local: '本地导入',
   registry: '注册中心',
@@ -262,14 +256,6 @@ function getReviewRequestDisplayName(request: SkillReviewRequest) {
   return name;
 }
 
-function getReviewRequestDescription(request: SkillReviewRequest) {
-  const description = request.description?.trim() || request.submitted_skill.description?.trim();
-  if (!description || emptyDescriptionPattern.test(description)) {
-    return '未填写简介。审核前请重点检查 SKILL.md 的 Purpose、Workflow、Output Contract 和 Acceptance Criteria。';
-  }
-  return description;
-}
-
 function getSourceMeta(skill: Skill) {
   const source = skill.source_uri?.trim();
   if (!source) {
@@ -350,14 +336,8 @@ function StatusBadge({ status }: { status: SkillStatus }) {
   return <Badge variant={variant}>{statusLabels[status]}</Badge>;
 }
 
-function ReviewStatusBadge({ status }: { status: SkillReviewRequestStatus }) {
-  const variant = status === 'approved' ? 'default' : status === 'rejected' ? 'destructive' : 'secondary';
-  return <Badge variant={variant}>{reviewStatusLabels[status]}</Badge>;
-}
-
 export default function SkillsPage() {
   const [skills, setSkills] = useState<Skill[]>([]);
-  const [reviewRequests, setReviewRequests] = useState<SkillReviewRequest[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'all' | SkillScope>('all');
   const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -366,9 +346,6 @@ export default function SkillsPage() {
   const [downloadNotice, setDownloadNotice] = useState<{ fileName: string; previewUrl: string } | null>(null);
   const [reviewRequestSkill, setReviewRequestSkill] = useState<Skill | null>(null);
   const [reviewRequestNote, setReviewRequestNote] = useState('');
-  const [reviewDecisionRequest, setReviewDecisionRequest] = useState<SkillReviewRequest | null>(null);
-  const [reviewDecision, setReviewDecision] = useState<'approved' | 'rejected'>('approved');
-  const [reviewDecisionNote, setReviewDecisionNote] = useState('');
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
@@ -391,11 +368,9 @@ export default function SkillsPage() {
       const data = (await res.json()) as ApiSkillResponse;
       if (!res.ok) throw new Error(data.error || 'Failed to fetch skills');
       setSkills(data.skills || []);
-      setReviewRequests(data.review_requests || []);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
       setSkills([]);
-      setReviewRequests([]);
     } finally {
       setLoading(false);
     }
@@ -430,10 +405,6 @@ export default function SkillsPage() {
       { all: 0, official: 0, team: 0, personal: 0 },
     );
   }, [skills]);
-
-  const pendingReviewRequests = useMemo(() => {
-    return reviewRequests.filter((request) => request.status === 'pending');
-  }, [reviewRequests]);
 
   const reviewRequestTargetSkill = useMemo(() => {
     if (!reviewRequestSkill) return null;
@@ -493,27 +464,6 @@ export default function SkillsPage() {
     if (ok) {
       setReviewRequestSkill(null);
       setReviewRequestNote('');
-    }
-  };
-
-  const handleReviewDecision = async () => {
-    if (!reviewDecisionRequest) return;
-    const ok = await runSkillAction(
-      {
-        action: reviewDecision === 'approved' ? 'approve_publish' : 'reject_review',
-        id: reviewDecisionRequest.id,
-        note: reviewDecisionNote,
-      },
-      reviewDecision === 'approved'
-        ? reviewDecisionRequest.operation === 'update'
-          ? '已通过审核并更新团队 Skill'
-          : '已通过审核并发布到团队仓库'
-        : '已拒绝该团队审核',
-    );
-    if (ok) {
-      setReviewDecisionRequest(null);
-      setReviewDecisionNote('');
-      setReviewDecision('approved');
     }
   };
 
@@ -844,119 +794,6 @@ export default function SkillsPage() {
               <AlertTitle>操作失败</AlertTitle>
               <AlertDescription>{errorMessage}</AlertDescription>
             </Alert>
-          )}
-
-          {pendingReviewRequests.length > 0 && (
-            <section className="flex flex-col gap-3">
-              <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-                <div>
-                  <h2 className="text-base font-semibold tracking-normal">团队审核队列</h2>
-                  <p className="text-sm text-muted-foreground">
-                    {pendingReviewRequests.length} 个待处理提交。审核项不会混入团队 Skill 列表。
-                  </p>
-                </div>
-                <Badge variant="secondary" className="w-fit gap-1.5">
-                  <GitPullRequest />
-                  {pendingReviewRequests.length} pending
-                </Badge>
-              </div>
-              <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-                {pendingReviewRequests.map((request) => {
-                  const displayName = getReviewRequestDisplayName(request);
-                  const isUpdate = request.operation === 'update';
-                  return (
-                    <Card key={request.id} className={`${appCardClassName} border-warning/30 bg-warning/5`}>
-                      <CardHeader className="pb-3">
-                        <div className="flex min-w-0 items-start gap-3">
-                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-warning/30 bg-warning/10 text-warning [&_svg]:h-5 [&_svg]:w-5">
-                            <GitPullRequest />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <CardTitle className="min-w-0 truncate text-base leading-6" title={displayName}>
-                                {displayName}
-                              </CardTitle>
-                              <Badge variant={isUpdate ? 'default' : 'secondary'}>
-                                {reviewOperationLabels[request.operation]}
-                              </Badge>
-                              <ReviewStatusBadge status={request.status} />
-                            </div>
-                            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                              <span className="font-mono">{request.skill_id}</span>
-                              <span>提交于 {formatDate(request.submitted_at)}</span>
-                            </div>
-                          </div>
-                        </div>
-                        <CardDescription className="mt-3 line-clamp-2 text-sm leading-5">
-                          {getReviewRequestDescription(request)}
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent className="flex flex-col gap-3">
-                        <div className="grid grid-cols-1 overflow-hidden rounded-lg border border-border/50 bg-background/70 text-xs sm:grid-cols-3">
-                          <div className="min-w-0 p-3">
-                            <div className="text-muted-foreground">目标</div>
-                            <div className="mt-1 truncate font-medium">团队 Skill</div>
-                          </div>
-                          <div className="min-w-0 border-t border-border/50 p-3 sm:border-l sm:border-t-0">
-                            <div className="text-muted-foreground">当前版本</div>
-                            <div className="mt-1 truncate font-medium">
-                              {request.target_version ? `v${request.target_version}` : '无，审核后新增'}
-                            </div>
-                          </div>
-                          <div className="min-w-0 border-t border-border/50 p-3 sm:border-l sm:border-t-0">
-                            <div className="text-muted-foreground">提交版本</div>
-                            <div className="mt-1 truncate font-medium">v{request.source_version || request.submitted_skill.version}</div>
-                          </div>
-                        </div>
-
-                        {isUpdate && (
-                          <Alert className="border-warning/30 bg-warning/10">
-                            <AlertCircle />
-                            <AlertTitle>当前 Skill 已存在</AlertTitle>
-                            <AlertDescription>
-                              审核通过后会更新 `{request.skill_id}`，并按“{versionBumpLabels[request.version_bump]}”升级版本。
-                            </AlertDescription>
-                          </Alert>
-                        )}
-
-                        {request.submitted_note && (
-                          <div className="rounded-lg border border-border/50 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                            <div className="mb-1 font-medium text-foreground/80">提交说明</div>
-                            <div className="line-clamp-3 whitespace-pre-wrap">{request.submitted_note}</div>
-                          </div>
-                        )}
-
-                        <div className="flex flex-wrap justify-end gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              setReviewDecisionRequest(request);
-                              setReviewDecision('rejected');
-                              setReviewDecisionNote('');
-                            }}
-                          >
-                            <XCircle data-icon="inline-start" />
-                            拒绝
-                          </Button>
-                          <Button
-                            size="sm"
-                            onClick={() => {
-                              setReviewDecisionRequest(request);
-                              setReviewDecision('approved');
-                              setReviewDecisionNote('');
-                            }}
-                          >
-                            <CheckCircle2 data-icon="inline-start" />
-                            通过
-                          </Button>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  );
-                })}
-              </div>
-            </section>
           )}
 
           <div className="rounded-xl border border-border/60 bg-card/80 p-3 shadow-sm shadow-foreground/5">
@@ -1374,81 +1211,6 @@ export default function SkillsPage() {
                 <Button onClick={handleRequestReview} disabled={actionLoading}>
                   <GitPullRequest data-icon="inline-start" />
                   {actionLoading ? '提交中...' : '提交审核'}
-                </Button>
-              </DialogFooter>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={!!reviewDecisionRequest} onOpenChange={(open) => {
-        if (!open) {
-          setReviewDecisionRequest(null);
-          setReviewDecisionNote('');
-          setReviewDecision('approved');
-        }
-      }}>
-        <DialogContent className="max-w-lg">
-          {reviewDecisionRequest && (
-            <>
-              <DialogHeader>
-                <DialogTitle>{reviewDecision === 'approved' ? '审核通过' : '审核拒绝'}</DialogTitle>
-                <DialogDescription>
-                  {reviewDecision === 'approved'
-                    ? reviewDecisionRequest.operation === 'update'
-                      ? '通过后会更新已存在的团队 Skill，并写入新的版本历史。'
-                      : '通过后会发布为新的团队 Skill。'
-                    : '拒绝后不会修改任何团队 Skill。'}
-                </DialogDescription>
-              </DialogHeader>
-              <FieldGroup>
-                <Field>
-                  <FieldLabel>审核项</FieldLabel>
-                  <div className="rounded-md border bg-muted/20 p-3 text-sm">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="font-medium">{getReviewRequestDisplayName(reviewDecisionRequest)}</div>
-                      <Badge variant={reviewDecisionRequest.operation === 'update' ? 'default' : 'secondary'}>
-                        {reviewOperationLabels[reviewDecisionRequest.operation]}
-                      </Badge>
-                    </div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      Skill ID {reviewDecisionRequest.skill_id} · 提交版本 v{reviewDecisionRequest.source_version || reviewDecisionRequest.submitted_skill.version}
-                      {reviewDecisionRequest.target_version ? ` · 当前团队版本 v${reviewDecisionRequest.target_version}` : ''}
-                    </div>
-                    {reviewDecisionRequest.operation === 'update' && (
-                      <div className="mt-3 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning-foreground">
-                        当前 Skill 已存在，确认通过会更新团队 Skill 并按“{versionBumpLabels[reviewDecisionRequest.version_bump]}”升级版本。
-                      </div>
-                    )}
-                    {reviewDecisionRequest.submitted_note && (
-                      <div className="mt-3 whitespace-pre-wrap text-xs text-muted-foreground">
-                        {reviewDecisionRequest.submitted_note}
-                      </div>
-                    )}
-                  </div>
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="review-decision-note">审核意见</FieldLabel>
-                  <Textarea
-                    id="review-decision-note"
-                    value={reviewDecisionNote}
-                    onChange={(event) => setReviewDecisionNote(event.target.value)}
-                    placeholder={reviewDecision === 'approved' ? '可选：记录通过原因或后续使用建议。' : '建议填写拒绝原因，方便提交者修改后重新提交。'}
-                    className="min-h-28 resize-none"
-                  />
-                </Field>
-              </FieldGroup>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setReviewDecisionRequest(null)} disabled={actionLoading}>
-                  取消
-                </Button>
-                <Button
-                  variant={reviewDecision === 'approved' ? 'default' : 'destructive'}
-                  onClick={handleReviewDecision}
-                  disabled={actionLoading}
-                >
-                  {reviewDecision === 'approved' ? <CheckCircle2 data-icon="inline-start" /> : <XCircle data-icon="inline-start" />}
-                  {actionLoading ? '处理中...' : reviewDecision === 'approved' ? '确认通过' : '确认拒绝'}
                 </Button>
               </DialogFooter>
             </>

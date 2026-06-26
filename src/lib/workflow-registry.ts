@@ -1,5 +1,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
+import type { QueryResultRow } from 'pg';
+import { hasPostgresDatabaseConfig, queryPostgres } from '@/storage/database/postgres-client';
 import { cleanExecutableSkillText } from './workflow-skill-draft';
 
 export type WorkflowStatus = 'draft' | 'in_progress' | 'completed';
@@ -741,6 +743,203 @@ function normalizeWorkflow(workflow: Partial<WorkflowRecord>): WorkflowRecord {
   };
 }
 
+function toIsoString(value: unknown, fallback = nowIso()) {
+  if (value instanceof Date) return value.toISOString();
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+interface DatabaseWorkspaceRow extends QueryResultRow {
+  id: string;
+  name: string;
+  description: string | null;
+  created_at: Date | string | null;
+  updated_at: Date | string | null;
+}
+
+interface DatabaseWorkflowRow extends QueryResultRow {
+  id: string;
+  workspace_id: string | null;
+  name: string;
+  description: string | null;
+  status: string;
+  state: unknown;
+  created_at: Date | string | null;
+  updated_at: Date | string | null;
+}
+
+interface DatabaseWorkflowStepRow extends QueryResultRow {
+  id: string;
+  workflow_id: string;
+  skill_id: string | null;
+  step_index: number;
+  name: string;
+  description: string | null;
+  status: string;
+  output: string | null;
+  conversation: unknown;
+  completed_at: Date | string | null;
+  created_at: Date | string | null;
+  updated_at: Date | string | null;
+}
+
+function hasWorkflowStatePayload(value: unknown) {
+  const record = toRecord(value);
+  return typeof record.id === 'string' && Array.isArray(record.steps);
+}
+
+function workspaceFromDatabase(row: DatabaseWorkspaceRow): WorkspaceRecord {
+  const createdAt = toIsoString(row.created_at);
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description || '',
+    created_at: createdAt,
+    updated_at: toIsoString(row.updated_at, createdAt),
+  };
+}
+
+function workflowFromDatabase(
+  row: DatabaseWorkflowRow,
+  stepRows: DatabaseWorkflowStepRow[],
+): WorkflowRecord {
+  const createdAt = toIsoString(row.created_at);
+  const updatedAt = toIsoString(row.updated_at, createdAt);
+  if (hasWorkflowStatePayload(row.state)) {
+    return normalizeWorkflow({
+      ...toRecord(row.state),
+      id: row.id,
+      workspaceId: typeof toRecord(row.state).workspaceId === 'string'
+        ? toRecord(row.state).workspaceId as string
+        : row.workspace_id || '',
+      name: row.name || (toRecord(row.state).name as string | undefined),
+      description: row.description ?? (toRecord(row.state).description as string | undefined),
+      status: row.status === 'completed' || row.status === 'draft' ? row.status : 'in_progress',
+      created_at: createdAt,
+      updated_at: updatedAt,
+    });
+  }
+
+  const steps = stepRows
+    .sort((a, b) => a.step_index - b.step_index)
+    .map((step, index) => normalizeStep({
+      id: step.id,
+      name: step.name,
+      skill_id: step.skill_id || '',
+      step_index: step.step_index,
+      status: step.status as WorkflowStepStatus,
+      output: step.output,
+      completed_at: toIsoString(step.completed_at, ''),
+      created_at: toIsoString(step.created_at, createdAt),
+      updated_at: toIsoString(step.updated_at, updatedAt),
+    }, index));
+  const stepChats = Object.fromEntries(stepRows.flatMap((step) => {
+    if (!Array.isArray(step.conversation)) return [];
+    return [[step.id, step.conversation]];
+  }));
+
+  return normalizeWorkflow({
+    id: row.id,
+    workspaceId: row.workspace_id || '',
+    name: row.name,
+    description: row.description || '',
+    status: row.status === 'completed' || row.status === 'draft' ? row.status : 'in_progress',
+    steps,
+    stepChats,
+    created_at: createdAt,
+    updated_at: updatedAt,
+  });
+}
+
+async function readStoreFromDatabase(): Promise<WorkflowStore | null> {
+  if (!hasPostgresDatabaseConfig()) return null;
+  const [workspaceResult, workflowResult] = await Promise.all([
+    queryPostgres<DatabaseWorkspaceRow>(
+      `
+        SELECT id, name, description, created_at, updated_at
+        FROM workflow_workspaces
+        ORDER BY COALESCE(updated_at, created_at) DESC
+      `,
+    ),
+    queryPostgres<DatabaseWorkflowRow>(
+      `
+        SELECT id, workspace_id, name, description, status, state, created_at, updated_at
+        FROM workflows
+        ORDER BY COALESCE(updated_at, created_at) DESC
+      `,
+    ),
+  ]);
+
+  if (workspaceResult.rows.length === 0 && workflowResult.rows.length === 0) {
+    return { workspaces: [], workflows: [] };
+  }
+
+  const workflowIds = workflowResult.rows.map((row) => row.id);
+  const stepResult = workflowIds.length > 0
+    ? await queryPostgres<DatabaseWorkflowStepRow>(
+      `
+        SELECT id, workflow_id, skill_id, step_index, name, description, status, output, conversation, completed_at, created_at, updated_at
+        FROM workflow_steps
+        WHERE workflow_id = ANY($1::varchar[])
+        ORDER BY workflow_id, step_index ASC
+      `,
+      [workflowIds],
+    )
+    : { rows: [] as DatabaseWorkflowStepRow[] };
+  const stepsByWorkflow = new Map<string, DatabaseWorkflowStepRow[]>();
+  for (const step of stepResult.rows) {
+    const steps = stepsByWorkflow.get(step.workflow_id) ?? [];
+    steps.push(step);
+    stepsByWorkflow.set(step.workflow_id, steps);
+  }
+
+  return {
+    workspaces: workspaceResult.rows.map(workspaceFromDatabase),
+    workflows: workflowResult.rows.map((workflow) => workflowFromDatabase(
+      workflow,
+      stepsByWorkflow.get(workflow.id) ?? [],
+    )),
+  };
+}
+
+async function updateWorkflowStateSnapshot(workflow: WorkflowRecord) {
+  if (!hasPostgresDatabaseConfig()) return;
+  const currentStepIndex = workflow.steps.find((step) => step.status === 'in_progress')?.step_index ?? 0;
+  await queryPostgres(
+    `
+      UPDATE workflows
+      SET
+        workspace_id = $2,
+        name = $3,
+        description = $4,
+        status = $5,
+        current_step_index = $6,
+        state = $7::jsonb,
+        updated_at = $8::timestamptz
+      WHERE id = $1
+    `,
+    [
+      workflow.id,
+      workflow.workspaceId || null,
+      workflow.name,
+      workflow.description,
+      workflow.status,
+      currentStepIndex,
+      JSON.stringify(workflow),
+      workflow.updated_at,
+    ],
+  );
+}
+
+async function readRuntimeStore(): Promise<WorkflowStore> {
+  return await readStoreFromDatabase() ?? await readStore();
+}
+
 function buildSteps(inputs: CreateWorkflowStepInput[]): WorkflowStepRecord[] {
   const now = nowIso();
   const inputStepIndexes = inputs.map((input, index) => (
@@ -765,7 +964,7 @@ function buildSteps(inputs: CreateWorkflowStepInput[]): WorkflowStepRecord[] {
 }
 
 export async function getWorkflowState() {
-  const store = await readStore();
+  const store = await readRuntimeStore();
   return {
     workspaces: store.workspaces,
     workflows: store.workflows.map(normalizeWorkflow),
@@ -773,7 +972,7 @@ export async function getWorkflowState() {
 }
 
 export async function getWorkflow(id: string) {
-  const store = await readStore();
+  const store = await readRuntimeStore();
   const workflow = store.workflows.find((item) => item.id === id);
   return workflow ? normalizeWorkflow(workflow) : null;
 }
@@ -782,12 +981,12 @@ export async function createWorkspace(input: { name: string; description?: strin
   const name = input.name.trim();
   if (!name) throw new Error('Workspace name is required');
 
-  const store = await readStore();
+  const store = await readRuntimeStore();
   const now = nowIso();
   const workspace: WorkspaceRecord = {
     id: uniqueId('workspace', name),
     name,
-    description: input.description?.trim() || '未填写目录说明',
+    description: input.description?.trim() || '',
     created_at: now,
     updated_at: now,
   };
@@ -799,8 +998,33 @@ export async function createWorkspace(input: { name: string; description?: strin
   return workspace;
 }
 
+export async function updateWorkspace(input: { id: string; name: string; description?: string }) {
+  const id = input.id.trim();
+  const name = input.name.trim();
+  if (!id) throw new Error('Workspace ID is required');
+  if (!name) throw new Error('Workspace name is required');
+
+  const store = await readRuntimeStore();
+  const now = nowIso();
+  let updatedWorkspace: WorkspaceRecord | null = null;
+  const workspaces = store.workspaces.map((workspace) => {
+    if (workspace.id !== id) return workspace;
+    updatedWorkspace = {
+      ...workspace,
+      name,
+      description: input.description?.trim() || '',
+      updated_at: now,
+    };
+    return updatedWorkspace;
+  });
+
+  if (!updatedWorkspace) throw new Error(`Workspace not found: ${id}`);
+  await writeStore({ ...store, workspaces });
+  return updatedWorkspace;
+}
+
 export async function deleteWorkspace(id: string) {
-  const store = await readStore();
+  const store = await readRuntimeStore();
   const nextWorkspaces = store.workspaces.filter((workspace) => workspace.id !== id);
   if (nextWorkspaces.length === store.workspaces.length) throw new Error(`Workspace not found: ${id}`);
   const nextWorkflows = store.workflows.filter((workflow) => workflow.workspaceId !== id);
@@ -817,7 +1041,7 @@ export async function createWorkflow(input: CreateWorkflowInput) {
     throw new Error('At least three workflow steps are required');
   }
 
-  const store = await readStore();
+  const store = await readRuntimeStore();
   if (!store.workspaces.some((workspace) => workspace.id === input.workspaceId)) {
     throw new Error(`Workspace not found: ${input.workspaceId}`);
   }
@@ -842,7 +1066,7 @@ export async function createWorkflow(input: CreateWorkflowInput) {
 }
 
 export async function upsertWorkflow(workflow: Partial<WorkflowRecord>) {
-  const store = await readStore();
+  const store = await readRuntimeStore();
   const normalized = normalizeWorkflow(workflow);
   if (!normalized.workspaceId) throw new Error('workspaceId is required');
 
@@ -852,11 +1076,12 @@ export async function upsertWorkflow(workflow: Partial<WorkflowRecord>) {
     : [normalized, ...store.workflows];
 
   await writeStore({ ...store, workflows });
+  await updateWorkflowStateSnapshot(normalized);
   return normalized;
 }
 
 export async function deleteWorkflow(id: string) {
-  const store = await readStore();
+  const store = await readRuntimeStore();
   const workflows = store.workflows.filter((workflow) => workflow.id !== id);
   if (workflows.length === store.workflows.length) throw new Error(`Workflow not found: ${id}`);
   await writeStore({ ...store, workflows });

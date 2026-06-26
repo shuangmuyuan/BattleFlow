@@ -160,12 +160,11 @@ export const platformAdmins = pgTable("platform_admins", {
   index("platform_admins_enabled_idx").on(table.enabled),
 ]);
 
-
 // ============================================
 // Skills
 // ============================================
 export const skills = pgTable("skills", {
-  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()::text`),
+  id: varchar("id", { length: 128 }).primaryKey().default(sql`gen_random_uuid()::text`),
   organization_id: varchar("organization_id", { length: 36 }).references(() => organizations.id, { onDelete: "cascade" }),
   name: varchar("name", { length: 128 }).notNull(),
   description: text("description"),
@@ -206,8 +205,8 @@ export const skills = pgTable("skills", {
 ]);
 
 export const skillVersions = pgTable("skill_versions", {
-  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()::text`),
-  skill_id: varchar("skill_id", { length: 36 }).notNull().references(() => skills.id, { onDelete: "cascade" }),
+  id: varchar("id", { length: 128 }).primaryKey().default(sql`gen_random_uuid()::text`),
+  skill_id: varchar("skill_id", { length: 128 }).notNull().references(() => skills.id, { onDelete: "cascade" }),
   version: varchar("version", { length: 20 }).notNull(),
   definition: jsonb("definition").notNull().$type<Record<string, unknown>>(),
   asset_manifest: jsonb("asset_manifest").$type<Array<Record<string, unknown>>>().default(sql`'[]'::jsonb`).notNull(),
@@ -220,11 +219,13 @@ export const skillVersions = pgTable("skill_versions", {
 ]);
 
 export const skillReviews = pgTable("skill_reviews", {
-  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()::text`),
-  skill_id: varchar("skill_id", { length: 36 }).notNull().references(() => skills.id, { onDelete: "cascade" }),
-  version_id: varchar("version_id", { length: 36 }).references(() => skillVersions.id, { onDelete: "set null" }),
+  id: varchar("id", { length: 128 }).primaryKey().default(sql`gen_random_uuid()::text`),
+  skill_id: varchar("skill_id", { length: 128 }).notNull().references(() => skills.id, { onDelete: "cascade" }),
+  version_id: varchar("version_id", { length: 128 }).references(() => skillVersions.id, { onDelete: "set null" }),
   status: varchar("status", { length: 24 }).notNull().default("pending_review"),
   note: text("note"),
+  payload: jsonb("payload").$type<Record<string, unknown>>().default(sql`'{}'::jsonb`).notNull(),
+  is_active: boolean("is_active").default(true).notNull(),
   requested_by: varchar("requested_by", { length: 36 }).references(() => users.id),
   reviewed_by: varchar("reviewed_by", { length: 36 }).references(() => users.id),
   requested_at: timestamp("requested_at", { withTimezone: true }).defaultNow().notNull(),
@@ -232,12 +233,13 @@ export const skillReviews = pgTable("skill_reviews", {
 }, (table) => [
   index("skill_reviews_skill_id_idx").on(table.skill_id),
   index("skill_reviews_status_idx").on(table.status),
+  index("skill_reviews_active_idx").on(table.is_active),
 ]);
 
 export const skillAssets = pgTable("skill_assets", {
-  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()::text`),
-  skill_id: varchar("skill_id", { length: 36 }).notNull().references(() => skills.id, { onDelete: "cascade" }),
-  version_id: varchar("version_id", { length: 36 }).references(() => skillVersions.id, { onDelete: "set null" }),
+  id: varchar("id", { length: 128 }).primaryKey().default(sql`gen_random_uuid()::text`),
+  skill_id: varchar("skill_id", { length: 128 }).notNull().references(() => skills.id, { onDelete: "cascade" }),
+  version_id: varchar("version_id", { length: 128 }).references(() => skillVersions.id, { onDelete: "set null" }),
   path: text("path").notNull(),
   uri: text("uri"),
   content_type: varchar("content_type", { length: 128 }),
@@ -255,14 +257,15 @@ export const skillAssets = pgTable("skill_assets", {
 // Workflows
 // ============================================
 export const workflows = pgTable("workflows", {
-  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()::text`),
-  workspace_id: varchar("workspace_id", { length: 36 }),
+  id: varchar("id", { length: 128 }).primaryKey().default(sql`gen_random_uuid()::text`),
+  workspace_id: varchar("workspace_id", { length: 128 }),
   organization_id: varchar("organization_id", { length: 36 }).notNull().references(() => organizations.id, { onDelete: "cascade" }),
   name: varchar("name", { length: 200 }).notNull(),
   description: text("description"),
   status: varchar("status", { length: 20 }).notNull().default("draft"),
   current_step_index: integer("current_step_index").default(0),
   model_id: varchar("model_id", { length: 64 }).default("doubao-seed-2-0-pro-260215"),
+  state: jsonb("state").$type<Record<string, unknown>>().default(sql`'{}'::jsonb`).notNull(),
   created_by: varchar("created_by", { length: 36 }).notNull(),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }),
@@ -271,10 +274,11 @@ export const workflows = pgTable("workflows", {
   index("workflows_workspace_id_idx").on(table.workspace_id),
   index("workflows_created_by_idx").on(table.created_by),
   index("workflows_status_idx").on(table.status),
+  index("workflows_updated_at_idx").on(table.updated_at),
 ]);
 
 export const workflowWorkspaces = pgTable("workflow_workspaces", {
-  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()::text`),
+  id: varchar("id", { length: 128 }).primaryKey().default(sql`gen_random_uuid()::text`),
   organization_id: varchar("organization_id", { length: 36 }).notNull().references(() => organizations.id, { onDelete: "cascade" }),
   name: varchar("name", { length: 160 }).notNull(),
   description: text("description"),
@@ -288,7 +292,7 @@ export const workflowWorkspaces = pgTable("workflow_workspaces", {
 
 export const workflowAssets = pgTable("workflow_assets", {
   id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()::text`),
-  workflow_id: varchar("workflow_id", { length: 36 }).notNull().references(() => workflows.id, { onDelete: "cascade" }),
+  workflow_id: varchar("workflow_id", { length: 128 }).notNull().references(() => workflows.id, { onDelete: "cascade" }),
   asset_type: varchar("asset_type", { length: 32 }).notNull(),
   path: text("path"),
   uri: text("uri"),
@@ -307,9 +311,9 @@ export const workflowAssets = pgTable("workflow_assets", {
 // Workflow Steps
 // ============================================
 export const workflowSteps = pgTable("workflow_steps", {
-  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()::text`),
-  workflow_id: varchar("workflow_id", { length: 36 }).notNull().references(() => workflows.id, { onDelete: "cascade" }),
-  skill_id: varchar("skill_id", { length: 36 }).references(() => skills.id),
+  id: varchar("id", { length: 128 }).primaryKey().default(sql`gen_random_uuid()::text`),
+  workflow_id: varchar("workflow_id", { length: 128 }).notNull().references(() => workflows.id, { onDelete: "cascade" }),
+  skill_id: varchar("skill_id", { length: 128 }).references(() => skills.id),
   step_index: integer("step_index").notNull(),
   name: varchar("name", { length: 200 }).notNull(),
   description: text("description"),
@@ -333,9 +337,9 @@ export const workflowSteps = pgTable("workflow_steps", {
 // Step Snapshots (version management)
 // ============================================
 export const stepSnapshots = pgTable("step_snapshots", {
-  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()::text`),
-  step_id: varchar("step_id", { length: 36 }).notNull().references(() => workflowSteps.id, { onDelete: "cascade" }),
-  workflow_id: varchar("workflow_id", { length: 36 }).notNull().references(() => workflows.id, { onDelete: "cascade" }),
+  id: varchar("id", { length: 128 }).primaryKey().default(sql`gen_random_uuid()::text`),
+  step_id: varchar("step_id", { length: 128 }).notNull().references(() => workflowSteps.id, { onDelete: "cascade" }),
+  workflow_id: varchar("workflow_id", { length: 128 }).notNull().references(() => workflows.id, { onDelete: "cascade" }),
   output: text("output").notNull(),
   conversation: jsonb("conversation").$type<Array<{ role: "user" | "assistant" | "system"; content: string }>>(),
   snapshot_type: varchar("snapshot_type", { length: 20 }).notNull().default("auto"),
@@ -351,8 +355,8 @@ export const stepSnapshots = pgTable("step_snapshots", {
 // Workflow Snapshots
 // ============================================
 export const workflowSnapshots = pgTable("workflow_snapshots", {
-  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()::text`),
-  workflow_id: varchar("workflow_id", { length: 36 }).notNull().references(() => workflows.id, { onDelete: "cascade" }),
+  id: varchar("id", { length: 128 }).primaryKey().default(sql`gen_random_uuid()::text`),
+  workflow_id: varchar("workflow_id", { length: 128 }).notNull().references(() => workflows.id, { onDelete: "cascade" }),
   snapshot: jsonb("snapshot").notNull().$type<{
     steps: Array<{
       step_id: string;
@@ -375,9 +379,9 @@ export const workflowSnapshots = pgTable("workflow_snapshots", {
 // ============================================
 export const milestones = pgTable("milestones", {
   id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()::text`),
-  workflow_id: varchar("workflow_id", { length: 36 }).notNull().references(() => workflows.id, { onDelete: "cascade" }),
-  workflow_snapshot_id: varchar("workflow_snapshot_id", { length: 36 }).references(() => workflowSnapshots.id),
-  step_snapshot_id: varchar("step_snapshot_id", { length: 36 }).references(() => stepSnapshots.id),
+  workflow_id: varchar("workflow_id", { length: 128 }).notNull().references(() => workflows.id, { onDelete: "cascade" }),
+  workflow_snapshot_id: varchar("workflow_snapshot_id", { length: 128 }).references(() => workflowSnapshots.id),
+  step_snapshot_id: varchar("step_snapshot_id", { length: 128 }).references(() => stepSnapshots.id),
   name: varchar("name", { length: 128 }).notNull(),
   description: text("description"),
   milestone_type: varchar("milestone_type", { length: 20 }).notNull().default("manual"),
@@ -434,7 +438,7 @@ export const knowledgeDocuments = pgTable("knowledge_documents", {
 // ============================================
 export const prdDocuments = pgTable("prd_documents", {
   id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()::text`),
-  workflow_id: varchar("workflow_id", { length: 36 }).notNull().references(() => workflows.id, { onDelete: "cascade" }),
+  workflow_id: varchar("workflow_id", { length: 128 }).notNull().references(() => workflows.id, { onDelete: "cascade" }),
   organization_id: varchar("organization_id", { length: 36 }).notNull().references(() => organizations.id, { onDelete: "cascade" }),
   title: varchar("title", { length: 200 }).notNull(),
   content: text("content").notNull(),

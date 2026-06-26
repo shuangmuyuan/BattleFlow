@@ -2,7 +2,7 @@ import type { PoolClient, QueryResultRow } from 'pg';
 import { getPostgresPool, queryPostgres } from '../storage/database/postgres-client';
 import { canAccess, requirePermission } from './auth/permissions';
 import { ForbiddenError, type AuthOrganizationContext, type ResourcePermission, type ResourceSubjectType } from './auth/types';
-import type { SkillRecord } from './skill-registry';
+import type { SkillRecord, SkillReviewRequest } from './skill-registry';
 import type { WorkflowRecord, WorkspaceRecord } from './workflow-registry';
 
 type BusinessResourceType = 'skill' | 'workflow' | 'workflow_workspace';
@@ -34,6 +34,10 @@ function skillDefinition(skill: SkillRecord): Record<string, unknown> {
     tools: skill.tools,
     outputs: skill.outputs,
     checklist: skill.checklist,
+    acceptanceCriteria: skill.acceptanceCriteria,
+    requiredSections: skill.requiredSections,
+    evidenceRules: skill.evidenceRules,
+    failureConditions: skill.failureConditions,
     prompt_template: skill.prompt_template,
     skill_md: skill.skill_md,
     meta_json: skill.meta_json,
@@ -54,6 +58,10 @@ function skillAssetManifest(skill: SkillRecord): Array<Record<string, unknown>> 
     truncated: Boolean(asset.truncated),
     note: asset.note,
   }));
+}
+
+function skillReviewDatabaseStatus(status: SkillReviewRequest['status']): string {
+  return status === 'pending' ? 'pending_review' : status;
 }
 
 function activeOrganizationId(context: AuthOrganizationContext): string {
@@ -299,6 +307,113 @@ export async function upsertSkillsBusinessMetadata(
   }
 }
 
+export async function upsertSkillReviewBusinessMetadata(
+  context: AuthOrganizationContext,
+  request: SkillReviewRequest,
+): Promise<void> {
+  const client = await getPostgresPool().connect();
+  const status = skillReviewDatabaseStatus(request.status);
+
+  try {
+    await client.query('BEGIN');
+    const versionId = (await client.query<{ id: string }>(
+      `
+        SELECT id
+        FROM skill_versions
+        WHERE skill_id = $1
+          AND version = $2
+        LIMIT 1
+      `,
+      [request.submitted_skill.id, request.submitted_skill.version],
+    )).rows[0]?.id ?? null;
+
+    await client.query(
+      `
+        INSERT INTO skill_reviews (
+          id,
+          skill_id,
+          version_id,
+          status,
+          note,
+          payload,
+          is_active,
+          requested_by,
+          reviewed_by,
+          requested_at,
+          reviewed_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::timestamptz, $11::timestamptz)
+        ON CONFLICT (id)
+        DO UPDATE SET
+          skill_id = EXCLUDED.skill_id,
+          version_id = EXCLUDED.version_id,
+          status = EXCLUDED.status,
+          note = EXCLUDED.note,
+          payload = EXCLUDED.payload,
+          is_active = EXCLUDED.is_active,
+          reviewed_by = EXCLUDED.reviewed_by,
+          reviewed_at = EXCLUDED.reviewed_at
+      `,
+      [
+        request.id,
+        request.submitted_skill.id,
+        versionId,
+        status,
+        request.review_note || request.submitted_note || null,
+        toJson(request),
+        request.is_active,
+        context.user.id,
+        request.reviewed_at ? context.user.id : null,
+        request.submitted_at,
+        request.reviewed_at ?? null,
+      ],
+    );
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function markSkillReviewBusinessDecision(
+  context: AuthOrganizationContext,
+  reviewId: string,
+  decision: 'approved' | 'rejected',
+  reviewNote = '',
+): Promise<void> {
+  const now = new Date().toISOString();
+  await queryPostgres(
+    `
+      UPDATE skill_reviews
+      SET
+        status = $2,
+        note = COALESCE(NULLIF($3, ''), note),
+        reviewed_by = $4,
+        reviewed_at = $5::timestamptz,
+        is_active = false,
+        payload = payload || $6::jsonb
+      WHERE id = $1
+    `,
+    [
+      reviewId,
+      decision,
+      reviewNote.trim(),
+      context.user.id,
+      now,
+      toJson({
+        status: decision,
+        decision,
+        review_note: reviewNote.trim() || undefined,
+        reviewed_at: now,
+        is_active: false,
+      }),
+    ],
+  );
+}
+
 async function fetchSkillRows(ids: string[]): Promise<Map<string, ResourceMetadataRow>> {
   if (ids.length === 0) return new Map();
   const result = await queryPostgres<ResourceMetadataRow>(
@@ -403,11 +518,12 @@ export async function upsertWorkflowBusinessMetadata(
           description,
           status,
           current_step_index,
+          state,
           created_by,
           created_at,
           updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz, $10::timestamptz)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::timestamptz, $11::timestamptz)
         ON CONFLICT (id)
         DO UPDATE SET
           workspace_id = EXCLUDED.workspace_id,
@@ -416,6 +532,7 @@ export async function upsertWorkflowBusinessMetadata(
           description = EXCLUDED.description,
           status = EXCLUDED.status,
           current_step_index = EXCLUDED.current_step_index,
+          state = EXCLUDED.state,
           updated_at = EXCLUDED.updated_at
       `,
       [
@@ -426,6 +543,7 @@ export async function upsertWorkflowBusinessMetadata(
         workflow.description,
         workflow.status,
         workflow.steps.find((step) => step.status === 'in_progress')?.step_index ?? 0,
+        toJson(workflow),
         context.user.id,
         workflow.created_at,
         workflow.updated_at,
@@ -535,6 +653,38 @@ export async function upsertWorkflowBusinessMetadata(
   } finally {
     client.release();
   }
+}
+
+export async function deleteWorkflowBusinessMetadata(workflowId: string): Promise<void> {
+  await queryPostgres(
+    `
+      DELETE FROM resource_access_grants
+      WHERE resource_type = 'workflow'
+        AND resource_id = $1
+    `,
+    [workflowId],
+  );
+  await queryPostgres('DELETE FROM workflows WHERE id = $1', [workflowId]);
+}
+
+export async function deleteWorkspaceBusinessMetadata(workspaceId: string): Promise<void> {
+  const result = await queryPostgres<{ id: string }>(
+    'SELECT id FROM workflows WHERE workspace_id = $1',
+    [workspaceId],
+  );
+  const workflowIds = result.rows.map((row) => row.id);
+  if (workflowIds.length > 0) {
+    await queryPostgres(
+      `
+        DELETE FROM resource_access_grants
+        WHERE resource_type = 'workflow'
+          AND resource_id = ANY($1::varchar[])
+      `,
+      [workflowIds],
+    );
+  }
+  await queryPostgres('DELETE FROM workflows WHERE workspace_id = $1', [workspaceId]);
+  await queryPostgres('DELETE FROM workflow_workspaces WHERE id = $1', [workspaceId]);
 }
 
 export async function upsertWorkflowStateBusinessMetadata(

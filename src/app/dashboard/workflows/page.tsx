@@ -7,18 +7,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
-import { Switch } from '@/components/ui/switch';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import {
   PageHeader,
   ProductEmptyState,
@@ -29,7 +20,6 @@ import {
   CompactMarkdown,
   compactMarkdownPreview,
 } from '@/components/battleflow/compact-markdown';
-import { cleanExecutableSkillText } from '@/lib/workflow-skill-draft';
 import { cn } from '@/lib/utils';
 import {
   Dialog,
@@ -73,8 +63,6 @@ import {
   Copy,
   ChevronDown,
   FileText,
-  MoreHorizontal,
-  GitCompareArrows,
   ShieldCheck,
   CircleStop,
   GripVertical,
@@ -328,6 +316,21 @@ interface ChatMessage {
 
 type WorkflowStepRunMode = NonNullable<WorkflowStep['runMode']>;
 
+interface WorkflowTemplateStep {
+  label: string;
+  aliases: string[];
+  runMode: WorkflowStepRunMode;
+}
+
+interface WorkflowTemplate {
+  id: string;
+  name: string;
+  description: string;
+  defaultWorkflowName: string;
+  defaultWorkflowDescription: string;
+  steps: WorkflowTemplateStep[];
+}
+
 interface WorkflowExecutionGroup {
   id: string;
   runMode: WorkflowStepRunMode;
@@ -339,6 +342,164 @@ type ChatPersistenceStatus = 'idle' | 'streaming' | 'saving' | 'saved' | 'failed
 type DeleteTarget =
   | { type: 'workspace'; id: string; name: string; workflowCount: number }
   | { type: 'workflow'; id: string; name: string; workspaceId: string };
+
+function getWorkspaceDescriptionText(description?: string) {
+  const value = description?.trim();
+  return value && value !== '未填写目录说明' ? value : '';
+}
+
+interface AssistantQuickReplyQuestion {
+  id: string;
+  label: string;
+  prompt: string;
+  options: string[];
+  multi: boolean;
+}
+
+const builtInWorkflowTemplates: WorkflowTemplate[] = [
+  {
+    id: 'ai-native-product-planning-e2e',
+    name: 'AI Native 产品规划端到端验证',
+    description: '按产品规划输入、并行分析、用户旅程、TR1、Demo、TR2 并行产物的链路进行端到端验证。',
+    defaultWorkflowName: 'AI Native 产品规划端到端验证',
+    defaultWorkflowDescription: '基于内置产品规划 Skill 模板，完成输入、分析、旅程、TR1、Demo 与 TR2 产物生成。',
+    steps: [
+      {
+        label: '产品规划输入需求+Prompt',
+        aliases: ['产品规划输入需求+Prompt', '产品规划输入需求', '产品规划输入', '规划输入', 'product-planning-input', 'planning-input'],
+        runMode: 'serial',
+      },
+      {
+        label: '共创客户验证分析',
+        aliases: ['共创客户验证分析', 'co-create-customer-minutes-analysis', 'customer-validation', '客户验证分析'],
+        runMode: 'parallel',
+      },
+      {
+        label: '竞品功能研究',
+        aliases: ['竞品功能研究', '竞品功能分析', '功能研究型竞品分析', 'feature-competitor-analysis', 'competitor-feature-research'],
+        runMode: 'parallel',
+      },
+      {
+        label: '竞品痛点收集',
+        aliases: ['竞品痛点收集', '竞品痛点收集分析', '痛点收集型竞品分析', 'competitor-painpoint-research', 'painpoint-competitor-analysis'],
+        runMode: 'parallel',
+      },
+      {
+        label: '竞品解法研究',
+        aliases: ['竞品解法研究', '竞品解法分析', '问题求解型竞品分析', 'solution-competitor-analysis', 'competitor-solution-research'],
+        runMode: 'parallel',
+      },
+      {
+        label: '用户旅程设计',
+        aliases: ['用户旅程设计', 'user-journey-design', 'journey-design'],
+        runMode: 'serial',
+      },
+      {
+        label: 'TR1 需求规格',
+        aliases: [
+          'TR1 需求规格',
+          'TR1 用户需求说明书生成器',
+          'TR1 用户需求说明书',
+          '用户需求说明书生成器',
+          '用户需求规格说明书',
+          'tr1-requirements-spec',
+          'team-tr1-requirements-spec',
+          'review-tr1-requirements-spec',
+          'requirements-spec',
+          '需求规格',
+        ],
+        runMode: 'serial',
+      },
+      {
+        label: 'Demo 生成',
+        aliases: ['Demo 生成', 'demo-creator', 'demo生成器', 'demo-generator'],
+        runMode: 'serial',
+      },
+      {
+        label: 'EPIC 生成',
+        aliases: ['EPIC 生成', 'tr2-epic-creator', 'epic-creator', 'epic生成器'],
+        runMode: 'parallel',
+      },
+      {
+        label: 'Feature 生成',
+        aliases: ['Feature 生成', 'tr2-feature-creator', 'feature-creator', 'feature生成器'],
+        runMode: 'parallel',
+      },
+      {
+        label: 'Story 生成',
+        aliases: ['Story 生成', 'tr2-story-creator', 'story-creator', 'story生成器'],
+        runMode: 'parallel',
+      },
+      {
+        label: 'Tech 需求',
+        aliases: ['Tech 需求', 'tr2-tech-creator', 'tech-creator', 'tech需求生成器', '技术需求'],
+        runMode: 'parallel',
+      },
+    ],
+  },
+];
+
+function normalizeTemplateMatchText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[\s_+\-—–/｜|：:（）()【】[\].,，。"'`]+/g, '');
+}
+
+function getSkillSearchText(skill: Skill) {
+  return [
+    skill.id,
+    skill.name,
+    skill.description,
+    ...(skill.tags || []),
+  ].filter(Boolean);
+}
+
+function matchTemplateStepSkill(
+  step: WorkflowTemplateStep,
+  skillOptions: Skill[],
+  usedSkillIds: Set<string>,
+) {
+  const normalizedAliases = step.aliases.map(normalizeTemplateMatchText).filter(Boolean);
+  const candidates = skillOptions
+    .filter((skill) => !usedSkillIds.has(skill.id))
+    .map((skill) => {
+      const fields = getSkillSearchText(skill).map(normalizeTemplateMatchText).filter(Boolean);
+      const exactMatch = fields.some((field) => normalizedAliases.some((alias) => field === alias));
+      if (exactMatch) return { skill, score: 3 };
+
+      const containsMatch = fields.some((field) => normalizedAliases.some((alias) => (
+        field.includes(alias) || alias.includes(field)
+      )));
+      if (containsMatch) return { skill, score: 2 };
+
+      return { skill, score: 0 };
+    })
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score);
+
+  return candidates[0]?.skill;
+}
+
+function resolveWorkflowTemplateSkills(template: WorkflowTemplate, skillOptions: Skill[]) {
+  const usedSkillIds = new Set<string>();
+  const matchedSkills: Skill[] = [];
+  const missingSteps: WorkflowTemplateStep[] = [];
+  const modes: Record<string, WorkflowStepRunMode> = {};
+
+  template.steps.forEach((step) => {
+    const skill = matchTemplateStepSkill(step, skillOptions, usedSkillIds);
+    if (!skill) {
+      missingSteps.push(step);
+      return;
+    }
+
+    usedSkillIds.add(skill.id);
+    matchedSkills.push(skill);
+    modes[skill.id] = step.runMode;
+  });
+
+  return { matchedSkills, missingSteps, modes };
+}
 
 const chatErrorFallbackContent = '抱歉，对话出现了问题，请重试。';
 const chatErrorFallbackPrefix = '抱歉，对话出现了问题';
@@ -380,6 +541,204 @@ function getLastConfirmableAssistantMessage(messages: ChatMessage[]) {
 
 function hasConfirmableAssistantMessage(messages: ChatMessage[]) {
   return Boolean(getLastConfirmableAssistantMessage(messages));
+}
+
+function cleanQuickReplyOption(rawOption: string) {
+  return rawOption
+    .replace(/^[\s>*•\-+]+/, '')
+    .replace(/^\d+[.)、]\s*/, '')
+    .replace(/^[☐□■▪▫✅☑️✔️⚠️]+\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getDefaultQuickReplyOptions(question: AssistantQuickReplyQuestion) {
+  if (question.options.length === 0) {
+    return ['无补充，按当前建议继续'];
+  }
+
+  const defaults = question.options.filter((option) => /默认|优先|使用|✅|✔|可补充/.test(option));
+  return defaults.length > 0 ? defaults : [question.options[0]];
+}
+
+function extractAssistantQuickReplyQuestions(content: string): AssistantQuickReplyQuestion[] {
+  const text = content.trim();
+  if (
+    !text
+    || text.startsWith(chatErrorFallbackPrefix)
+    || text.startsWith(chatCancelledContent)
+  ) {
+    return [];
+  }
+
+  const lines = text.split('\n');
+  const questions: AssistantQuickReplyQuestion[] = [];
+  let current: AssistantQuickReplyQuestion | null = null;
+
+  const commitCurrent = () => {
+    if (!current) return;
+    const promptLooksActionable = /确认|是否|有没有|有无|同意|需要|偏好|限制/.test(current.prompt);
+    if (current.options.length > 0 || promptLooksActionable) {
+      questions.push(current);
+    }
+    current = null;
+  };
+
+  lines.forEach((line, index) => {
+    const normalized = line
+      .replace(/\*\*/g, '')
+      .replace(/^#{1,6}\s*/, '')
+      .trim();
+    const questionMatch = normalized.match(/^(问题|确认)\s*(\d+)?\s*[：:]\s*(.+)$/);
+    const confirmMatch = !questionMatch
+      ? normalized.match(/^(确认以上[^，。,.]*)(?:[，。,.]|$)/)
+      : null;
+
+    if (questionMatch || confirmMatch) {
+      commitCurrent();
+      const label = questionMatch
+        ? `${questionMatch[1]}${questionMatch[2] ? ` ${questionMatch[2]}` : ''}`
+        : '确认';
+      const prompt = (questionMatch ? questionMatch[3] : confirmMatch?.[1] || '').trim();
+      current = {
+        id: `${label}-${index}`,
+        label,
+        prompt,
+        options: [],
+        multi: /以下|类型|来源|材料|选项|哪些|偏好|限制|可选|多个|列表/.test(prompt),
+      };
+      return;
+    }
+
+    const optionMatch = normalized.match(/^[-*•]\s+(.+)$/)
+      || normalized.match(/^[☐□■▪▫✅☑️✔️⚠️]\s*(.+)$/);
+    if (current && optionMatch) {
+      const option = cleanQuickReplyOption(optionMatch[1]);
+      if (option && option.length <= 120) {
+        current.options.push(option);
+      }
+    }
+  });
+
+  commitCurrent();
+
+  if (questions.length === 0 && /确认以上|可以进入|继续|开始/.test(text.slice(-240))) {
+    return [{
+      id: 'confirm-continue',
+      label: '确认',
+      prompt: '确认以上内容并继续',
+      options: ['确认，按当前建议继续'],
+      multi: false,
+    }];
+  }
+
+  return questions.slice(-3);
+}
+
+function buildQuickReplyText(
+  questions: AssistantQuickReplyQuestion[],
+  selections: Record<string, string[]>,
+) {
+  if (questions.length === 0) return '';
+
+  return questions.map((question) => {
+    const selectedOptions = selections[question.id]?.length
+      ? selections[question.id]
+      : getDefaultQuickReplyOptions(question);
+    return `${question.label}：${selectedOptions.join('、')}`;
+  }).join('\n');
+}
+
+function AssistantQuickReplyPanel({
+  questions,
+  disabled,
+  onSubmit,
+}: {
+  questions: AssistantQuickReplyQuestion[];
+  disabled: boolean;
+  onSubmit: (reply: string) => void;
+}) {
+  const [selections, setSelections] = useState<Record<string, string[]>>({});
+
+  const toggleOption = (question: AssistantQuickReplyQuestion, option: string) => {
+    setSelections((prev) => {
+      const currentOptions = prev[question.id] || [];
+      const selected = currentOptions.includes(option);
+      return {
+        ...prev,
+        [question.id]: question.multi
+          ? selected
+            ? currentOptions.filter((item) => item !== option)
+            : [...currentOptions, option]
+          : selected
+            ? []
+            : [option],
+      };
+    });
+  };
+
+  const replyText = buildQuickReplyText(questions, selections);
+
+  return (
+    <div className="w-full min-w-0 rounded-lg border border-primary/25 bg-primary/5 p-3 text-sm shadow-sm">
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-primary">快速确认</p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">选择后直接发送，无需手动组织回复。</p>
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          className="h-8 shrink-0 gap-1.5 text-xs"
+          disabled={disabled || !replyText}
+          onClick={() => onSubmit(replyText)}
+        >
+          <ArrowRight className="h-3.5 w-3.5" />
+          发送选择
+        </Button>
+      </div>
+
+      <div className="mt-3 flex flex-col gap-3">
+        {questions.map((question) => {
+          const selectedOptions = selections[question.id] || [];
+          const displayOptions = question.options.length > 0
+            ? question.options
+            : getDefaultQuickReplyOptions(question);
+          const effectiveSelectedOptions = selectedOptions.length > 0
+            ? selectedOptions
+            : getDefaultQuickReplyOptions(question);
+
+          return (
+            <div key={question.id} className="rounded-md border border-border/45 bg-background/70 p-2.5">
+              <div className="flex flex-wrap items-start gap-2">
+                <Badge variant="secondary" className="shrink-0 text-[10px]">{question.label}</Badge>
+                <p className="min-w-0 flex-1 text-xs font-medium leading-5">{question.prompt}</p>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {displayOptions.map((option) => {
+                  const selected = effectiveSelectedOptions.includes(option);
+                  return (
+                    <Button
+                      key={option}
+                      type="button"
+                      variant={selected ? 'default' : 'outline'}
+                      size="sm"
+                      className="h-auto min-h-7 max-w-full justify-start whitespace-normal px-2 py-1 text-left text-xs"
+                      disabled={disabled}
+                      onClick={() => toggleOption(question, option)}
+                    >
+                      {selected && <CheckCircle2 className="mr-1 h-3.5 w-3.5 shrink-0" />}
+                      <span className="min-w-0 break-words">{option}</span>
+                    </Button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 function getStepDemoHandoff(workflow?: Workflow | null, stepId?: string) {
@@ -900,19 +1259,24 @@ export default function WorkflowsPage() {
   const [activeStepIndex, setActiveStepIndex] = useState<number>(-1);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
-  const [isStreaming, setIsStreaming] = useState(false);
+  const [chatInputByStepId, setChatInputByStepId] = useState<Record<string, string>>({});
+  const [streamingByStepId, setStreamingByStepId] = useState<Record<string, boolean>>({});
   const [expandedAssistantDocumentIds, setExpandedAssistantDocumentIds] = useState<Record<string, boolean>>({});
   const [chatPersistenceByStepId, setChatPersistenceByStepId] = useState<Record<string, ChatPersistenceStatus>>({});
-  const [isConfirmingStep, setIsConfirmingStep] = useState(false);
+  const [confirmingStepId, setConfirmingStepId] = useState<string | null>(null);
   const [validationStageByStepId, setValidationStageByStepId] = useState<Record<string, 'self_checking' | 'agent_validating'>>({});
   const [demoHandoffLoadingByStepId, setDemoHandoffLoadingByStepId] = useState<Record<string, boolean>>({});
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [selectedWorkflowTemplateId, setSelectedWorkflowTemplateId] = useState('');
+  const [draggingSelectedSkillId, setDraggingSelectedSkillId] = useState<string | null>(null);
+  const [dragOverSelectedSkillId, setDragOverSelectedSkillId] = useState<string | null>(null);
   const [draggingWorkflowStepId, setDraggingWorkflowStepId] = useState<string | null>(null);
   const [dragOverWorkflowStepId, setDragOverWorkflowStepId] = useState<string | null>(null);
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [isDeletingTarget, setIsDeletingTarget] = useState(false);
+  const [editingWorkspaceId, setEditingWorkspaceId] = useState<string | null>(null);
   const [editingWorkflowId, setEditingWorkflowId] = useState<string | null>(null);
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
   const [newWorkspaceDesc, setNewWorkspaceDesc] = useState('');
@@ -930,11 +1294,7 @@ export default function WorkflowsPage() {
   const [reviewComments, setReviewComments] = useState<Record<string, string>>({});
   const [supplementalContextOpen, setSupplementalContextOpen] = useState(false);
   const [supplementalContextTab, setSupplementalContextTab] = useState<'knowledge' | 'materials' | 'files'>('knowledge');
-  const [rightPanelTab, setRightPanelTab] = useState<'skill' | 'tuning' | 'outputs' | 'gate' | 'review' | 'archive'>('outputs');
-  const [skillTuningInstruction, setSkillTuningInstruction] = useState('');
-  const [skillTuningMessage, setSkillTuningMessage] = useState('');
-  const [skillTuningGenerating, setSkillTuningGenerating] = useState(false);
-  const [skillTuningSubmitting, setSkillTuningSubmitting] = useState(false);
+  const [rightPanelTab, setRightPanelTab] = useState<'outputs' | 'gate' | 'review' | 'archive'>('outputs');
   const [expandedOutputIds, setExpandedOutputIds] = useState<Record<string, boolean>>({});
   const [archivedReviewStepIds, setArchivedReviewStepIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -944,9 +1304,20 @@ export default function WorkflowsPage() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const reviewedOutputInputRef = useRef<HTMLInputElement>(null);
-  const activeChatRequestRef = useRef<AbortController | null>(null);
+  const activeStepIdRef = useRef<string | null>(null);
+  const activeChatRequestByStepIdRef = useRef<Record<string, AbortController>>({});
+  const workflowsRef = useRef<Workflow[]>([]);
+  const activeWorkflowRef = useRef<Workflow | null>(null);
   const validationStageTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const workflowStepDragSourceRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    workflowsRef.current = workflows;
+  }, [workflows]);
+
+  useEffect(() => {
+    activeWorkflowRef.current = activeWorkflow;
+  }, [activeWorkflow]);
 
   useEffect(() => {
     if (!draggingWorkflowStepId) return undefined;
@@ -1008,9 +1379,11 @@ export default function WorkflowsPage() {
     const nextIndex = Math.max(visibleSteps.findIndex((step) => step.id === nextStep?.id), 0);
 
     setActiveStepIndex(nextIndex);
+    activeStepIdRef.current = nextStep?.id || null;
     syncWorkflowSupportingState(workflow, nextIndex);
     const nextStepMessages = getStepChatMessages(workflow, nextStep?.id);
     setChatMessages(nextStepMessages);
+    setChatInput(nextStep?.id ? chatInputByStepId[nextStep.id] || '' : '');
     if (nextStep?.id) {
       setStepChatPersistenceStatus(nextStep.id, hasConfirmableAssistantMessage(nextStepMessages) ? 'saved' : 'idle');
     }
@@ -1020,7 +1393,7 @@ export default function WorkflowsPage() {
         ? 'gate'
         : nextStep?.output || priorSteps.some((step) => step.output)
         ? 'outputs'
-        : 'skill',
+        : 'outputs',
     );
   };
 
@@ -1043,6 +1416,12 @@ export default function WorkflowsPage() {
       return null;
     }
   }, []);
+
+  const getLatestWorkflowSnapshot = useCallback((workflowId: string, fallback: Workflow): Workflow => (
+    workflowsRef.current.find((workflow) => workflow.id === workflowId)
+      || (activeWorkflowRef.current?.id === workflowId ? activeWorkflowRef.current : null)
+      || fallback
+  ), []);
 
   const updateActiveWorkflow = useCallback((updater: (workflow: Workflow) => Workflow) => {
     if (!activeWorkflow) return;
@@ -1198,8 +1577,8 @@ export default function WorkflowsPage() {
   }, [loadKnowledgeBases]);
 
   useEffect(() => () => {
-    activeChatRequestRef.current?.abort();
-    activeChatRequestRef.current = null;
+    Object.values(activeChatRequestByStepIdRef.current).forEach((controller) => controller.abort());
+    activeChatRequestByStepIdRef.current = {};
     Object.values(validationStageTimersRef.current).forEach((timer) => clearTimeout(timer));
     validationStageTimersRef.current = {};
   }, []);
@@ -1218,6 +1597,12 @@ export default function WorkflowsPage() {
       delete next[stepId];
       return next;
     });
+  }, []);
+
+  const updateVisibleChatMessagesForStep = useCallback((stepId: string, messages: ChatMessage[]) => {
+    if (activeStepIdRef.current === stepId) {
+      setChatMessages(messages);
+    }
   }, []);
 
   const startValidationStage = useCallback((stepId: string) => {
@@ -1560,61 +1945,10 @@ export default function WorkflowsPage() {
     ].join('\n');
   };
 
-  const getWorkflowSkillDraft = useCallback((workflow?: Workflow | null, stepId?: string) => (
-    stepId ? workflow?.skillDrafts?.[stepId] : undefined
-  ), []);
-
   const getEffectiveSkillForStep = useCallback((workflow?: Workflow | null, step?: WorkflowStep): Skill | undefined => {
     if (!workflow || !step) return undefined;
-    const baseSkill = skills.find((skill) => skill.id === step.skill_id);
-    const draft = getWorkflowSkillDraft(workflow, step.id);
-
-    if (!draft?.enabled) return baseSkill;
-
-    return {
-      ...(baseSkill || {
-        id: draft.baseSkillId,
-        tags: [],
-        package_assets: [],
-        scope: 'personal' as const,
-        status: 'imported' as const,
-      }),
-      id: `${draft.baseSkillId}__draft__${draft.id}`,
-      name: `${draft.name}（调优草稿）`,
-      description: draft.description,
-      tools: draft.tools,
-      outputs: draft.outputs,
-      checklist: draft.checklist,
-      acceptanceCriteria: draft.acceptanceCriteria,
-      requiredSections: draft.requiredSections,
-      evidenceRules: draft.evidenceRules,
-      failureConditions: draft.failureConditions,
-      tags: draft.tags,
-      methodology: cleanExecutableSkillText(draft.methodology, baseSkill?.methodology || '', draft.tuning_request),
-      prompt_template: cleanExecutableSkillText(draft.prompt_template, baseSkill?.prompt_template || '', draft.tuning_request),
-      skill_md: cleanExecutableSkillText(draft.skill_md, baseSkill?.skill_md || '', draft.tuning_request),
-      tuning_request: draft.tuning_request,
-      scope: 'personal',
-      status: 'imported',
-    };
-  }, [getWorkflowSkillDraft, skills]);
-
-  const getSkillDraftDiffSummary = (baseSkill?: Skill, draft?: WorkflowSkillDraft) => {
-    const baseLines = (baseSkill?.skill_md || '').split('\n').map((line) => line.trim()).filter(Boolean);
-    const draftLines = (draft?.skill_md || '').split('\n').map((line) => line.trim()).filter(Boolean);
-    const baseLineSet = new Set(baseLines);
-    const draftLineSet = new Set(draftLines);
-    const addedLines = draftLines.filter((line) => !baseLineSet.has(line));
-    const removedLines = baseLines.filter((line) => !draftLineSet.has(line));
-
-    return {
-      addedCount: addedLines.length,
-      removedCount: removedLines.length,
-      addedPreview: addedLines.slice(0, 4),
-      removedPreview: removedLines.slice(0, 3),
-      promptChanged: Boolean((baseSkill?.prompt_template || '').trim() !== (draft?.prompt_template || '').trim()),
-    };
-  };
+    return skills.find((skill) => skill.id === step.skill_id);
+  }, [skills]);
 
   const buildSavedStepOutputFile = (
     workflow: Workflow,
@@ -1732,14 +2066,15 @@ export default function WorkflowsPage() {
     };
   };
 
-  const handleSendMessage = useCallback(async () => {
-    if (!chatInput.trim() || isStreaming) return;
-
+  const handleSendMessage = useCallback(async (overrideMessage?: string) => {
     const workflow = activeWorkflow;
     const currentStep = workflow ? getVisibleSteps(workflow)[activeStepIndex] : undefined;
     if (!workflow || !currentStep) return;
 
-    const userMessage = chatInput.trim();
+    const stepInput = overrideMessage ?? chatInputByStepId[currentStep.id] ?? chatInput;
+    const userMessage = stepInput.trim();
+    if (!userMessage || streamingByStepId[currentStep.id]) return;
+
     const currentStepContextFiles = uploadedContextFiles.filter((file) => file.stepId === currentStep.id);
     const selectedKnowledgeBases = knowledgeBases.filter((kb) => selectedKnowledgeBaseIds.includes(kb.id));
     const contextSelection = getContextSelection(workflow, currentStep.id);
@@ -1814,14 +2149,17 @@ export default function WorkflowsPage() {
     const visibleMessages: ChatMessage[] = [...chatMessages, { role: 'user', content: userMessage }];
     const requestMessages: ChatMessage[] = [...chatMessages, { role: 'user', content: messageWithContext }];
 
-    setChatInput('');
-    setChatMessages(visibleMessages);
+    setChatInputByStepId((prev) => ({ ...prev, [currentStep.id]: '' }));
+    if (activeStepIdRef.current === currentStep.id) {
+      setChatInput('');
+    }
+    updateVisibleChatMessagesForStep(currentStep.id, visibleMessages);
     saveStepChatMessages(workflow, currentStep.id, visibleMessages, { persist: false });
     setStepChatPersistenceStatus(currentStep.id, 'streaming');
     const controller = new AbortController();
-    activeChatRequestRef.current = controller;
+    activeChatRequestByStepIdRef.current[currentStep.id] = controller;
     let assistantContent = '';
-    setIsStreaming(true);
+    setStreamingByStepId((prev) => ({ ...prev, [currentStep.id]: true }));
 
     try {
       const skillDef = getEffectiveSkillForStep(workflow, currentStep);
@@ -1871,7 +2209,7 @@ export default function WorkflowsPage() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
 
-      setChatMessages([...visibleMessages, { role: 'assistant', content: '' }]);
+      updateVisibleChatMessagesForStep(currentStep.id, [...visibleMessages, { role: 'assistant', content: '' }]);
 
       while (true) {
         const { done, value } = await reader.read();
@@ -1892,7 +2230,7 @@ export default function WorkflowsPage() {
             if (data.error) throw new Error(data.error);
             if (data.content) {
               assistantContent += data.content;
-              setChatMessages([...visibleMessages, { role: 'assistant', content: assistantContent }]);
+              updateVisibleChatMessagesForStep(currentStep.id, [...visibleMessages, { role: 'assistant', content: assistantContent }]);
             }
             if (data.done) break;
           }
@@ -1902,8 +2240,13 @@ export default function WorkflowsPage() {
         ...visibleMessages,
         { role: 'assistant', content: assistantContent },
       ];
-      setChatMessages(finalMessages);
-      const workflowWithFinalMessages = saveStepChatMessages(workflow, currentStep.id, finalMessages, { persist: false });
+      updateVisibleChatMessagesForStep(currentStep.id, finalMessages);
+      const workflowWithFinalMessages = saveStepChatMessages(
+        getLatestWorkflowSnapshot(workflow.id, workflow),
+        currentStep.id,
+        finalMessages,
+        { persist: false },
+      );
       setStepChatPersistenceStatus(currentStep.id, 'saving');
       const savedWorkflow = await persistWorkflow(workflowWithFinalMessages);
       setStepChatPersistenceStatus(currentStep.id, savedWorkflow ? 'saved' : 'failed');
@@ -1913,8 +2256,13 @@ export default function WorkflowsPage() {
           ...visibleMessages,
           { role: 'assistant', content: chatCancelledContent },
         ];
-        setChatMessages(cancelledMessages);
-        const workflowWithCancelledMessages = saveStepChatMessages(workflow, currentStep.id, cancelledMessages, { persist: false });
+        updateVisibleChatMessagesForStep(currentStep.id, cancelledMessages);
+        const workflowWithCancelledMessages = saveStepChatMessages(
+          getLatestWorkflowSnapshot(workflow.id, workflow),
+          currentStep.id,
+          cancelledMessages,
+          { persist: false },
+        );
         setStepChatPersistenceStatus(currentStep.id, 'saving');
         const savedWorkflow = await persistWorkflow(workflowWithCancelledMessages);
         setStepChatPersistenceStatus(currentStep.id, savedWorkflow ? 'saved' : 'failed');
@@ -1926,24 +2274,37 @@ export default function WorkflowsPage() {
         ...visibleMessages,
         { role: 'assistant', content: getChatErrorContent(error) },
       ];
-      setChatMessages(errorMessages);
-      const workflowWithErrorMessages = saveStepChatMessages(workflow, currentStep.id, errorMessages, { persist: false });
+      updateVisibleChatMessagesForStep(currentStep.id, errorMessages);
+      const workflowWithErrorMessages = saveStepChatMessages(
+        getLatestWorkflowSnapshot(workflow.id, workflow),
+        currentStep.id,
+        errorMessages,
+        { persist: false },
+      );
       setStepChatPersistenceStatus(currentStep.id, 'saving');
       const savedWorkflow = await persistWorkflow(workflowWithErrorMessages);
       setStepChatPersistenceStatus(currentStep.id, savedWorkflow ? 'saved' : 'failed');
     } finally {
-      if (activeChatRequestRef.current === controller) {
-        activeChatRequestRef.current = null;
+      if (activeChatRequestByStepIdRef.current[currentStep.id] === controller) {
+        delete activeChatRequestByStepIdRef.current[currentStep.id];
       }
-      setIsStreaming(false);
+      setStreamingByStepId((prev) => {
+        if (!prev[currentStep.id]) return prev;
+        const next = { ...prev };
+        delete next[currentStep.id];
+        return next;
+      });
     }
   }, [
     chatInput,
+    chatInputByStepId,
     chatMessages,
-    isStreaming,
+    streamingByStepId,
     activeWorkflow,
     activeStepIndex,
     saveStepChatMessages,
+    getLatestWorkflowSnapshot,
+    updateVisibleChatMessagesForStep,
     persistWorkflow,
     getEffectiveSkillForStep,
     knowledgeBases,
@@ -1954,8 +2315,10 @@ export default function WorkflowsPage() {
   ]);
 
   const handleStopStreaming = useCallback(() => {
-    activeChatRequestRef.current?.abort();
-  }, []);
+    const currentStep = activeWorkflow ? getVisibleSteps(activeWorkflow)[activeStepIndex] : undefined;
+    if (!currentStep) return;
+    activeChatRequestByStepIdRef.current[currentStep.id]?.abort();
+  }, [activeWorkflow, activeStepIndex]);
 
   const handleChatInputKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) {
@@ -1967,7 +2330,7 @@ export default function WorkflowsPage() {
   }, [handleSendMessage]);
 
   const handleConfirmStep = async () => {
-    if (!activeWorkflow || activeStepIndex < 0 || isConfirmingStep) return;
+    if (!activeWorkflow || activeStepIndex < 0 || confirmingStepId) return;
 
     const currentStep = getVisibleSteps(activeWorkflow)[activeStepIndex];
     if (!currentStep) return;
@@ -1975,14 +2338,14 @@ export default function WorkflowsPage() {
     const lastAssistantMsg = getLastConfirmableAssistantMessage(chatMessages);
     const currentStepChatStatus = chatPersistenceByStepId[currentStep.id] || 'idle';
     if (
-      isStreaming
+      streamingByStepId[currentStep.id]
       || currentStepChatStatus !== 'saved'
       || !lastAssistantMsg
     ) {
       return;
     }
 
-    setIsConfirmingStep(true);
+    setConfirmingStepId(currentStep.id);
 
     try {
       const stepOutputDocument = normalizeSkillOutputDocument(activeWorkflow, currentStep, lastAssistantMsg.content);
@@ -2026,8 +2389,10 @@ export default function WorkflowsPage() {
         0,
       );
       setActiveStepIndex(currentStepIndex);
+      activeStepIdRef.current = currentStep.id;
       syncWorkflowSupportingState(savedWorkflow, currentStepIndex);
       setChatMessages(getStepChatMessages(savedWorkflow, currentStep.id));
+      setChatInput(chatInputByStepId[currentStep.id] || '');
       setRightPanelTab('gate');
       const failedStep = savedWorkflow.steps.find((step) => step.id === currentStep.id);
       const summary = failedStep?.validationSummary || data.attempt?.agentValidation?.summary || data.attempt?.selfCheck?.summary || '';
@@ -2040,7 +2405,7 @@ export default function WorkflowsPage() {
       toast.error('验证运行失败', { description: message });
     } finally {
       clearValidationStage(currentStep.id);
-      setIsConfirmingStep(false);
+      setConfirmingStepId((stepId) => (stepId === currentStep.id ? null : stepId));
     }
   };
 
@@ -2073,19 +2438,46 @@ export default function WorkflowsPage() {
       setWorkflows((prev) => [createdWorkflow, ...prev]);
       setActiveWorkflow(createdWorkflow);
       setActiveStepIndex(0);
+      activeStepIdRef.current = getVisibleSteps(createdWorkflow)[0]?.id || null;
       setChatMessages([]);
+      setChatInput('');
       if (hasWorkflowExecutionPlanChanged(rawCreatedWorkflow, createdWorkflow)) {
         void persistWorkflow(createdWorkflow);
       }
       setCreateDialogOpen(false);
       setNewWorkflowName('');
       setNewWorkflowDesc('');
+      setSelectedWorkflowTemplateId('');
       setSelectedSkills([]);
       setSelectedSkillModes({});
+      resetSelectedSkillDrag();
     } catch (error) {
       console.error('Create workflow error:', error);
       setErrorMessage(error instanceof Error ? error.message : '创建工作流失败');
     }
+  };
+
+  const resetWorkspaceDialog = () => {
+    setEditingWorkspaceId(null);
+    setNewWorkspaceName('');
+    setNewWorkspaceDesc('');
+  };
+
+  const handleOpenCreateWorkspace = () => {
+    resetWorkspaceDialog();
+    setWorkspaceDialogOpen(true);
+  };
+
+  const handleOpenEditWorkspace = (workspace: Workspace) => {
+    setEditingWorkspaceId(workspace.id);
+    setNewWorkspaceName(workspace.name);
+    setNewWorkspaceDesc(getWorkspaceDescriptionText(workspace.description));
+    setWorkspaceDialogOpen(true);
+  };
+
+  const handleWorkspaceDialogOpenChange = (open: boolean) => {
+    setWorkspaceDialogOpen(open);
+    if (!open) resetWorkspaceDialog();
   };
 
   const handleCreateWorkspace = async () => {
@@ -2118,6 +2510,42 @@ export default function WorkflowsPage() {
     }
   };
 
+  const handleUpdateWorkspace = async () => {
+    if (!editingWorkspaceId || !newWorkspaceName.trim()) return;
+
+    try {
+      setErrorMessage('');
+      const response = await fetch('/api/workflows', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'update_workspace',
+          id: editingWorkspaceId,
+          name: newWorkspaceName.trim(),
+          description: newWorkspaceDesc.trim(),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '更新工作目录失败');
+
+      const workspace = data.workspace as Workspace;
+      setWorkspaces((prev) => prev.map((item) => (item.id === workspace.id ? workspace : item)));
+      setWorkspaceDialogOpen(false);
+      resetWorkspaceDialog();
+    } catch (error) {
+      console.error('Update workspace error:', error);
+      setErrorMessage(error instanceof Error ? error.message : '更新工作目录失败');
+    }
+  };
+
+  const handleSaveWorkspace = () => {
+    if (editingWorkspaceId) {
+      void handleUpdateWorkspace();
+      return;
+    }
+    void handleCreateWorkspace();
+  };
+
   const handleDeleteWorkspace = async (workspaceId: string) => {
     try {
       setErrorMessage('');
@@ -2138,7 +2566,9 @@ export default function WorkflowsPage() {
       if (activeWorkflow && deletedWorkflowIds.has(activeWorkflow.id)) {
         setActiveWorkflow(null);
         setActiveStepIndex(-1);
+        activeStepIdRef.current = null;
         setChatMessages([]);
+        setChatInput('');
       }
       setWorkspaces((prev) => {
         const next = prev.filter((workspace) => workspace.id !== workspaceId);
@@ -2169,7 +2599,9 @@ export default function WorkflowsPage() {
       if (activeWorkflow?.id === workflowId) {
         setActiveWorkflow(null);
         setActiveStepIndex(-1);
+        activeStepIdRef.current = null;
         setChatMessages([]);
+        setChatInput('');
       }
     } catch (error) {
       console.error('Delete workflow error:', error);
@@ -2381,6 +2813,45 @@ export default function WorkflowsPage() {
     });
   };
 
+  const resetSelectedSkillDrag = () => {
+    setDraggingSelectedSkillId(null);
+    setDragOverSelectedSkillId(null);
+  };
+
+  const handleReorderSelectedSkill = (sourceSkillId: string, targetSkillId: string) => {
+    if (!sourceSkillId || !targetSkillId || sourceSkillId === targetSkillId) return;
+
+    setSelectedSkills((prev) => {
+      const sourceIndex = prev.findIndex((skill) => skill.id === sourceSkillId);
+      const targetIndex = prev.findIndex((skill) => skill.id === targetSkillId);
+      if (sourceIndex < 0 || targetIndex < 0) return prev;
+
+      const next = [...prev];
+      const [movedSkill] = next.splice(sourceIndex, 1);
+      next.splice(targetIndex, 0, movedSkill);
+      return next;
+    });
+  };
+
+  const applyWorkflowTemplate = (template: WorkflowTemplate) => {
+    const { matchedSkills, missingSteps, modes } = resolveWorkflowTemplateSkills(template, workflowSkillOptions);
+
+    setSelectedWorkflowTemplateId(template.id);
+    setNewWorkflowName((current) => current.trim() ? current : template.defaultWorkflowName);
+    setNewWorkflowDesc((current) => current.trim() ? current : template.defaultWorkflowDescription);
+    setSelectedSkills(matchedSkills);
+    setSelectedSkillModes(modes);
+    resetSelectedSkillDrag();
+
+    if (missingSteps.length > 0) {
+      toast.warning('模板未完全匹配', {
+        description: `缺少 ${missingSteps.map((step) => step.label).join('、')}，可导入后再应用模板。`,
+      });
+    } else {
+      toast.success('已应用模板', { description: '已自动填充 Skill 顺序和串并行编排。' });
+    }
+  };
+
   const handleAppendSkillToWorkflow = (workflowId: string, skill: Skill) => {
     updateWorkflowById(workflowId, (workflow) => {
       const updatedAt = new Date().toISOString();
@@ -2527,54 +2998,9 @@ export default function WorkflowsPage() {
                 >
                   {wf.status === 'completed' ? '已完成' : wf.status === 'in_progress' ? '进行中' : '草稿'}
                 </StatusBadge>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 text-muted-foreground"
-                      aria-label={`${wf.name} 更多操作`}
-                    >
-                      <MoreHorizontal className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-40">
-                    <DropdownMenuItem
-                      onSelect={() => openWorkflow(wf)}
-                    >
-                      <Play className="h-4 w-4" />
-                      进入工作流
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onSelect={() => handleOpenEditWorkflow(wf)}
-                    >
-                      <Pencil className="h-4 w-4" />
-                      编辑信息
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onSelect={() => handleCloneWorkflow(wf)}
-                    >
-                      <Copy className="h-4 w-4" />
-                      克隆工作流
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      variant="destructive"
-                      onSelect={() => setDeleteTarget({
-                        type: 'workflow',
-                        id: wf.id,
-                        name: wf.name,
-                        workspaceId: wf.workspaceId,
-                      })}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                      删除工作流
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
               </div>
             </div>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <Button
                 variant="outline"
                 size="sm"
@@ -2611,6 +3037,23 @@ export default function WorkflowsPage() {
                 <Copy className="h-3.5 w-3.5" />
                 克隆
               </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 min-w-0 gap-1 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setDeleteTarget({
+                    type: 'workflow',
+                    id: wf.id,
+                    name: wf.name,
+                    workspaceId: wf.workspaceId,
+                  });
+                }}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                删除
+              </Button>
             </div>
           </CardHeader>
           <CardContent className="mt-auto min-w-0 overflow-hidden px-4 pb-4">
@@ -2633,7 +3076,7 @@ export default function WorkflowsPage() {
               ))}
             </div>
             <p className="mt-2 truncate text-xs text-muted-foreground">
-              {completedStepCount}/{visibleSteps.length} 步骤已完成
+              {completedStepCount}/{visibleSteps.length}
               {removedStepCount > 0 && (
                 <span className="ml-2">已移除 {removedStepCount} 个</span>
               )}
@@ -2646,10 +3089,10 @@ export default function WorkflowsPage() {
     return (
       <div className="flex h-full min-h-0 flex-col">
         <PageHeader
-          title={openedWorkspace ? openedWorkspace.name : '工作流'}
+          title={openedWorkspace ? openedWorkspace.name : '工作空间'}
           description={openedWorkspace
-            ? openedWorkspace.description || '当前目录的工作流空间，在这里创建、进入和维护规划流程。'
-            : '先选择工作目录，再进入目录内编排和推进工作流。'}
+            ? getWorkspaceDescriptionText(openedWorkspace.description) || '管理该空间下的工作流编排和运行产物。'
+            : '管理工作空间和工作流编排。'}
           action={(
             openedWorkspace ? (
               <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
@@ -2662,7 +3105,7 @@ export default function WorkflowsPage() {
                   }}
                 >
                   <ArrowLeft className="h-4 w-4" />
-                  所有目录
+                  所有空间
                 </Button>
                 <Button className="w-full gap-2 sm:w-auto" onClick={() => setCreateDialogOpen(true)}>
                   <Plus className="h-4 w-4" />
@@ -2670,39 +3113,33 @@ export default function WorkflowsPage() {
                 </Button>
               </div>
             ) : (
-              <Button variant="outline" className="w-full gap-2 sm:w-auto" onClick={() => setWorkspaceDialogOpen(true)}>
+              <Button variant="outline" className="w-full gap-2 sm:w-auto" onClick={handleOpenCreateWorkspace}>
                 <Plus className="h-4 w-4" />
-                新建目录
+                新建空间
               </Button>
             )
           )}
         />
-
-        {errorMessage && (
-          <Alert variant="destructive" className="mx-4 mt-4 md:mx-6">
-            <AlertDescription>{errorMessage}</AlertDescription>
-          </Alert>
-        )}
 
         {!openedWorkspace ? (
           <div className="min-h-0 flex-1 overflow-auto px-4 py-3 md:px-5 md:py-4">
             <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-3">
               <div className="flex justify-end border-b border-border/40 pb-2">
                 <StatusBadge tone="neutral" className="w-fit text-xs">
-                  共 {workspaces.length} 个目录
+                  共 {workspaces.length} 个空间
                 </StatusBadge>
               </div>
 
               {workspaces.length === 0 ? (
                 <ProductEmptyState
                   icon={<Plus />}
-                  title="暂无工作目录"
-                  description="先创建一个目录，用来承载同一阶段或同一产品线下的工作流。"
+                  title="暂无工作空间"
+                  description="先创建一个空间，用来承载同一阶段或同一产品线下的工作流。"
                   className="min-h-80"
                   action={(
-                    <Button size="sm" className="gap-1.5" onClick={() => setWorkspaceDialogOpen(true)}>
+                    <Button size="sm" className="gap-1.5" onClick={handleOpenCreateWorkspace}>
                       <Plus className="h-3.5 w-3.5" />
-                      新建目录
+                      新建空间
                     </Button>
                   )}
                 />
@@ -2710,6 +3147,7 @@ export default function WorkflowsPage() {
                 <div className="max-h-[calc(100dvh-260px)] min-h-0 overflow-y-auto pr-2">
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                     {workspaces.map((workspace) => {
+                      const workspaceDescription = getWorkspaceDescriptionText(workspace.description);
                       const workspaceWorkflowList = workflows.filter((workflow) => workflow.workspaceId === workspace.id);
                       const count = workspaceWorkflowList.length;
                       const inProgressCount = workspaceWorkflowList.filter((workflow) => workflow.status === 'in_progress').length;
@@ -2727,40 +3165,16 @@ export default function WorkflowsPage() {
                             <div className="flex min-w-0 items-start justify-between gap-3">
                               <div className="min-w-0">
                                 <h3 className="truncate text-base font-semibold">{workspace.name}</h3>
-                                <p className="mt-1 line-clamp-2 min-h-8 text-sm text-muted-foreground">
-                                  {workspace.description || '未填写目录说明'}
-                                </p>
+                                {workspaceDescription && (
+                                  <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+                                    {workspaceDescription}
+                                  </p>
+                                )}
                               </div>
                               <div className="flex shrink-0 items-center gap-1.5">
                                 <StatusBadge tone="neutral" className="text-xs">
                                   {count} 个流程
                                 </StatusBadge>
-                                <DropdownMenu>
-                                  <DropdownMenuTrigger asChild>
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      className="size-8 text-muted-foreground"
-                                      aria-label={`${workspace.name} 更多操作`}
-                                    >
-                                      <MoreHorizontal className="h-4 w-4" />
-                                    </Button>
-                                  </DropdownMenuTrigger>
-                                  <DropdownMenuContent align="end" className="w-44">
-                                    <DropdownMenuItem
-                                      variant="destructive"
-                                      onSelect={() => setDeleteTarget({
-                                        type: 'workspace',
-                                        id: workspace.id,
-                                        name: workspace.name,
-                                        workflowCount: count,
-                                      })}
-                                    >
-                                      <Trash2 className="h-4 w-4" />
-                                      删除目录
-                                    </DropdownMenuItem>
-                                  </DropdownMenuContent>
-                                </DropdownMenu>
                               </div>
                             </div>
 
@@ -2783,13 +3197,37 @@ export default function WorkflowsPage() {
                               <p className="truncate text-xs text-muted-foreground">
                                 最近更新：{formatSnapshotTime(latestUpdatedAt)}
                               </p>
-                              <div className="flex items-center gap-2">
+                              <div className="grid grid-cols-3 gap-2">
                                 <Button
-                                  className="h-9 min-w-0 flex-1 gap-2"
+                                  size="sm"
+                                  className="h-8 min-w-0 gap-1.5 px-2 text-xs"
                                   onClick={() => openWorkspaceSpace(workspace.id)}
                                 >
                                   进入空间
-                                  <ArrowRight className="h-4 w-4" />
+                                  <ArrowRight className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 min-w-0 gap-1.5 px-2 text-xs"
+                                  onClick={() => handleOpenEditWorkspace(workspace)}
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                  编辑
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 min-w-0 gap-1.5 px-2 text-xs text-destructive hover:text-destructive"
+                                  onClick={() => setDeleteTarget({
+                                    type: 'workspace',
+                                    id: workspace.id,
+                                    name: workspace.name,
+                                    workflowCount: count,
+                                  })}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                  删除
                                 </Button>
                               </div>
                             </div>
@@ -2805,14 +3243,7 @@ export default function WorkflowsPage() {
         ) : (
           <div className="min-h-0 flex-1 overflow-auto px-4 py-3 md:px-5 md:py-4">
             <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-3">
-              <div className="flex flex-col gap-2 border-b border-border/40 pb-2 sm:flex-row sm:items-end sm:justify-between">
-                <div className="min-w-0">
-                  <p className="text-xs text-muted-foreground">工作目录 / {openedWorkspace.name}</p>
-                  <h2 className="mt-1 text-base font-semibold">工作流空间</h2>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    当前目录内的全部工作流都集中在这里维护。
-                  </p>
-                </div>
+              <div className="flex justify-end border-b border-border/40 pb-2">
                 <StatusBadge tone="brand" className="w-fit text-xs">
                   {workspaceWorkflows.length} 个工作流
                 </StatusBadge>
@@ -2848,7 +3279,7 @@ export default function WorkflowsPage() {
               {workspaceWorkflows.length === 0 ? (
                 <ProductEmptyState
                   icon={<Play />}
-                  title="当前目录暂无工作流"
+                  title="当前空间暂无工作流"
                   description="创建一个工作流，选择至少三个 Skill，开始串行或并行推进产品规划。"
                   className="min-h-80"
                   action={(
@@ -2880,6 +3311,59 @@ export default function WorkflowsPage() {
                   <p className="text-xs text-muted-foreground">创建位置</p>
                   <p className="text-sm font-medium mt-1">{activeWorkspace?.name}</p>
                   <p className="text-xs text-muted-foreground mt-1">{activeWorkspace?.description}</p>
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <label className="text-sm font-medium">内置模板</label>
+                    {selectedWorkflowTemplateId && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        onClick={() => setSelectedWorkflowTemplateId('')}
+                      >
+                        取消模板标记
+                      </Button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-1 gap-2">
+                    {builtInWorkflowTemplates.map((template) => {
+                      const { matchedSkills, missingSteps } = resolveWorkflowTemplateSkills(template, workflowSkillOptions);
+                      const isSelectedTemplate = selectedWorkflowTemplateId === template.id;
+                      return (
+                        <button
+                          key={template.id}
+                          type="button"
+                          className={cn(
+                            'rounded-lg border p-3 text-left transition-colors',
+                            isSelectedTemplate
+                              ? 'border-primary bg-primary/5'
+                              : 'border-border/60 bg-card hover:border-primary/50 hover:bg-muted/30',
+                          )}
+                          onClick={() => applyWorkflowTemplate(template)}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold">{template.name}</p>
+                              <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{template.description}</p>
+                            </div>
+                            <Badge
+                              variant={missingSteps.length === 0 ? 'secondary' : 'outline'}
+                              className="shrink-0"
+                            >
+                              {matchedSkills.length}/{template.steps.length}
+                            </Badge>
+                          </div>
+                          {missingSteps.length > 0 && (
+                            <p className="mt-2 line-clamp-1 text-xs text-muted-foreground">
+                              缺少：{missingSteps.map((step) => step.label).join('、')}
+                            </p>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium">工作流名称</label>
@@ -2946,14 +3430,50 @@ export default function WorkflowsPage() {
                 </div>
                 {selectedSkills.length > 0 && (
                   <div className="space-y-2">
-                    <label className="text-sm font-medium">编排方式</label>
+                    <div className="flex items-center justify-between gap-3">
+                      <label className="text-sm font-medium">编排方式</label>
+                      <span className="text-xs text-muted-foreground">拖拽调整顺序</span>
+                    </div>
                     <div className="space-y-2">
                       {selectedSkills.map((skill, idx) => (
                         <div
                           key={skill.id}
-                          className="flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 p-2"
+                          data-selected-skill-id={skill.id}
+                          draggable
+                          aria-grabbed={draggingSelectedSkillId === skill.id}
+                          onDragStart={(event) => {
+                            setDraggingSelectedSkillId(skill.id);
+                            setDragOverSelectedSkillId(skill.id);
+                            event.dataTransfer.effectAllowed = 'move';
+                            event.dataTransfer.setData('text/plain', skill.id);
+                          }}
+                          onDragOver={(event) => {
+                            event.preventDefault();
+                            event.dataTransfer.dropEffect = 'move';
+                            if (dragOverSelectedSkillId !== skill.id) {
+                              setDragOverSelectedSkillId(skill.id);
+                            }
+                          }}
+                          onDragEnter={() => {
+                            if (!draggingSelectedSkillId || draggingSelectedSkillId === skill.id) return;
+                            handleReorderSelectedSkill(draggingSelectedSkillId, skill.id);
+                          }}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            const sourceSkillId = draggingSelectedSkillId || event.dataTransfer.getData('text/plain');
+                            handleReorderSelectedSkill(sourceSkillId, skill.id);
+                            resetSelectedSkillDrag();
+                          }}
+                          onDragEnd={resetSelectedSkillDrag}
+                          className={cn(
+                            'flex cursor-grab items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 p-2 transition-colors active:cursor-grabbing',
+                            draggingSelectedSkillId === skill.id && 'opacity-50',
+                            dragOverSelectedSkillId === skill.id && draggingSelectedSkillId !== skill.id
+                              && 'border-primary/60 bg-primary/10 ring-1 ring-primary/25',
+                          )}
                         >
                           <div className="flex min-w-0 items-center gap-2">
+                            <GripVertical className="size-4 shrink-0 text-muted-foreground" />
                             <Badge variant="secondary" className="h-6 w-6 rounded-full p-0 flex items-center justify-center text-xs">
                               {idx + 1}
                             </Badge>
@@ -3001,16 +3521,18 @@ export default function WorkflowsPage() {
           </DialogContent>
         </Dialog>
 
-        {/* Create Workspace Dialog */}
-        <Dialog open={workspaceDialogOpen} onOpenChange={setWorkspaceDialogOpen}>
+        {/* Workspace Dialog */}
+        <Dialog open={workspaceDialogOpen} onOpenChange={handleWorkspaceDialogOpenChange}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>新建工作目录</DialogTitle>
-              <DialogDescription>工作流必须创建在某个工作目录内，便于按项目归档。</DialogDescription>
+              <DialogTitle>{editingWorkspaceId ? '编辑工作空间' : '新建工作空间'}</DialogTitle>
+              <DialogDescription>
+                {editingWorkspaceId ? '更新空间名称和说明，不影响空间内已有工作流。' : '工作流必须创建在某个工作空间内，便于按项目归档。'}
+              </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 mt-4">
               <div className="space-y-2">
-                <label className="text-sm font-medium">目录名称</label>
+                <label className="text-sm font-medium">空间名称</label>
                 <Input
                   placeholder="如：搜索体验优化专项"
                   value={newWorkspaceName}
@@ -3018,15 +3540,15 @@ export default function WorkflowsPage() {
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-medium">目录说明</label>
+                <label className="text-sm font-medium">空间说明</label>
                 <Input
-                  placeholder="简要说明目录对应的项目范围"
+                  placeholder="简要说明空间对应的项目范围"
                   value={newWorkspaceDesc}
                   onChange={(event) => setNewWorkspaceDesc(event.target.value)}
                 />
               </div>
-              <Button className="w-full" disabled={!newWorkspaceName.trim()} onClick={handleCreateWorkspace}>
-                创建目录
+              <Button className="w-full" disabled={!newWorkspaceName.trim()} onClick={handleSaveWorkspace}>
+                {editingWorkspaceId ? '保存空间' : '创建空间'}
               </Button>
             </div>
           </DialogContent>
@@ -3240,18 +3762,18 @@ export default function WorkflowsPage() {
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>
-                {deleteTarget?.type === 'workspace' ? '删除工作目录' : '删除工作流'}
+                {deleteTarget?.type === 'workspace' ? '删除工作空间' : '删除工作流'}
               </AlertDialogTitle>
               <AlertDialogDescription>
                 {deleteTarget?.type === 'workspace' ? (
                   <>
-                    将删除「{deleteTarget.name}」目录
+                    将删除「{deleteTarget.name}」空间
                     {deleteTarget.workflowCount > 0 ? `，并同时删除其中 ${deleteTarget.workflowCount} 个工作流` : ''}
-                    。该操作会移除相关步骤、对话记录、产物和调优草稿，删除后不可恢复。
+                    。该操作会移除相关步骤、对话记录和产物，删除后不可恢复。
                   </>
                 ) : (
                   <>
-                    将删除「{deleteTarget?.name}」工作流。该操作会移除相关步骤、对话记录、产物和调优草稿，删除后不可恢复。
+                    将删除「{deleteTarget?.name}」工作流。该操作会移除相关步骤、对话记录和产物，删除后不可恢复。
                   </>
                 )}
               </AlertDialogDescription>
@@ -3288,6 +3810,7 @@ export default function WorkflowsPage() {
   // Active workflow view - Pipeline + Chat
   const visibleWorkflowSteps = getVisibleSteps(activeWorkflow);
   const currentStep = visibleWorkflowSteps[activeStepIndex] || visibleWorkflowSteps[0];
+  const isStreaming = currentStep ? Boolean(streamingByStepId[currentStep.id]) : false;
   const currentStepDemoHandoff = currentStep ? getStepDemoHandoff(activeWorkflow, currentStep.id) : undefined;
   const currentStepDemoLoading = currentStep ? Boolean(demoHandoffLoadingByStepId[currentStep.id]) : false;
   const currentStepHasVerifiedOutput = Boolean(
@@ -3312,11 +3835,11 @@ export default function WorkflowsPage() {
     if (!currentStep.output?.trim()) return '当前节点暂无产物';
     return '当前节点产物可生成 Demo';
   })();
-  const baseCurrentSkill = skills.find((s) => s.id === currentStep?.skill_id);
-  const currentSkillDraft = getWorkflowSkillDraft(activeWorkflow, currentStep?.id);
+  const lastAssistantMessageIndex = chatMessages.reduce(
+    (latestIndex, message, index) => (message.role === 'assistant' ? index : latestIndex),
+    -1,
+  );
   const currentSkill = getEffectiveSkillForStep(activeWorkflow, currentStep);
-  const isCurrentSkillDraftEnabled = Boolean(currentSkillDraft?.enabled);
-  const currentSkillDraftDiff = getSkillDraftDiffSummary(baseCurrentSkill, currentSkillDraft);
   const previousSteps = currentStep
     ? getPriorWorkflowSteps(activeWorkflow, currentStep).filter((step) => step.output)
     : [];
@@ -3433,6 +3956,7 @@ export default function WorkflowsPage() {
     ? chatPersistenceByStepId[currentStep.id] || 'idle'
     : 'idle';
   const currentStepValidationStage = currentStep ? validationStageByStepId[currentStep.id] : undefined;
+  const currentStepIsConfirming = Boolean(currentStep && confirmingStepId === currentStep.id);
   const currentStepEffectiveStatus = currentStepValidationStage || currentStep?.status;
   const currentStepHasConfirmableOutput = Boolean(
     currentStep && isStepConfirmableStatus(currentStep.status) && hasConfirmableAssistantMessage(chatMessages),
@@ -3440,7 +3964,7 @@ export default function WorkflowsPage() {
   const currentStepCanConfirm = Boolean(
     currentStepHasConfirmableOutput
       && !isStreaming
-      && !isConfirmingStep
+      && !confirmingStepId
       && !currentStepValidationStage
       && currentStepChatPersistenceStatus === 'saved',
   );
@@ -3450,7 +3974,7 @@ export default function WorkflowsPage() {
     if (isStreaming) return 'AI 正在生成，完成后会自动保存对话记录。';
     if (currentStepValidationStage === 'self_checking') return 'Skill 正在基于验收标准自检候选产物。';
     if (currentStepValidationStage === 'agent_validating') return '独立 Agent 正在校验候选产物。';
-    if (isConfirmingStep) return '正在运行验证门禁。';
+    if (currentStepIsConfirming) return '正在运行验证门禁。';
     if (currentStep?.status === 'validation_failed') {
       return currentStep.validationSummary
         ? `上次验证未通过：${currentStep.validationSummary}`
@@ -3588,164 +4112,6 @@ export default function WorkflowsPage() {
       updated_at: updatedAt,
     }));
   };
-  const handleGenerateSkillDraft = async () => {
-    if (!activeWorkflow || !currentStep || !baseCurrentSkill) return;
-    const instruction = skillTuningInstruction.trim();
-    if (!instruction) {
-      setSkillTuningMessage('请先输入要调整的目标。');
-      return;
-    }
-
-    setSkillTuningGenerating(true);
-    setSkillTuningMessage('');
-
-    try {
-      const previousOutputs: Array<{ name: string; output: string }> = [];
-      let remainingPreviousOutputChars = maxTotalStepPromptContextChars;
-      for (const step of getPriorWorkflowSteps(activeWorkflow, currentStep)) {
-        if (!step.output) continue;
-        if (remainingPreviousOutputChars <= 0) {
-          previousOutputs.push({
-            name: step.name,
-            output: `注：该前序步骤产物未注入正文，因为本轮前序产物上下文已达到 ${maxTotalStepPromptContextChars.toLocaleString('zh-CN')} 字符预算。`,
-          });
-          continue;
-        }
-
-        const output = buildStepOutputPromptContext(
-          activeWorkflow,
-          step,
-          Math.min(maxStepPromptContextChars, remainingPreviousOutputChars),
-        );
-        remainingPreviousOutputChars -= output.length;
-        previousOutputs.push({
-          name: step.name,
-          output,
-        });
-      }
-      const response = await fetch('/api/skills/tune', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          workflowId: activeWorkflow.id,
-          workflowName: activeWorkflow.name,
-          stepId: currentStep.id,
-          stepName: currentStep.name,
-          baseSkillId: currentStep.skill_id,
-          instruction,
-          currentOutput: currentStep.output || '',
-          previousOutputs,
-          recentMessages: chatMessages.slice(-8),
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || '生成 Skill 草稿失败');
-
-      const draft = data.draft as WorkflowSkillDraft;
-      const updatedAt = new Date().toISOString();
-
-      updateActiveWorkflow((workflow) => ({
-        ...workflow,
-        skillDrafts: {
-          ...(workflow.skillDrafts || {}),
-          [currentStep.id]: {
-            ...draft,
-            stepId: currentStep.id,
-            baseSkillId: currentStep.skill_id,
-            enabled: true,
-            status: 'draft',
-            created_at: currentSkillDraft?.created_at || draft.created_at || updatedAt,
-            updated_at: updatedAt,
-          },
-        },
-        updated_at: updatedAt,
-      }));
-      setSkillTuningMessage('草稿已生成并启用验证。');
-    } catch (error) {
-      console.error('Generate workflow skill draft error:', error);
-      setSkillTuningMessage(error instanceof Error ? error.message : '生成 Skill 草稿失败');
-    } finally {
-      setSkillTuningGenerating(false);
-    }
-  };
-  const setCurrentSkillDraftEnabled = (enabled: boolean) => {
-    if (!currentStep) return;
-    const updatedAt = new Date().toISOString();
-    updateActiveWorkflow((workflow) => {
-      const draft = workflow.skillDrafts?.[currentStep.id];
-      if (!draft) return workflow;
-      return {
-        ...workflow,
-        skillDrafts: {
-          ...(workflow.skillDrafts || {}),
-          [currentStep.id]: {
-            ...draft,
-            enabled,
-            updated_at: updatedAt,
-          },
-        },
-        updated_at: updatedAt,
-      };
-    });
-    setSkillTuningMessage(enabled ? '已启用草稿验证。' : '已停用草稿，当前节点将恢复使用基线 Skill。');
-  };
-  const handleSubmitSkillDraft = async () => {
-    if (!activeWorkflow || !currentStep) return;
-    const draft = getWorkflowSkillDraft(activeWorkflow, currentStep.id);
-    if (!draft || skillTuningSubmitting) return;
-
-    setSkillTuningSubmitting(true);
-    setSkillTuningMessage('');
-
-    try {
-      const response = await fetch('/api/skills', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'submit_workflow_draft',
-          draft: {
-            ...draft,
-            workflowId: activeWorkflow.id,
-            workflowName: activeWorkflow.name,
-            stepName: currentStep.name,
-          },
-          note: [
-            '由工作流节点内的对话调优提交。',
-            draft.validation_note || '',
-            draft.change_summary || '',
-          ].filter(Boolean).join('\n'),
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || '提交 Skill 修改请求失败');
-
-      const submittedSkillId = data.skill?.id as string | undefined;
-      const updatedAt = new Date().toISOString();
-      updateActiveWorkflow((workflow) => {
-        const currentDraft = workflow.skillDrafts?.[currentStep.id] || draft;
-        return {
-          ...workflow,
-          skillDrafts: {
-            ...(workflow.skillDrafts || {}),
-            [currentStep.id]: {
-              ...currentDraft,
-              status: 'submitted',
-              submittedSkillId,
-              enabled: true,
-              updated_at: updatedAt,
-            },
-          },
-          updated_at: updatedAt,
-        };
-      });
-      setSkillTuningMessage('已提交团队审核，可到 Skill 仓库查看待审核记录。');
-    } catch (error) {
-      console.error('Submit workflow skill draft error:', error);
-      setSkillTuningMessage(error instanceof Error ? error.message : '提交 Skill 修改请求失败');
-    } finally {
-      setSkillTuningSubmitting(false);
-    }
-  };
   const saveCurrentStepOutput = () => {
     if (!activeWorkflow || !currentStep?.output) return;
 
@@ -3775,7 +4141,6 @@ export default function WorkflowsPage() {
   const renderStepOutputPreview = (step: WorkflowStep, options: { label?: string } = {}) => {
     const output = step.output || '';
     const isExpanded = Boolean(expandedOutputIds[step.id]);
-    const preview = compactMarkdownPreview(output, 132) || '暂无摘要。';
     const outputMarkdownPreview = getRenderedMarkdownPreview(output);
 
     return (
@@ -3820,9 +4185,6 @@ export default function WorkflowsPage() {
               </div>
               {output ? (
                 <>
-                  <p className="mt-2 break-words text-xs leading-5 text-muted-foreground">
-                    {preview}{output.length > preview.length ? '...' : ''}
-                  </p>
                   {isExpanded && (
                     <div className="mt-3 max-h-72 min-w-0 overflow-y-auto rounded-lg border border-border/60 bg-background/80 p-3">
                       <CompactMarkdown
@@ -3852,7 +4214,13 @@ export default function WorkflowsPage() {
       {/* Left: Pipeline Panel */}
       <div className="flex max-h-80 min-h-0 w-full shrink-0 flex-col border-b border-border/40 lg:max-h-none lg:w-64 lg:border-b-0 lg:border-r xl:w-80">
         <div className="border-b border-border/40 p-4">
-          <Button variant="ghost" size="sm" onClick={() => { setActiveWorkflow(null); setActiveStepIndex(-1); setChatMessages([]); }}>
+          <Button variant="ghost" size="sm" onClick={() => {
+            setActiveWorkflow(null);
+            setActiveStepIndex(-1);
+            activeStepIdRef.current = null;
+            setChatMessages([]);
+            setChatInput('');
+          }}>
             ← 返回列表
           </Button>
           <h2 className="mt-2 truncate font-semibold">{activeWorkflow.name}</h2>
@@ -3872,11 +4240,7 @@ export default function WorkflowsPage() {
                   className={isParallelGroup ? 'rounded-xl border border-border/50 bg-muted/20 p-2' : ''}
                 >
                   {isParallelGroup && (
-                    <div className="flex min-w-0 items-center justify-between gap-2 px-2 pb-2">
-                      <div className="min-w-0">
-                        <p className="text-xs font-medium text-muted-foreground">{groupSteps[0].parallelGroupName || '并行任务组'}</p>
-                        <p className="text-[11px] text-muted-foreground/80">可自由切换并行推进</p>
-                      </div>
+                    <div className="flex min-w-0 items-center justify-end gap-2 px-2 pb-2">
                       <Badge variant="outline" className="text-[11px]">
                         并行 {groupCompletedCount}/{groupSteps.length}
                       </Badge>
@@ -3888,7 +4252,18 @@ export default function WorkflowsPage() {
                       const idx = visibleWorkflowSteps.findIndex((item) => item.id === step.id);
                       const isActive = idx === activeStepIndex;
                       const isDisabled = step.status === 'pending' && !isActive;
-                      const displayedStepStatus = validationStageByStepId[step.id] || step.status;
+                      const stepIsStreaming = Boolean(streamingByStepId[step.id]);
+                      const stepHasChatMessages = getStepChatMessages(activeWorkflow, step.id).length > 0;
+                      const shouldRenderParallelStepAsIdle = Boolean(
+                        step.runMode === 'parallel'
+                        && step.status === 'in_progress'
+                        && !stepIsStreaming
+                        && !step.output
+                        && !stepHasChatMessages
+                        && !validationStageByStepId[step.id],
+                      );
+                      const displayedStepStatus = validationStageByStepId[step.id]
+                        || (stepIsStreaming ? 'in_progress' : shouldRenderParallelStepAsIdle ? 'pending' : step.status);
                       const showNodeConfirm = step.id === currentStep?.id && currentStepHasConfirmableOutput;
 
                       return (
@@ -3921,11 +4296,6 @@ export default function WorkflowsPage() {
                                 <Badge variant="secondary" className="ml-auto text-[10px]">并行</Badge>
                               )}
                             </div>
-                            {step.output && (
-                              <p className="text-xs text-emerald-500/80 mt-1 ml-7 line-clamp-2">
-                                已完成 — {compactMarkdownPreview(step.output, 50)}...
-                              </p>
-                            )}
                             {step.status === 'validation_failed' && step.validationSummary && (
                               <p className="mt-1 ml-7 line-clamp-2 text-xs text-destructive/80">
                                 验证未通过 — {compactMarkdownPreview(step.validationSummary, 64)}
@@ -3947,7 +4317,7 @@ export default function WorkflowsPage() {
                                   void handleConfirmStep();
                                 }}
                               >
-                                {isConfirmingStep || currentStepValidationStage ? (
+                                {currentStepIsConfirming || currentStepValidationStage ? (
                                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                                 ) : currentStep?.status === 'validation_failed' ? (
                                   <RotateCcw className="h-3.5 w-3.5" />
@@ -4095,7 +4465,7 @@ export default function WorkflowsPage() {
                   disabled={!currentStepCanConfirm}
                   onClick={() => void handleConfirmStep()}
                 >
-                  {isConfirmingStep || currentStepValidationStage ? (
+                  {currentStepIsConfirming || currentStepValidationStage ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
                     <RotateCcw className="h-3.5 w-3.5" />
@@ -4193,9 +4563,12 @@ export default function WorkflowsPage() {
               )}
             </div>
           ) : (
-            <div className="w-full min-w-0 max-w-full space-y-4 overflow-hidden">
+            <div className="w-full min-w-0 max-w-full space-y-4 overflow-x-hidden">
               {chatMessages.map((msg, idx) => {
                 const renderDocumentCard = msg.role === 'assistant' && isAssistantDocumentLike(msg.content);
+                const quickReplyQuestions = msg.role === 'assistant' && idx === lastAssistantMessageIndex && !isStreaming
+                  ? extractAssistantQuickReplyQuestions(msg.content)
+                  : [];
 
                 return (
                   <div
@@ -4203,19 +4576,41 @@ export default function WorkflowsPage() {
                     className={`flex w-full min-w-0 max-w-full ${msg.role === 'user' ? 'justify-end pl-6 sm:pl-10' : 'justify-start pr-6 sm:pr-10'}`}
                   >
                     {renderDocumentCard ? (
-                      renderAssistantDocumentCard(msg.content, idx)
+                      <div className="flex min-w-0 max-w-full flex-col gap-2 items-start md:max-w-[80%] xl:max-w-2xl">
+                        {renderAssistantDocumentCard(msg.content, idx)}
+                        {quickReplyQuestions.length > 0 && (
+                          <AssistantQuickReplyPanel
+                            questions={quickReplyQuestions}
+                            disabled={isStreaming}
+                            onSubmit={(reply) => {
+                              void handleSendMessage(reply);
+                            }}
+                          />
+                        )}
+                      </div>
                     ) : (
-                      <div
-                        className={`w-fit min-w-0 max-w-full overflow-hidden break-words rounded-lg p-3 text-sm [overflow-wrap:anywhere] md:max-w-[80%] xl:max-w-2xl ${
-                          msg.role === 'user'
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-muted/50 border border-border/40'
-                        }`}
-                      >
-                        {msg.role === 'assistant' ? (
-                          <CompactMarkdown content={msg.content} />
-                        ) : (
-                          <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.content}</div>
+                      <div className={`flex min-w-0 max-w-full flex-col gap-2 ${msg.role === 'user' ? 'items-end md:max-w-[80%] xl:max-w-2xl' : 'items-start md:max-w-[80%] xl:max-w-2xl'}`}>
+                        <div
+                          className={`w-fit min-w-0 max-w-full overflow-hidden break-words rounded-lg p-3 text-sm [overflow-wrap:anywhere] ${
+                            msg.role === 'user'
+                              ? 'bg-primary text-primary-foreground'
+                              : 'bg-muted/50 border border-border/40'
+                          }`}
+                        >
+                          {msg.role === 'assistant' ? (
+                            <CompactMarkdown content={msg.content} />
+                          ) : (
+                            <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.content}</div>
+                          )}
+                        </div>
+                        {quickReplyQuestions.length > 0 && (
+                          <AssistantQuickReplyPanel
+                            questions={quickReplyQuestions}
+                            disabled={isStreaming}
+                            onSubmit={(reply) => {
+                              void handleSendMessage(reply);
+                            }}
+                          />
                         )}
                       </div>
                     )}
@@ -4273,35 +4668,27 @@ export default function WorkflowsPage() {
 
             {supplementalContextOpen && (
               <div className="flex flex-col gap-3 border-t border-border/40 pt-3">
-                <div className="rounded-lg border border-border/50 bg-background/60 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-medium">本轮将注入的上下文</p>
-                      <p className="mt-1 text-[11px] text-muted-foreground">
-                        知识库会按当前问题检索片段；产物和本地文件会直接作为上下文发送。
-                      </p>
-                    </div>
+                {(selectedContextCount > 0 || unavailableKnowledgeBaseCount > 0) && (
+                  <div className="rounded-lg border border-border/50 bg-background/60 p-3">
                     {unavailableKnowledgeBaseCount > 0 && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 shrink-0 px-2 text-xs"
-                        onClick={() => {
-                          const nextIds = selectedKnowledgeBaseIds.filter((id) => knowledgeBases.some((kb) => kb.id === id));
-                          updateCurrentContextSelection(
-                            { knowledgeBaseIds: nextIds },
-                            () => setSelectedKnowledgeBaseIds(nextIds),
-                          );
-                        }}
-                      >
-                        清理失效引用
-                      </Button>
+                      <div className="mb-3 flex justify-end">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 shrink-0 px-2 text-xs"
+                          onClick={() => {
+                            const nextIds = selectedKnowledgeBaseIds.filter((id) => knowledgeBases.some((kb) => kb.id === id));
+                            updateCurrentContextSelection(
+                              { knowledgeBaseIds: nextIds },
+                              () => setSelectedKnowledgeBaseIds(nextIds),
+                            );
+                          }}
+                        >
+                          清理失效引用
+                        </Button>
+                      </div>
                     )}
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {selectedContextCount === 0 && unavailableKnowledgeBaseCount === 0 ? (
-                      <span className="text-xs text-muted-foreground">未选择补充上下文。</span>
-                    ) : null}
+                    <div className="flex flex-wrap gap-2">
                     {autoInjectedPreviousSteps.map((step) => (
                       <Badge key={`auto-step-${step.id}`} variant="secondary" className="gap-1.5 bg-primary/10 text-primary">
                         <FileText className="h-3 w-3" />
@@ -4375,8 +4762,9 @@ export default function WorkflowsPage() {
                         {unavailableKnowledgeBaseCount} 个知识库引用不可用
                       </Badge>
                     )}
+                    </div>
                   </div>
-                </div>
+                )}
 
                 <Tabs value={supplementalContextTab} onValueChange={(value) => setSupplementalContextTab(value as 'knowledge' | 'materials' | 'files')}>
                   <TabsList className="grid h-8 w-full grid-cols-3">
@@ -4418,9 +4806,11 @@ export default function WorkflowsPage() {
                                   </StatusBadge>
                                   <Badge variant="outline">{kb.document_count || 0} 文档</Badge>
                                 </div>
-                                <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                                  {kb.description || '未填写知识库说明'}
-                                </p>
+                                {kb.description?.trim() ? (
+                                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                                    {kb.description}
+                                  </p>
+                                ) : null}
                                 <p className="mt-1 truncate text-[11px] text-muted-foreground">
                                   数据集 {kb.dataset_name || '未配置'} · 更新于 {kb.updated_at ? formatSnapshotTime(kb.updated_at) : '未知'}
                                 </p>
@@ -4662,7 +5052,13 @@ export default function WorkflowsPage() {
             <Textarea
               placeholder="输入你的问题或指令..."
               value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
+              onChange={(e) => {
+                const nextValue = e.target.value;
+                setChatInput(nextValue);
+                if (currentStep?.id) {
+                  setChatInputByStepId((prev) => ({ ...prev, [currentStep.id]: nextValue }));
+                }
+              }}
               onPaste={handlePasteContextFiles}
               onKeyDown={handleChatInputKeyDown}
               disabled={isStreaming}
@@ -4684,7 +5080,9 @@ export default function WorkflowsPage() {
               <Button
                 type="button"
                 className="gap-2 sm:w-auto"
-                onClick={handleSendMessage}
+                onClick={() => {
+                  void handleSendMessage();
+                }}
                 disabled={!chatInput.trim()}
                 aria-label="发送消息"
               >
@@ -4708,228 +5106,13 @@ export default function WorkflowsPage() {
             <p className="mt-1 truncate text-xs text-muted-foreground">
               {currentStep?.name || '未选择步骤'}
             </p>
-            <TabsList className="mt-3 grid h-auto w-full grid-cols-3 gap-1 sm:grid-cols-6">
-              <TabsTrigger value="skill" className="text-xs">Skill</TabsTrigger>
-              <TabsTrigger value="tuning" className="text-xs">调优</TabsTrigger>
+            <TabsList className="mt-3 grid h-auto w-full grid-cols-4 gap-1">
               <TabsTrigger value="outputs" className="text-xs">产出</TabsTrigger>
               <TabsTrigger value="gate" className="text-xs">门禁</TabsTrigger>
               <TabsTrigger value="review" className="text-xs">审核</TabsTrigger>
               <TabsTrigger value="archive" className="text-xs">沉淀</TabsTrigger>
             </TabsList>
           </div>
-
-          <TabsContent value="skill" className="min-h-0 flex-1 overflow-hidden">
-            <div className="flex h-full min-w-0 flex-col gap-4 overflow-y-auto p-4">
-              {currentSkill ? (
-                <Card className={appCardClassName}>
-                  <CardContent className="p-3">
-                    <div className="flex min-w-0 items-center justify-between gap-2">
-                      <p className="min-w-0 truncate text-sm font-medium">{currentSkill.name}</p>
-                      {isCurrentSkillDraftEnabled && (
-                        <Badge variant="secondary" className="shrink-0 text-[11px]">草稿验证</Badge>
-                      )}
-                    </div>
-                    <p className="mt-2 break-words text-xs leading-5 text-muted-foreground">{currentSkill.description}</p>
-                    <div className="mt-3 flex flex-wrap gap-1">
-                      {currentSkill.tools.map((tool) => (
-                        <Badge key={tool} variant="secondary" className="text-xs">{tool}</Badge>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              ) : (
-                <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
-                  选择一个步骤后查看 Skill 信息。
-                </p>
-              )}
-            </div>
-          </TabsContent>
-
-          <TabsContent value="tuning" className="min-h-0 flex-1 overflow-hidden">
-            <div className="flex h-full min-w-0 flex-col gap-3 overflow-y-auto p-4">
-              {baseCurrentSkill && currentStep ? (
-                <>
-                  <Card className={appCardClassName}>
-                    <CardContent className="flex flex-col gap-3 p-3">
-                      <div className="flex min-w-0 items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="text-xs font-medium">调优请求</p>
-                          <p className="mt-1 truncate text-[11px] text-muted-foreground">{baseCurrentSkill.name}</p>
-                        </div>
-                        <Badge variant="outline" className="shrink-0 gap-1 text-[11px]">
-                          <Sparkles className="h-3 w-3" />
-                          Claude CLI
-                        </Badge>
-                      </div>
-                      <Textarea
-                        className="min-h-28 resize-none text-xs leading-5"
-                        placeholder="输入修改目标，例如：输出先给结论和风险，再给拆解；减少寒暄；补充验收标准和输入缺口。"
-                        value={skillTuningInstruction}
-                        onChange={(event) => setSkillTuningInstruction(event.target.value)}
-                      />
-                      <Button
-                        size="sm"
-                        className="h-8 w-full gap-1.5 text-xs"
-                        disabled={skillTuningGenerating || !skillTuningInstruction.trim()}
-                        onClick={() => void handleGenerateSkillDraft()}
-                      >
-                        {skillTuningGenerating ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Sparkles className="h-3.5 w-3.5" />
-                        )}
-                        {skillTuningGenerating ? '生成中' : currentSkillDraft ? '重新生成草稿' : '生成草稿'}
-                      </Button>
-                    </CardContent>
-                  </Card>
-
-                  {currentSkillDraft ? (
-                    <>
-                      <Card className={appCardClassName}>
-                        <CardContent className="flex flex-col gap-3 p-3">
-                          <div className="flex min-w-0 items-center justify-between gap-2">
-                            <div className="min-w-0">
-                              <p className="truncate text-xs font-medium">调优草稿</p>
-                              <p className="mt-1 truncate text-[11px] text-muted-foreground">
-                                {currentSkillDraft.generator === 'claude-code-cli' ? 'Claude Code CLI' : '未知生成器'} · {new Date(currentSkillDraft.updated_at).toLocaleString('zh-CN')}
-                              </p>
-                            </div>
-                            <Badge variant={currentSkillDraft.status === 'submitted' ? 'secondary' : isCurrentSkillDraftEnabled ? 'default' : 'outline'} className="shrink-0 text-[11px]">
-                              {currentSkillDraft.status === 'submitted' ? '已提交' : isCurrentSkillDraftEnabled ? '验证中' : '草稿'}
-                            </Badge>
-                          </div>
-                          <div className="rounded-lg border border-border/60 bg-muted/25 p-3">
-                            <div className="flex items-center justify-between gap-3">
-                              <div className="min-w-0">
-                                <p className="truncate text-[11px] font-medium">启用到当前节点</p>
-                                <p className="mt-1 truncate text-[11px] text-muted-foreground">
-                                  {isCurrentSkillDraftEnabled ? '当前对话使用调优草稿' : '当前对话使用基线 Skill'}
-                                </p>
-                              </div>
-                              <Switch
-                                checked={isCurrentSkillDraftEnabled}
-                                onCheckedChange={setCurrentSkillDraftEnabled}
-                                aria-label="启用调优草稿"
-                              />
-                            </div>
-                          </div>
-                          {currentSkillDraft.tuning_request && (
-                            <div className="rounded-lg border border-border/60 bg-background/60 p-3">
-                              <p className="text-[11px] font-medium">调优意图</p>
-                              <p className="mt-1 line-clamp-3 text-[11px] leading-5 text-muted-foreground">
-                                {currentSkillDraft.tuning_request}
-                              </p>
-                            </div>
-                          )}
-                          <div className="space-y-2">
-                            {(currentSkillDraft.change_items?.length ? currentSkillDraft.change_items : [currentSkillDraft.change_summary])
-                              .slice(0, 5)
-                              .map((item, index) => (
-                                <div key={`${item}-${index}`} className="flex gap-2 rounded-md bg-muted/25 px-2.5 py-2 text-[11px] leading-5">
-                                  <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-medium text-primary">
-                                    {index + 1}
-                                  </span>
-                                  <span className="min-w-0 break-words text-muted-foreground">{item}</span>
-                                </div>
-                              ))}
-                          </div>
-                        </CardContent>
-                      </Card>
-
-                      <Card className={appCardClassName}>
-                        <CardContent className="flex flex-col gap-3 p-3">
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="flex items-center gap-1.5 text-xs font-medium">
-                              <GitCompareArrows className="h-3.5 w-3.5 text-primary" />
-                              差异预览
-                            </p>
-                            <div className="flex shrink-0 items-center gap-1">
-                              <Badge variant="outline" className="text-[10px]">+{currentSkillDraftDiff.addedCount}</Badge>
-                              <Badge variant="outline" className="text-[10px]">-{currentSkillDraftDiff.removedCount}</Badge>
-                            </div>
-                          </div>
-                          <div className="grid grid-cols-2 gap-2 text-[11px]">
-                            <div className="rounded-md border border-border/60 bg-background/50 p-2">
-                              <p className="text-muted-foreground">基线</p>
-                              <p className="mt-1 truncate font-medium">{baseCurrentSkill.name}</p>
-                            </div>
-                            <div className="rounded-md border border-border/60 bg-background/50 p-2">
-                              <p className="text-muted-foreground">草稿</p>
-                              <p className="mt-1 truncate font-medium">{currentSkillDraft.name}</p>
-                            </div>
-                          </div>
-                          <div className="space-y-1.5">
-                            {currentSkillDraftDiff.addedPreview.length > 0 ? currentSkillDraftDiff.addedPreview.map((line, index) => (
-                              <p key={`${line}-${index}`} className="truncate rounded bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-700 dark:text-emerald-300">
-                                + {line}
-                              </p>
-                            )) : (
-                              <p className="rounded border border-dashed border-border/60 px-2 py-2 text-[11px] text-muted-foreground">暂无新增行预览</p>
-                            )}
-                          </div>
-                          {currentSkillDraftDiff.promptChanged && (
-                            <Badge variant="secondary" className="w-fit text-[11px]">Prompt Template 已更新</Badge>
-                          )}
-                        </CardContent>
-                      </Card>
-
-                      {currentSkillDraft.quality_gates && currentSkillDraft.quality_gates.length > 0 && (
-                        <Card className={appCardClassName}>
-                          <CardContent className="flex flex-col gap-2 p-3">
-                            <p className="flex items-center gap-1.5 text-xs font-medium">
-                              <ShieldCheck className="h-3.5 w-3.5 text-primary" />
-                              验证门禁
-                            </p>
-                            {currentSkillDraft.quality_gates.slice(0, 4).map((gate, index) => (
-                              <div key={`${gate}-${index}`} className="flex gap-2 text-[11px] leading-5 text-muted-foreground">
-                                <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
-                                <span className="min-w-0 break-words">{gate}</span>
-                              </div>
-                            ))}
-                          </CardContent>
-                        </Card>
-                      )}
-
-                      <div className="flex flex-col gap-2">
-                        <Button
-                          size="sm"
-                          className="h-8 w-full gap-1.5 text-xs"
-                          disabled={skillTuningSubmitting || skillTuningGenerating}
-                          onClick={() => void handleSubmitSkillDraft()}
-                        >
-                          {skillTuningSubmitting ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <ClipboardCheck className="h-3.5 w-3.5" />
-                          )}
-                          {currentSkillDraft.status === 'submitted' ? '重新提交修改请求' : '提交修改请求'}
-                        </Button>
-                        {currentSkillDraft.submittedSkillId && (
-                          <div className="truncate rounded-md border border-border/60 bg-muted/25 px-2.5 py-2 text-[11px] text-muted-foreground">
-                            审核记录：{currentSkillDraft.submittedSkillId}
-                          </div>
-                        )}
-                      </div>
-                    </>
-                  ) : (
-                    <Card className={appCardClassName}>
-                      <CardContent className="p-3 text-[11px] text-muted-foreground">暂无草稿</CardContent>
-                    </Card>
-                  )}
-
-                  {skillTuningMessage && (
-                    <Alert className="border-border/60 bg-muted/30">
-                      <AlertDescription className="text-xs">{skillTuningMessage}</AlertDescription>
-                    </Alert>
-                  )}
-                </>
-              ) : (
-                <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
-                  选择一个步骤后查看调优状态。
-                </p>
-              )}
-            </div>
-          </TabsContent>
 
           <TabsContent value="gate" className="min-h-0 flex-1 overflow-hidden">
             <div className="flex h-full min-w-0 flex-col gap-3 overflow-y-auto p-4">
@@ -4979,7 +5162,7 @@ export default function WorkflowsPage() {
                         disabled={!currentStepCanConfirm}
                         onClick={() => void handleConfirmStep()}
                       >
-                        {isConfirmingStep || currentStepValidationStage ? (
+                        {currentStepIsConfirming || currentStepValidationStage ? (
                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         ) : (
                           <RotateCcw className="h-3.5 w-3.5" />

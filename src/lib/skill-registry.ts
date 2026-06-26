@@ -3,6 +3,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import type { QueryResultRow } from 'pg';
+import { hasPostgresDatabaseConfig, queryPostgres } from '@/storage/database/postgres-client';
 import { cleanExecutableSkillText } from './workflow-skill-draft';
 
 const execFile = promisify(execFileCallback);
@@ -168,7 +170,7 @@ const SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 const SKILL_FILE_NAMES = ['skill.md', 'SKILL.md'];
 const META_FILE_NAMES = ['meta.json'];
 const CHANGELOG_FILE_NAMES = ['CHANGELOG.md', 'changelog.md'];
-const IGNORED_SCAN_DIRS = new Set(['.git', 'node_modules', '.next', 'dist', 'data', '.claude-plugin']);
+const IGNORED_SCAN_DIRS = new Set(['.git', 'node_modules', '.next', 'dist', 'data', '.claude-plugin', '__MACOSX']);
 const PACKAGE_ASSET_FOLDERS: Array<{ folder: string; kind: SkillPackageAssetKind }> = [
   { folder: 'attachments', kind: 'attachment' },
   { folder: 'scripts', kind: 'script' },
@@ -849,6 +851,7 @@ function serializeSkillVersion(version: SkillVersion): SkillVersion {
     package_path: version.package_path,
     skill_md: version.skill_md,
     package_assets: normalizeStoredPackageAssets(version.package_assets),
+    meta_json: version.meta_json,
   };
 }
 
@@ -857,13 +860,24 @@ function serializeSkillRecord(skill: SkillRecord): Record<string, unknown> {
     id: skill.id,
     skill_id: skill.skill_id,
     display_name: skill.display_name,
+    name: skill.name,
     description: skill.description,
     version: skill.version,
+    author: skill.author,
+    tags: skill.tags,
     source_type: skill.source_type,
     source_uri: skill.source_uri,
     scope: skill.scope,
     status: skill.status,
+    methodology: skill.methodology,
+    tools: skill.tools,
+    outputs: skill.outputs,
+    checklist: skill.checklist,
+    prompt_template: skill.prompt_template,
     skill_md: skill.skill_md,
+    meta_json: skill.meta_json,
+    changelog: skill.changelog,
+    attachments: skill.attachments,
     acceptanceCriteria: skill.acceptanceCriteria,
     requiredSections: skill.requiredSections,
     evidenceRules: skill.evidenceRules,
@@ -915,6 +929,248 @@ function normalizeSkillReviewRequest(value: unknown): SkillReviewRequest | null 
     version_bump: versionBump,
     is_active: typeof record.is_active === 'boolean' ? record.is_active : true,
   };
+}
+
+function toIsoString(value: unknown, fallback = nowIso()) {
+  if (value instanceof Date) return value.toISOString();
+  return getString(value, fallback);
+}
+
+function packageAssetFromManifest(value: unknown): SkillPackageAsset[] {
+  return normalizeStoredPackageAssets(Array.isArray(value)
+    ? value.map((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+      const record = item as Record<string, unknown>;
+      return {
+        ...record,
+        mime_type: record.mime_type || record.content_type,
+        size: record.size ?? record.size_bytes,
+      };
+    })
+    : []);
+}
+
+interface DatabaseSkillRow extends QueryResultRow {
+  id: string;
+  name: string;
+  description: string | null;
+  version: string;
+  scope: string;
+  status: string;
+  source_type: string;
+  source_uri: string | null;
+  asset_manifest: unknown;
+  definition: unknown;
+  tags: unknown;
+  is_active: boolean;
+  created_at: Date | string | null;
+  updated_at: Date | string | null;
+}
+
+interface DatabaseSkillVersionRow extends QueryResultRow {
+  skill_id: string;
+  version: string;
+  definition: unknown;
+  asset_manifest: unknown;
+  changelog_note: string | null;
+  created_at: Date | string | null;
+}
+
+function skillFromDatabaseRow(
+  row: DatabaseSkillRow,
+  versions: DatabaseSkillVersionRow[],
+): SkillRecord | null {
+  const definition = toRecord(row.definition);
+  const assetManifest = packageAssetFromManifest(row.asset_manifest);
+  const createdAt = toIsoString(row.created_at);
+  const updatedAt = toIsoString(row.updated_at, createdAt);
+  const versionPayloads = versions.map((versionRow) => {
+    const versionDefinition = toRecord(versionRow.definition);
+    return {
+      version: getString(versionRow.version, row.version),
+      updated_at: toIsoString(versionRow.created_at, updatedAt),
+      changelog: getString(versionRow.changelog_note),
+      skill_md: getString(versionDefinition.skill_md),
+      meta_json: toRecord(versionDefinition.meta_json),
+      package_assets: packageAssetFromManifest(versionRow.asset_manifest),
+    };
+  });
+
+  return normalizeSkillRecord({
+    id: row.id,
+    skill_id: getString(definition.skill_id, row.id),
+    display_name: getString(definition.display_name, row.name),
+    name: getString(definition.name, row.name),
+    description: getString(definition.description, row.description || ''),
+    version: row.version,
+    author: getString(definition.author),
+    tags: Array.isArray(row.tags) ? row.tags : toStringArray(definition.tags),
+    source_type: row.source_type,
+    source_uri: row.source_uri || undefined,
+    scope: row.scope,
+    status: row.status,
+    methodology: getString(definition.methodology),
+    tools: toStringArray(definition.tools),
+    outputs: toRecord(definition.outputs),
+    checklist: toStringArray(definition.checklist),
+    prompt_template: getString(definition.prompt_template) || undefined,
+    skill_md: getString(definition.skill_md),
+    meta_json: toRecord(definition.meta_json),
+    review: definition.review,
+    attachments: toStringArray(definition.attachments),
+    changelog: getString(definition.changelog),
+    package_assets: assetManifest,
+    versions: versionPayloads.length > 0 ? versionPayloads : [{
+      version: row.version,
+      updated_at: updatedAt,
+      changelog: getString(definition.changelog),
+      skill_md: getString(definition.skill_md),
+      meta_json: toRecord(definition.meta_json),
+      package_assets: assetManifest,
+    }],
+    created_at: createdAt,
+    updated_at: updatedAt,
+    is_active: row.is_active,
+    acceptanceCriteria: toStringArray(definition.acceptanceCriteria),
+    requiredSections: toStringArray(definition.requiredSections),
+    evidenceRules: toStringArray(definition.evidenceRules),
+    failureConditions: toStringArray(definition.failureConditions),
+  });
+}
+
+async function listSkillsFromDatabase(filters: { scope?: string; status?: string } = {}) {
+  if (!hasPostgresDatabaseConfig()) return null;
+  const where: string[] = ['is_active = true'];
+  const params: unknown[] = [];
+  if (filters.scope) {
+    params.push(filters.scope);
+    where.push(`scope = $${params.length}`);
+  }
+  if (filters.status) {
+    params.push(filters.status);
+    where.push(`status = $${params.length}`);
+  }
+
+  const skillResult = await queryPostgres<DatabaseSkillRow>(
+    `
+      SELECT
+        id,
+        name,
+        description,
+        version,
+        scope,
+        status,
+        source_type,
+        source_uri,
+        asset_manifest,
+        definition,
+        tags,
+        is_active,
+        created_at,
+        updated_at
+      FROM skills
+      WHERE ${where.join(' AND ')}
+      ORDER BY COALESCE(updated_at, created_at) DESC
+    `,
+    params,
+  );
+  if (skillResult.rows.length === 0) return [];
+
+  const skillIds = skillResult.rows.map((row) => row.id);
+  const versionResult = await queryPostgres<DatabaseSkillVersionRow>(
+    `
+      SELECT skill_id, version, definition, asset_manifest, changelog_note, created_at
+      FROM skill_versions
+      WHERE skill_id = ANY($1::varchar[])
+      ORDER BY created_at DESC
+    `,
+    [skillIds],
+  );
+  const versionsBySkill = new Map<string, DatabaseSkillVersionRow[]>();
+  for (const version of versionResult.rows) {
+    const versions = versionsBySkill.get(version.skill_id) ?? [];
+    versions.push(version);
+    versionsBySkill.set(version.skill_id, versions);
+  }
+
+  return skillResult.rows.flatMap((row) => {
+    const skill = skillFromDatabaseRow(row, versionsBySkill.get(row.id) ?? []);
+    return skill ? [skill] : [];
+  });
+}
+
+function reviewStatusFromDatabase(value: unknown): SkillReviewRequestStatus {
+  return value === 'approved' || value === 'rejected' ? value : 'pending';
+}
+
+interface DatabaseSkillReviewRow extends QueryResultRow {
+  id: string;
+  status: string;
+  note: string | null;
+  payload: unknown;
+  is_active: boolean;
+  requested_at: Date | string | null;
+  reviewed_at: Date | string | null;
+  definition: unknown;
+}
+
+async function listSkillReviewRequestsFromDatabase(filters: { status?: string } = {}) {
+  if (!hasPostgresDatabaseConfig()) return null;
+  const params: unknown[] = [];
+  const where = ['sr.is_active = true'];
+  if (filters.status) {
+    params.push(filters.status === 'pending' ? 'pending_review' : filters.status);
+    where.push(`sr.status = $${params.length}`);
+  }
+
+  const result = await queryPostgres<DatabaseSkillReviewRow>(
+    `
+      SELECT
+        sr.id,
+        sr.status,
+        sr.note,
+        sr.payload,
+        sr.is_active,
+        sr.requested_at,
+        sr.reviewed_at,
+        s.definition
+      FROM skill_reviews sr
+      JOIN skills s ON s.id = sr.skill_id
+      WHERE ${where.join(' AND ')}
+      ORDER BY sr.requested_at DESC
+    `,
+    params,
+  );
+
+  return result.rows.flatMap((row) => {
+    const payload = toRecord(row.payload);
+    const fromPayload = normalizeSkillReviewRequest({
+      ...payload,
+      status: reviewStatusFromDatabase(row.status),
+      reviewed_at: toIsoString(row.reviewed_at, ''),
+      is_active: row.is_active,
+    });
+    if (fromPayload) return [fromPayload];
+
+    const submittedSkill = normalizeSkillRecord(toRecord(row.definition));
+    if (!submittedSkill) return [];
+    const request = normalizeSkillReviewRequest({
+      id: row.id,
+      skill_id: submittedSkill.skill_id || submittedSkill.id,
+      display_name: submittedSkill.display_name || submittedSkill.name,
+      description: submittedSkill.description,
+      operation: 'update',
+      target_scope: 'team',
+      submitted_skill: submittedSkill,
+      submitted_at: toIsoString(row.requested_at),
+      submitted_note: row.note || undefined,
+      reviewed_at: toIsoString(row.reviewed_at, ''),
+      status: reviewStatusFromDatabase(row.status),
+      version_bump: 'patch',
+      is_active: row.is_active,
+    });
+    return request ? [request] : [];
+  });
 }
 
 function serializeSkillReviewRequest(request: SkillReviewRequest): Record<string, unknown> {
@@ -1016,8 +1272,19 @@ async function writeIndex(index: SkillIndex) {
   await fs.rename(tempPath, indexPath);
 }
 
+const MAX_SKILL_BUSINESS_ID_LENGTH = 128;
+const REVIEW_ID_PREFIX = 'review-';
+const REVIEW_ID_RANDOM_LENGTH = 8;
+
 function buildReviewId(sourceId: string) {
-  return `review-${sourceId}-${randomUUID().slice(0, 8)}`;
+  const suffix = randomUUID().slice(0, REVIEW_ID_RANDOM_LENGTH);
+  const normalized = slugify(sourceId);
+  const maxSourceLength = MAX_SKILL_BUSINESS_ID_LENGTH - REVIEW_ID_PREFIX.length - suffix.length - 1;
+  const sourcePart = normalized
+    .slice(0, Math.max(1, maxSourceLength))
+    .replace(/-+$/g, '') || createHash('sha1').update(sourceId).digest('hex').slice(0, 10);
+
+  return `${REVIEW_ID_PREFIX}${sourcePart}-${suffix}`;
 }
 
 async function allowedImportRoots() {
@@ -1519,6 +1786,11 @@ async function importSkillReviewRequestsFromDirectory(inputPath: string, options
 }
 
 export async function listSkills(filters: { scope?: string; status?: string } = {}) {
+  const databaseSkills = await listSkillsFromDatabase(filters);
+  if (databaseSkills) {
+    return Promise.all(databaseSkills.map((skill) => hydrateSkillPackageAssets(skill)));
+  }
+
   const [seedSkills, index] = await Promise.all([loadSeedSkills(), readIndex()]);
   const filteredSkills = mergeSkills(seedSkills, index.skills).filter((skill) => {
     if (filters.scope && skill.scope !== filters.scope) return false;
@@ -1529,6 +1801,9 @@ export async function listSkills(filters: { scope?: string; status?: string } = 
 }
 
 export async function listSkillReviewRequests(filters: { status?: string } = {}) {
+  const databaseReviewRequests = await listSkillReviewRequestsFromDatabase(filters);
+  if (databaseReviewRequests) return databaseReviewRequests;
+
   const index = await readIndex();
   return index.review_requests
     .filter((request) => {
@@ -2118,14 +2393,17 @@ export async function rollbackSkill(id: string, version: string) {
 export async function archiveSkill(id: string) {
   const index = await readIndex();
   let found = false;
+  let updated: SkillRecord | null = null;
   const skills = index.skills.map((skill) => {
     if (skill.id !== id) return skill;
     found = true;
-    return { ...skill, is_active: false, status: 'archived' as SkillStatus, updated_at: nowIso() };
+    updated = { ...skill, is_active: false, status: 'archived' as SkillStatus, updated_at: nowIso() };
+    return updated;
   });
 
   if (!found) throw new Error(`Skill not found or read-only: ${id}`);
   await writeIndex({ skills, review_requests: index.review_requests });
+  return updated;
 }
 
 export async function renderSkillMarkdown(id: string, version?: string) {

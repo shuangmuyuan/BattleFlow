@@ -102,6 +102,21 @@ Keep secrets on the remote server only. Do not paste or commit `BATTLEFLOW_DATAB
 - Repository boundaries: this is an individual repository. Do not treat it as an orchestrator hub and do not commit unrelated sibling repository changes from here.
 - Progress reporting: for multi-step work, keep the user informed after significant phases. Do not block engineering work on status reporting if the reporting channel is unavailable.
 
+## Branch Collaboration
+
+BattleFlow uses a lightweight Git Flow model:
+
+- `main` is the production branch. It must stay deployable and should only receive verified release changes or hotfixes.
+- `develop` is the integration and test branch. New product work starts from `develop`.
+- Before starting a new feature branch, make sure `develop` contains any newer changes from `main`. In practice, hotfixes merged to `main` must be merged back into `develop` immediately.
+- Feature branches should be created from `develop`, using names such as `feature/<scope>`, `fix/<scope>`, or `chore/<scope>`.
+- After implementation and validation, merge the feature branch back into `develop`, then delete the feature branch.
+- After `develop` passes validation, merge `develop` into `main` for deployment.
+- Production incidents must be fixed from `main` on a `hotfix/<scope>` branch.
+- After a hotfix passes validation, merge it into `main`, deploy it, then merge `main` back into `develop` so the production fix is not lost.
+- Delete hotfix branches after they have been merged back into the required long-lived branches.
+- Prefer pull requests for merges into `develop` and `main`. Run `pnpm validate` before merging code changes; run `pnpm build` for server, runtime, dependency, or deployment-impacting changes.
+
 ## Deep Work Plan Commands
 
 Thin command files live under `.agents/commands/` and delegate to `.agents/skills/deepworkplan`.

@@ -3,10 +3,12 @@ import { canAccess, requireOrganizationContext, requirePermission } from '@/lib/
 import { AuthError } from '@/lib/auth/types';
 import {
   filterAuthorizedSkills,
+  markSkillReviewBusinessDecision,
   requireOwnedCreatePermission,
   requireSkillIdAccess,
   requireSkillRecordAccess,
   upsertSkillBusinessMetadata,
+  upsertSkillReviewBusinessMetadata,
 } from '@/lib/resource-metadata-repository';
 import {
   archiveSkill,
@@ -91,6 +93,7 @@ async function persistSkillItems(
   await Promise.all(items.map(async (item) => {
     if (isReviewRequest(item)) {
       await upsertSkillBusinessMetadata(context, item.submitted_skill);
+      await upsertSkillReviewBusinessMetadata(context, item);
       return;
     }
 
@@ -288,7 +291,12 @@ export async function POST(request: NextRequest) {
       if (!id) return jsonError('id is required', 400);
       const note = String(body.note || '').trim();
       const skill = await approveSkillReview(id, note);
-      if (!isReviewRequest(skill)) await persistSkillItems(context, [skill]);
+      if (isReviewRequest(skill)) {
+        await persistSkillItems(context, [skill]);
+      } else {
+        await persistSkillItems(context, [skill]);
+        await markSkillReviewBusinessDecision(context, id, 'approved', note);
+      }
       return jsonOk(isReviewRequest(skill) ? { review_request: skill } : { skill });
     }
 
@@ -298,6 +306,8 @@ export async function POST(request: NextRequest) {
       if (!id) return jsonError('id is required', 400);
       const note = String(body.note || '').trim();
       const skill = await rejectSkillReview(id, note);
+      if (isReviewRequest(skill)) await persistSkillItems(context, [skill]);
+      await markSkillReviewBusinessDecision(context, id, 'rejected', note);
       return jsonOk(isReviewRequest(skill) ? { review_request: skill } : { skill });
     }
 
@@ -333,7 +343,8 @@ export async function DELETE(request: NextRequest) {
     await requireSkillAccessBeforeAssetRead(context, id, 'skill.delete');
     const sourceSkill = await getSkill(id);
     if (!sourceSkill) return jsonError('Skill not found', 404);
-    await archiveSkill(id);
+    const archivedSkill = await archiveSkill(id);
+    if (archivedSkill) await upsertSkillBusinessMetadata(context, archivedSkill);
     return jsonOk({ success: true });
   } catch (error) {
     console.error('Skills DELETE error:', error);

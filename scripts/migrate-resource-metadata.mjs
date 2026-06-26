@@ -52,6 +52,10 @@ function skillDefinition(skill) {
     tools: Array.isArray(skill.tools) ? skill.tools : [],
     outputs: skill.outputs && typeof skill.outputs === 'object' ? skill.outputs : {},
     checklist: Array.isArray(skill.checklist) ? skill.checklist : [],
+    acceptanceCriteria: Array.isArray(skill.acceptanceCriteria) ? skill.acceptanceCriteria : [],
+    requiredSections: Array.isArray(skill.requiredSections) ? skill.requiredSections : [],
+    evidenceRules: Array.isArray(skill.evidenceRules) ? skill.evidenceRules : [],
+    failureConditions: Array.isArray(skill.failureConditions) ? skill.failureConditions : [],
     prompt_template: skill.prompt_template || '',
     skill_md: skill.skill_md || '',
     meta_json: skill.meta_json || {},
@@ -208,6 +212,68 @@ async function upsertSkill(client, skill, defaults) {
   }
 }
 
+function skillReviewDatabaseStatus(status) {
+  return status === 'pending' ? 'pending_review' : status || 'pending_review';
+}
+
+async function upsertSkillReview(client, request) {
+  if (!request?.submitted_skill) return;
+  const versionResult = await client.query(
+    `
+      SELECT id
+      FROM skill_versions
+      WHERE skill_id = $1
+        AND version = $2
+      LIMIT 1
+    `,
+    [request.submitted_skill.id, request.submitted_skill.version || '1.0.0'],
+  );
+  const versionId = versionResult.rows[0]?.id || null;
+  const status = skillReviewDatabaseStatus(request.status);
+
+  await client.query(
+    `
+      INSERT INTO skill_reviews (
+        id,
+        skill_id,
+        version_id,
+        status,
+        note,
+        payload,
+        is_active,
+        requested_by,
+        reviewed_by,
+        requested_at,
+        reviewed_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::timestamptz, $11::timestamptz)
+      ON CONFLICT (id)
+      DO UPDATE SET
+        skill_id = EXCLUDED.skill_id,
+        version_id = EXCLUDED.version_id,
+        status = EXCLUDED.status,
+        note = EXCLUDED.note,
+        payload = EXCLUDED.payload,
+        is_active = EXCLUDED.is_active,
+        reviewed_by = EXCLUDED.reviewed_by,
+        reviewed_at = EXCLUDED.reviewed_at
+    `,
+    [
+      request.id,
+      request.submitted_skill.id,
+      versionId,
+      status,
+      request.review_note || request.submitted_note || null,
+      JSON.stringify(request),
+      request.is_active !== false,
+      userId,
+      request.reviewed_at ? userId : null,
+      request.submitted_at || new Date().toISOString(),
+      request.reviewed_at || null,
+    ],
+  );
+}
+
 async function loadOfficialSkills() {
   const registry = await readJson(path.join(cwd, 'skills', 'official', 'registry.json'), { skills: [] });
   const skills = [];
@@ -257,6 +323,7 @@ async function migrateSkills(client) {
   for (const request of index.review_requests || []) {
     if (request.submitted_skill) {
       await upsertSkill(client, request.submitted_skill, { scope: 'team', status: 'pending_review' });
+      await upsertSkillReview(client, request);
       count += 1;
     }
   }
@@ -292,10 +359,16 @@ async function migrateWorkflows(client) {
   for (const workflow of store.workflows || []) {
     await client.query(
       `
-        INSERT INTO workflows (id, workspace_id, organization_id, name, description, status, created_by, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9::timestamptz)
+        INSERT INTO workflows (id, workspace_id, organization_id, name, description, status, state, created_by, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::timestamptz, $10::timestamptz)
         ON CONFLICT (id)
-        DO UPDATE SET workspace_id = EXCLUDED.workspace_id, name = EXCLUDED.name, description = EXCLUDED.description, status = EXCLUDED.status, updated_at = EXCLUDED.updated_at
+        DO UPDATE SET
+          workspace_id = EXCLUDED.workspace_id,
+          name = EXCLUDED.name,
+          description = EXCLUDED.description,
+          status = EXCLUDED.status,
+          state = EXCLUDED.state,
+          updated_at = EXCLUDED.updated_at
       `,
       [
         workflow.id,
@@ -304,6 +377,7 @@ async function migrateWorkflows(client) {
         workflow.name,
         workflow.description || '',
         workflow.status || 'draft',
+        JSON.stringify(workflow),
         userId,
         workflow.created_at || new Date().toISOString(),
         workflow.updated_at || new Date().toISOString(),

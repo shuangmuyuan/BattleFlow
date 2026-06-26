@@ -155,6 +155,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const activeOrganization = authState?.organizations.find((organization) => (
     organization.id === authState.activeOrganizationId
   )) ?? authState?.organizations[0] ?? null;
+  const currentUserLabel = authState?.user.displayName?.trim() || authState?.user.email || '';
+  const shouldShowUserEmail = Boolean(
+    authState?.user.displayName?.trim()
+    && authState.user.displayName.trim() !== authState.user.email,
+  );
 
   async function handleOrganizationChange(organizationId: string) {
     setIsSwitchingOrganization(true);
@@ -322,14 +327,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                   <UserIcon className="h-3.5 w-3.5 text-brand" />
                 </div>
                 {!collapsed && (
-                  <span className="truncate text-sm">{authState.user.email}</span>
+                  <span className="truncate text-sm">{currentUserLabel}</span>
                 )}
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="border-border bg-card">
-              <DropdownMenuItem className="text-muted-foreground">
-                <UserIcon className="mr-2 h-4 w-4" />
-                {authState.user.email}
+            <DropdownMenuContent align="end" className="w-56 border-border bg-card">
+              <DropdownMenuItem className="gap-2 text-muted-foreground">
+                <UserIcon className="h-4 w-4 shrink-0" />
+                <div className="min-w-0">
+                  <p className="truncate text-sm text-foreground">{currentUserLabel}</p>
+                  {shouldShowUserEmail && (
+                    <p className="truncate text-xs text-muted-foreground">{authState.user.email}</p>
+                  )}
+                </div>
               </DropdownMenuItem>
               <DropdownMenuItem className="text-muted-foreground">
                 <Building2 className="mr-2 h-4 w-4" />
@@ -341,7 +351,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 onClick={() => setShowLogoutDialog(true)}
               >
                 <LogOut className="mr-2 h-4 w-4" />
-                Sign Out
+                退出登录
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -363,7 +373,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <Button
               variant="ghost"
               size="icon"
-              aria-label="Sign out"
+              aria-label="退出登录"
               className="text-muted-foreground hover:bg-secondary hover:text-foreground md:hidden"
               onClick={() => setShowLogoutDialog(true)}
             >
@@ -400,17 +410,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <AlertDialog open={showLogoutDialog} onOpenChange={setShowLogoutDialog}>
         <AlertDialogContent className="border-border bg-card">
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-card-foreground">Confirm Sign Out</AlertDialogTitle>
+            <AlertDialogTitle className="text-card-foreground">确认退出登录</AlertDialogTitle>
             <AlertDialogDescription className="text-muted-foreground">
-              Are you sure you want to sign out? You will need to sign in again to access your workspace.
+              确定要退出当前账号吗？退出后需要重新登录才能访问工作空间。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel className="border-border bg-secondary text-secondary-foreground hover:bg-secondary/80">
-              Cancel
+              取消
             </AlertDialogCancel>
             <AlertDialogAction className="bg-destructive text-white hover:bg-destructive/90" onClick={handleLogout}>
-              Sign Out
+              退出登录
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
