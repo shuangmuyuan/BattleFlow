@@ -587,7 +587,7 @@ const defaultContextSelection: WorkflowContextSelection = {
   disabledAutoInjectedStepIds: [],
 };
 
-const maxTextContextChars = 32_000;
+const maxTextContextBytes = 1 * 1024 * 1024;
 const maxPreviewImageBytes = 800_000;
 const maxStepPromptContextChars = 12_000;
 const maxTotalStepPromptContextChars = 36_000;
@@ -597,6 +597,27 @@ const maxTotalChatRequestMessageChars = 48_000;
 const maxRenderedMarkdownPreviewChars = 24_000;
 const maxDocumentTitleScanChars = 16_000;
 const maxDocumentTypeScanChars = 12_000;
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
+
+function formatByteSize(bytes: number) {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)}KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+function sliceTextByUtf8Bytes(value: string, maxBytes: number) {
+  const encoded = textEncoder.encode(value);
+  if (encoded.length <= maxBytes) {
+    return { text: value, truncated: false, originalBytes: encoded.length };
+  }
+
+  return {
+    text: textDecoder.decode(encoded.slice(0, maxBytes)),
+    truncated: true,
+    originalBytes: encoded.length,
+  };
+}
 
 function sliceTextWithMiddleOmission(value: string, maxChars: number) {
   if (value.length <= maxChars) {
@@ -676,12 +697,13 @@ function readFileAsDataUrl(file: File) {
 async function buildWorkflowFilePayload(file: File) {
   if (isReadableTextFile(file)) {
     const rawText = await file.text();
-    const truncated = rawText.length > maxTextContextChars;
-    const content = truncated ? rawText.slice(0, maxTextContextChars) : rawText;
+    const sliced = sliceTextByUtf8Bytes(rawText, maxTextContextBytes);
     return {
       contentKind: 'text' as const,
-      content,
-      note: truncated ? `文件正文已截断到 ${maxTextContextChars} 字符。` : undefined,
+      content: sliced.text,
+      note: sliced.truncated
+        ? `文件正文已从 ${formatByteSize(sliced.originalBytes)} 截断到 ${formatByteSize(maxTextContextBytes)}。`
+        : undefined,
       previewUrl: undefined,
     };
   }
@@ -1091,14 +1113,8 @@ export default function WorkflowsPage() {
     }
   }, [addUploadedContextFiles]);
 
-  const formatFileSize = (size: number) => {
-    if (size < 1024) return `${size}B`;
-    if (size < 1024 * 1024) return `${Math.ceil(size / 1024)}KB`;
-    return `${(size / 1024 / 1024).toFixed(1)}MB`;
-  };
-
   const summarizeWorkflowFile = (file: UploadedContextFile | ReviewedOutputFile, maxChars = 1200) => {
-    const metadata = `${file.name}（${file.type || 'unknown'}，${formatFileSize(file.size)}）`;
+    const metadata = `${file.name}（${file.type || 'unknown'}，${formatByteSize(file.size)}）`;
     if (file.contentKind === 'text' && file.content) {
       return `${metadata}\n${file.content.slice(0, maxChars)}${file.content.length > maxChars ? '\n...（已截断）' : ''}`;
     }
@@ -1641,31 +1657,50 @@ export default function WorkflowsPage() {
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      let sseBuffer = '';
+      let streamDone = false;
 
       setChatMessages([...visibleMessages, { role: 'assistant', content: '' }]);
 
-      while (true) {
+      while (!streamDone) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          sseBuffer += decoder.decode();
+          streamDone = true;
+        } else {
+          sseBuffer += decoder.decode(value, { stream: true });
+        }
 
-        const text = decoder.decode(value, { stream: true });
-        const lines = text.split('\n');
+        const events = sseBuffer.split(/\n\n/);
+        sseBuffer = streamDone ? '' : events.pop() || '';
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            let data: { content?: string; done?: boolean; error?: string };
-            try {
-              data = JSON.parse(line.slice(6));
-            } catch {
-              // Skip non-JSON lines
-              continue;
+        for (const eventText of events) {
+          const lines = eventText.split(/\r?\n/);
+          const dataLines = lines
+            .filter((line) => line.startsWith('data: '))
+            .map((line) => line.slice(6));
+
+          if (dataLines.length === 0) continue;
+
+          const payload = dataLines.join('\n');
+          let data: { content?: string; done?: boolean; error?: string };
+          try {
+            data = JSON.parse(payload);
+          } catch {
+            if (!streamDone) {
+              sseBuffer = `${eventText}\n\n${sseBuffer}`;
+              break;
             }
-            if (data.error) throw new Error(data.error);
-            if (data.content) {
-              assistantContent += data.content;
-              setChatMessages([...visibleMessages, { role: 'assistant', content: assistantContent }]);
-            }
-            if (data.done) break;
+            continue;
+          }
+          if (data.error) throw new Error(data.error);
+          if (data.content) {
+            assistantContent += data.content;
+            setChatMessages([...visibleMessages, { role: 'assistant', content: assistantContent }]);
+          }
+          if (data.done) {
+            streamDone = true;
+            break;
           }
         }
       }
@@ -3019,7 +3054,7 @@ export default function WorkflowsPage() {
         id: file.id,
         name: `${file.name}（已审核）`,
         source: '本地上传审核产物',
-        summary: `${file.name}，${file.type || 'unknown'}，${formatFileSize(file.size)}`,
+        summary: `${file.name}，${file.type || 'unknown'}，${formatByteSize(file.size)}`,
       }))
     );
   const currentExecutionGroup = currentStep
@@ -4113,7 +4148,7 @@ export default function WorkflowsPage() {
                                   <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                                 )}
                                 <span className="truncate">{file.name}</span>
-                                <span className="shrink-0 text-muted-foreground">{formatFileSize(file.size)}</span>
+                                <span className="shrink-0 text-muted-foreground">{formatByteSize(file.size)}</span>
                               </div>
                               <Button
                                 type="button"
@@ -4531,7 +4566,7 @@ export default function WorkflowsPage() {
                                 <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
                                 <div className="min-w-0 flex-1">
                                   <p className="truncate font-medium">{file.name}</p>
-                                  <p className="text-muted-foreground">{formatFileSize(file.size)}</p>
+                                  <p className="text-muted-foreground">{formatByteSize(file.size)}</p>
                                 </div>
                                 {file.content && (
                                   <button

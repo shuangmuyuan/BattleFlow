@@ -1,10 +1,10 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
 import { useSupabaseConfig } from '@/lib/supabase-config-inject';
 import { getSupabaseBrowserClientWithRetry } from '@/lib/supabase-browser';
-import type { User } from '@supabase/supabase-js';
 import {
   FileCode2,
   Database,
@@ -47,9 +47,18 @@ const navItems = [
   { href: '/dashboard/demos', label: 'Demo 生成', icon: Rocket },
 ];
 
+interface BattleFlowAuthUser {
+  id: string;
+  username: string;
+  display_name?: string | null;
+  email?: string | null;
+  department?: string | null;
+  title?: string | null;
+}
+
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<BattleFlowAuthUser | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [showLogoutDialog, setShowLogoutDialog] = useState(false);
   const router = useRouter();
@@ -60,10 +69,32 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   useEffect(() => {
     async function loadUser() {
       try {
+        const response = await fetch('/api/auth/me', {
+          method: 'GET',
+          credentials: 'include',
+          cache: 'no-store',
+        });
+        if (response.ok) {
+          const data = await response.json() as { user?: BattleFlowAuthUser | null };
+          if (data.user) {
+            setUser(data.user);
+            setAuthChecked(true);
+            return;
+          }
+        }
+      } catch {
+        // Fall through to legacy Supabase auth.
+      }
+
+      try {
         const supabase = await getSupabaseBrowserClientWithRetry();
         const { data: { user: currentUser } } = await supabase.auth.getUser();
         if (currentUser) {
-          setUser(currentUser);
+          setUser({
+            id: currentUser.id,
+            username: currentUser.email || currentUser.id,
+            email: currentUser.email,
+          });
         }
       } catch {
         // Auth not available - continue without user
@@ -80,6 +111,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }, [configLoading, config]);
 
   const handleLogout = async () => {
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'include',
+    }).catch(() => undefined);
+
     try {
       const supabase = await getSupabaseBrowserClientWithRetry();
       await supabase.auth.signOut();
@@ -88,6 +124,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       console.error('Logout error:', err);
     }
     setShowLogoutDialog(false);
+    router.replace('/login');
   };
 
   // Only show loading while config is being fetched
@@ -98,6 +135,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </div>
     );
   }
+
+  const userLabel = user?.display_name || user?.username || user?.email || '企业账号';
+  const userDetail = [user?.department, user?.title].filter(Boolean).join(' · ') || user?.email || user?.username;
 
   return (
     <div className="flex h-dvh min-w-0 overflow-hidden bg-background">
@@ -132,16 +172,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             return (
               <Button
                 key={item.href}
+                asChild
                 variant="ghost"
                 className={`w-full justify-start gap-3 ${
                   isActive
                     ? 'bg-brand/10 text-brand hover:bg-brand/15 hover:text-brand'
                     : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
                 } ${collapsed ? 'px-0 justify-center' : ''}`}
-                onClick={() => router.push(item.href)}
               >
-                <item.icon className="h-4 w-4 shrink-0" />
-                {!collapsed && <span className="truncate">{item.label}</span>}
+                <Link href={item.href} prefetch={false}>
+                  <item.icon className="h-4 w-4 shrink-0" />
+                  {!collapsed && <span className="truncate">{item.label}</span>}
+                </Link>
               </Button>
             );
           })}
@@ -182,14 +224,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                     <UserIcon className="h-3.5 w-3.5 text-brand" />
                   </div>
                   {!collapsed && (
-                    <span className="text-sm truncate">{user.email}</span>
+                    <span className="text-sm truncate">{userLabel}</span>
                   )}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="bg-card border-border">
                 <DropdownMenuItem className="text-muted-foreground">
                   <UserIcon className="mr-2 h-4 w-4" />
-                  {user.email}
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate">{userLabel}</span>
+                    {userDetail && <span className="truncate text-xs text-muted-foreground">{userDetail}</span>}
+                  </span>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator className="bg-border" />
                 <DropdownMenuItem
@@ -244,13 +289,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               return (
                 <Button
                   key={item.href}
+                  asChild
                   variant={isActive ? 'secondary' : 'ghost'}
                   size="sm"
                   className={`h-8 shrink-0 gap-2 ${isActive ? 'text-brand' : 'text-muted-foreground'}`}
-                  onClick={() => router.push(item.href)}
                 >
-                  <item.icon className="size-4 shrink-0" />
-                  <span className="text-xs">{item.label}</span>
+                  <Link href={item.href} prefetch={false}>
+                    <item.icon className="size-4 shrink-0" />
+                    <span className="text-xs">{item.label}</span>
+                  </Link>
                 </Button>
               );
             })}

@@ -163,3 +163,4 @@ Desktop.ini
 # Deep Work Plan working state
 .dwp/
 tmp/
+.docker-tools/

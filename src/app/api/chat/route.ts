@@ -97,8 +97,8 @@ const CLAUDE_RUNTIME_SKILL_MISFIRE_MARKERS = [
   '无法猜测或自行发明技能名称',
 ];
 
-const MAX_UPLOADED_FILE_PROMPT_CHARS = 16_000;
-const MAX_TOTAL_UPLOADED_FILES_PROMPT_CHARS = 36_000;
+const MAX_UPLOADED_FILE_PROMPT_BYTES = 1 * 1024 * 1024;
+const MAX_TOTAL_UPLOADED_FILES_PROMPT_BYTES = 10 * 1024 * 1024;
 const MAX_SKILL_PACKAGE_ASSET_PROMPT_CHARS = 24_000;
 const MAX_SKILL_PACKAGE_ASSET_ITEM_PROMPT_CHARS = 6_000;
 const MAX_SKILL_PACKAGE_ASSET_PROMPT_COUNT = 60;
@@ -110,6 +110,8 @@ const MAX_TOTAL_CHAT_PROMPT_MESSAGE_CHARS = 48_000;
 const MAX_KNOWLEDGE_RETRIEVAL_BASES = 8;
 const MAX_KNOWLEDGE_CHUNKS_PER_BASE = 3;
 const MAX_KNOWLEDGE_CHUNK_PROMPT_CHARS = 1_200;
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
 
 function sse(payload: Record<string, unknown>) {
   return `data: ${JSON.stringify(payload)}\n\n`;
@@ -138,6 +140,25 @@ function getNumber(value: unknown) {
 
 function truncateForPrompt(value: string, maxLength: number) {
   return value.length > maxLength ? `${value.slice(0, maxLength)}\n...（已截断）` : value;
+}
+
+function formatByteSize(bytes: number) {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)}KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+function slicePromptTextByUtf8Bytes(value: string, maxBytes: number) {
+  const encoded = textEncoder.encode(value);
+  if (encoded.length <= maxBytes) {
+    return { text: value, truncated: false, originalBytes: encoded.length };
+  }
+
+  return {
+    text: textDecoder.decode(encoded.slice(0, maxBytes)),
+    truncated: true,
+    originalBytes: encoded.length,
+  };
 }
 
 function getSafeChatErrorMessage(error: unknown) {
@@ -533,25 +554,25 @@ function buildSystemPrompt(body: Record<string, unknown>) {
 
   if (uploadedFiles.length > 0) {
     systemPrompt += '\n\n## Uploaded Context Files\n';
-    let remainingUploadedFileBudget = MAX_TOTAL_UPLOADED_FILES_PROMPT_CHARS;
+    let remainingUploadedFileBudget = MAX_TOTAL_UPLOADED_FILES_PROMPT_BYTES;
     for (const file of uploadedFiles) {
       systemPrompt += `\n### ${file.name || '未命名文件'}\n类型：${file.type || 'unknown'}；大小：${file.size || 0} bytes\n`;
       if (file.contentKind === 'text' && file.content) {
         if (remainingUploadedFileBudget <= 0) {
-          systemPrompt += `本轮上传文件正文已达到 ${MAX_TOTAL_UPLOADED_FILES_PROMPT_CHARS.toLocaleString('zh-CN')} 字符预算，当前文件仅保留元信息。\n`;
+          systemPrompt += `本轮上传文件正文已达到 ${formatByteSize(MAX_TOTAL_UPLOADED_FILES_PROMPT_BYTES)} 预算，当前文件仅保留元信息。\n`;
           continue;
         }
 
-        const fileBudget = Math.min(MAX_UPLOADED_FILE_PROMPT_CHARS, remainingUploadedFileBudget);
-        const sliced = slicePromptTextWithMiddleOmission(file.content, fileBudget);
+        const fileBudget = Math.min(MAX_UPLOADED_FILE_PROMPT_BYTES, remainingUploadedFileBudget);
+        const sliced = slicePromptTextByUtf8Bytes(file.content, fileBudget);
         systemPrompt += `${sliced.text}\n`;
         if (sliced.truncated || file.note) {
           systemPrompt += `\n注：${[
-            sliced.truncated ? `该文件正文已按 ${fileBudget.toLocaleString('zh-CN')} 字符预算截取。` : '',
+            sliced.truncated ? `该文件正文已按 ${formatByteSize(fileBudget)} 预算截取。` : '',
             file.note || '',
           ].filter(Boolean).join(' ')}\n`;
         }
-        remainingUploadedFileBudget -= sliced.text.length;
+        remainingUploadedFileBudget -= textEncoder.encode(sliced.text).length;
       } else if (file.note) {
         systemPrompt += `${file.note}\n`;
       }

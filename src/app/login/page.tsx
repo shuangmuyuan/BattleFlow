@@ -23,7 +23,15 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSsoSubmitting, setIsSsoSubmitting] = useState(false);
   const [isRegister, setIsRegister] = useState(false);
+
+  const handleSsoLogin = async () => {
+    setError('');
+    setIsSsoSubmitting(true);
+
+    window.location.href = '/api/auth/sso/login?redirect=1';
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -98,14 +106,6 @@ export default function LoginPage() {
     );
   }
 
-  if (configError) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="text-destructive">Configuration error: {configError}</div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <div className="w-full max-w-md space-y-6">
@@ -128,11 +128,29 @@ export default function LoginPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            <div className="space-y-4">
+              <Button
+                type="button"
+                className="w-full bg-brand hover:bg-brand/90 text-brand-foreground"
+                disabled={isSsoSubmitting}
+                onClick={handleSsoLogin}
+              >
+                {isSsoSubmitting ? '正在跳转...' : '使用企业账号登录'}
+              </Button>
+              {error && <p className="text-sm text-destructive">{error}</p>}
+            </div>
+
             <Tabs defaultValue="login" className="w-full">
-              <TabsList className="grid w-full grid-cols-2 bg-secondary">
+              <TabsList className="mt-6 grid w-full grid-cols-2 bg-secondary">
                 <TabsTrigger value="login" className="data-[state=active]:bg-brand data-[state=active]:text-brand-foreground">Sign In</TabsTrigger>
                 <TabsTrigger value="register" className="data-[state=active]:bg-brand data-[state=active]:text-brand-foreground">Register</TabsTrigger>
               </TabsList>
+
+              {configError && (
+                <p className="mt-3 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                  邮箱登录暂未配置，企业账号登录可继续使用。
+                </p>
+              )}
 
               <TabsContent value="login" className="mt-4">
                 <form onSubmit={handleLogin} className="space-y-4">
