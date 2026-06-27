@@ -57,6 +57,27 @@ export const userSessions = pgTable("user_sessions", {
   index("user_sessions_revoked_at_idx").on(table.revoked_at),
 ]);
 
+export const battleflowUsers = pgTable("battleflow_users", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()::text`),
+  sso_id: varchar("sso_id", { length: 255 }).notNull(),
+  username: varchar("username", { length: 255 }).notNull(),
+  display_name: varchar("display_name", { length: 255 }),
+  email: varchar("email", { length: 255 }),
+  department: varchar("department", { length: 255 }),
+  department_id: varchar("department_id", { length: 255 }),
+  title: varchar("title", { length: 255 }),
+  mobile: varchar("mobile", { length: 64 }),
+  raw_profile: jsonb("raw_profile").$type<Record<string, unknown>>().default(sql`'{}'::jsonb`).notNull(),
+  is_active: boolean("is_active").notNull().default(true),
+  is_admin: boolean("is_admin").notNull().default(false),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true }),
+}, (table) => [
+  uniqueIndex("battleflow_users_sso_id_idx").on(table.sso_id),
+  index("battleflow_users_email_idx").on(table.email),
+  index("battleflow_users_department_idx").on(table.department),
+]);
+
 // ============================================
 // Organizations & Members
 // ============================================

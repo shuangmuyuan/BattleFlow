@@ -21,11 +21,7 @@ Never commit:
 
 ## Authentication and Authorization
 
-- First-party auth helpers under `src/lib/auth/` resolve HttpOnly session cookies against Postgres rows through `BATTLEFLOW_DATABASE_URL`.
-- Passwords are hashed with Node's built-in `scrypt` KDF. Store only password hashes and session token hashes. Never log or return plaintext auth tokens.
-- Session cookies and active-organization cookies are HttpOnly, SameSite Lax, path-scoped to `/`, and Secure in production.
-- The first release intentionally excludes email verification and password reset; do not document or expose those flows as available product behavior.
-- Browser Supabase session state remains legacy until affected routes are migrated.
+- Browser auth uses Supabase session state through `getSupabaseBrowserClientWithRetry`.
 - Server Supabase access may use the service role key when no user token is provided.
 - Protected API routes must use shared auth context and permission helpers before reading or mutating organization data.
 - Platform super admin bootstrap runs only on the server when a signed-in user matches `BATTLEFLOW_SUPER_ADMIN_EMAILS` or `BATTLEFLOW_SUPER_ADMIN_USER_IDS`. API responses and UI state must never return the configured bootstrap values.
@@ -34,7 +30,6 @@ Never commit:
 - Skill, workflow, knowledge-base, PRD, snapshot, milestone, and chat routes must resolve first-party auth and Postgres-backed resource permissions before returning file-backed package assets, workflow outputs, or prompt context.
 - Demo handoff routes must resolve organization context and workflow resource permissions before reading workflow outputs or writing returned Demo links.
 - Any change that broadens service-role usage requires a security review.
-- Operational bootstrap, backfill, and recovery procedures live in `docs/ACCOUNT_ORG_PERMISSION_RUNBOOK.md`.
 
 ## Database Access
 

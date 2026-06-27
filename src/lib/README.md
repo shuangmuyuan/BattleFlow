@@ -6,13 +6,9 @@ Shared application logic.
 
 - `skill-registry.ts`: file-backed Skill registry, official seed loading, imports, reviews, publishing, rollback, archive, and Markdown rendering.
 - `workflow-registry.ts`: file-backed workspace/workflow store, steps, context files, reviewed outputs, snapshots, chat state, and Skill drafts.
-- `workflow-validation.ts`: validation criteria extraction, candidate hashing, validation prompt construction, strict result parsing, runtime wrappers, and gate-state decision helpers.
 - `skill-tuning.ts`: Claude Code CLI powered generation of workflow-specific Skill drafts.
 - `integrations/frieren-demo.ts`: server-only Frieren Demo handoff client with HMAC signing, URL normalization, response parsing, and document size validation.
 - `knowledge-repository.ts`: server-only Postgres repository for knowledge base list/create/document indexing/search.
-- `auth/`: server-only first-party auth context, Postgres fetch helpers, permission resolution, and super admin bootstrap/management helpers.
-- `organization-management.ts`: server-only Postgres repository for organization updates, members, departments, teams, and audit events.
-- `resource-metadata-repository.ts`: server-only Postgres metadata and authorization index for Skill/workflow resources while preserving file-backed package assets and workflow runtime state.
 - `agent-adapters/types.ts`: provider/runtime event and status types.
 - `agent-adapters/claude-code-cli.ts`: Claude Code CLI availability checks and streaming adapter.
 - `supabase-config-inject.tsx`: client-side Supabase config provider.
@@ -53,17 +49,6 @@ Shared application logic.
 - Use parameterized runtime queries.
 - Bound uploaded document content before storing or injecting it into prompts.
 - Treat retrieved snippets as untrusted content.
-
-## Auth Rules
-
-- Resolve sessions from HttpOnly cookies and store only token hashes in Postgres.
-- Use `requireUser`, `requireOrganizationContext`, and `requirePermission` from `auth/server.ts` in protected route handlers.
-- Use `requirePlatformPermission` for platform-wide management routes that do not belong to a single organization.
-- Keep permission checks deny-by-default and route-independent.
-- Keep super admin bootstrap values server-only; expose only database-backed assignment records to the UI.
-- Never expose secret material through super admin routes; super admin product access does not include environment variables, connection strings, or raw tokens.
-- Keep organization management mutations transactional and write audit events for role, membership, department/team, platform admin, and destructive changes.
-- Keep Skill/workflow package assets in file/object storage; routes must pass Postgres resource permission checks before returning assets or injecting them into prompts.
 
 ## Agent Adapter Rules
 
