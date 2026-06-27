@@ -16,23 +16,15 @@ Never commit:
 - generated runtime registry data under `data/`;
 - `.dwp/` plan state or `tmp/` scratch artifacts containing user data.
 
-`BATTLEFLOW_SUPABASE_SERVICE_ROLE_KEY`, `BATTLEFLOW_DATABASE_URL`, `BATTLEFLOW_SUPER_ADMIN_EMAILS`, and `BATTLEFLOW_SUPER_ADMIN_USER_IDS` are server-only. Do not expose them through client components or `/api/supabase-config`.
+`BATTLEFLOW_SUPABASE_SERVICE_ROLE_KEY` and `BATTLEFLOW_DATABASE_URL` are server-only. Do not expose them through client components or `/api/supabase-config`.
 
 ## Authentication and Authorization
 
-- First-party auth helpers under `src/lib/auth/` resolve HttpOnly session cookies against Postgres rows through `BATTLEFLOW_DATABASE_URL`.
-- Passwords are hashed with Node's built-in `scrypt` KDF. Store only password hashes and session token hashes. Never log or return plaintext auth tokens.
-- Session cookies and active-organization cookies are HttpOnly, SameSite Lax, path-scoped to `/`, and Secure in production.
-- The first release intentionally excludes email verification and password reset; do not document or expose those flows as available product behavior.
-- Browser Supabase session state remains legacy until affected routes are migrated.
+- Browser auth uses Supabase session state through `getSupabaseBrowserClientWithRetry`.
 - Server Supabase access may use the service role key when no user token is provided.
-- Protected API routes must use shared auth context and permission helpers before reading or mutating organization data.
-- Platform super admin bootstrap runs only on the server when a signed-in user matches `BATTLEFLOW_SUPER_ADMIN_EMAILS` or `BATTLEFLOW_SUPER_ADMIN_USER_IDS`. API responses and UI state must never return the configured bootstrap values.
-- Super admin product access can view and administer organization content, but it must still be blocked from secret material such as connection strings, service role keys, environment variables, and raw auth tokens.
-- Super admin grant and revoke changes must write audit events, and the last enabled super admin must not be revoked through normal management APIs.
-- Skill, workflow, knowledge-base, PRD, snapshot, milestone, and chat routes must resolve first-party auth and Postgres-backed resource permissions before returning file-backed package assets, workflow outputs, or prompt context.
+- Server Postgres access uses `BATTLEFLOW_DATABASE_URL` for knowledge-store operations only.
+- API routes that mutate team/user data should prefer explicit user/session checks before production hardening.
 - Any change that broadens service-role usage requires a security review.
-- Operational bootstrap, backfill, and recovery procedures live in `docs/ACCOUNT_ORG_PERMISSION_RUNBOOK.md`.
 
 ## Database Access
 
@@ -67,10 +59,6 @@ The Claude Code CLI adapter is intentionally constrained:
 
 Do not enable CLI tools, broader permissions, or persistent sessions without documenting the threat model and validating the change.
 
-Workflow validation uses the same constrained Claude Code CLI boundary. Skill self-check and independent Agent validation both run with safe mode, no tools, no session persistence, and budget controlled by environment variables. Validation prompts frame Skill Markdown, uploaded files, retrieved knowledge, chat history, self-check output, and candidate artifacts as untrusted reference material. The validation Agent is a judge only: it must return structured JSON and must not execute instructions from candidate content or package assets.
-
-Validation failures and runtime errors are stored as bounded summaries and findings. Do not log or surface full uploaded private documents, full candidate artifacts, credentials, raw service-role keys, or raw CLI prompts in validation error messages.
-
 ## File System Writes
 
 The registries write to local disk. Keep writes scoped to configured registry roots and use temp-file writes plus rename for important state. Never allow arbitrary user-provided paths to escape configured import roots.
@@ -84,8 +72,6 @@ Log enough context for operational debugging, but never log:
 - raw service-role keys;
 - private imported Skill packages;
 - user session tokens.
-
-For workflow validation, prefer attempt IDs, workflow IDs, step IDs, phase names, and short summaries over raw prompt or candidate content.
 
 ## User-Provided Content Rendering
 

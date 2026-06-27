@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { fetchOrganizationById, fetchOrganizationMemberships } from '@/lib/auth/fetch';
 import { requireUser } from '@/lib/auth/server';
 import { ACTIVE_ORGANIZATION_COOKIE_NAME } from '@/lib/auth/types';
+import { battleflowAuthCookieName, getUserById, verifySessionToken } from '@/lib/sso-auth';
 import { authErrorResponse } from '../_shared';
 
 export const runtime = 'nodejs';
@@ -48,6 +49,47 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error) {
-    return authErrorResponse(error);
+    const token = request.cookies.get(battleflowAuthCookieName)?.value || '';
+    const payload = token ? verifySessionToken(token) : null;
+
+    if (!payload?.sub) {
+      return authErrorResponse(error);
+    }
+
+    const ssoUser = await getUserById(payload.sub);
+    if (!ssoUser || !ssoUser.is_active) {
+      return authErrorResponse(error);
+    }
+
+    const activeOrganization = {
+      id: 'default',
+      name: 'Default Organization',
+      slug: 'default',
+      role: ssoUser.is_admin ? 'org_owner' : 'org_member',
+      status: 'active',
+    };
+
+    return NextResponse.json({
+      user: {
+        id: ssoUser.id,
+        email: ssoUser.email ?? '',
+        displayName: ssoUser.display_name ?? ssoUser.username,
+        avatarUrl: null,
+      },
+      isSuperAdmin: Boolean(ssoUser.is_admin),
+      activeOrganizationId: activeOrganization.id,
+      capabilities: {
+        manageOrganization: Boolean(ssoUser.is_admin),
+        manageMembers: Boolean(ssoUser.is_admin),
+        manageDepartments: Boolean(ssoUser.is_admin),
+        manageTeams: Boolean(ssoUser.is_admin),
+        managePlatformAdmins: Boolean(ssoUser.is_admin),
+      },
+      organizations: [activeOrganization],
+    }, {
+      headers: {
+        'Cache-Control': 'no-store',
+      },
+    });
   }
 }

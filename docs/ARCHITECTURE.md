@@ -27,19 +27,16 @@ The repository is an individual application repo, not a monorepo and not an orch
 
 BattleFlow currently has two storage styles:
 
-1. Hybrid file/Postgres runtime registries:
+1. File-backed runtime registries:
    - `SKILL_REGISTRY_DIR` defaults to `data/skill-registry`.
    - `WORKFLOW_REGISTRY_DIR` defaults to `data/workflows`.
    - Both directories are gitignored runtime state.
-   - Skill/workflow business metadata, version/state indexes, asset manifests, and resource grants are projected into direct Postgres through `src/lib/resource-metadata-repository.ts`.
-   - Large package assets, uploaded workflow files, and file-backed runtime state remain outside tracked source and are returned only after Postgres permission checks.
-2. Supabase-backed legacy data model and direct Postgres application data:
+2. Supabase-backed data model and direct Postgres knowledge store:
    - `src/storage/database/shared/schema.ts` defines organizations, members, Skills, workflows, steps, snapshots, milestones, knowledge bases, and PRD documents.
    - `src/storage/database/supabase-client.ts` creates server clients with anon or service-role keys depending on available env.
-   - `src/storage/database/postgres-client.ts` creates a server-only Postgres pool from `BATTLEFLOW_DATABASE_URL` for first-party auth, organization management, permission checks, knowledge-store operations, PRD documents, milestones, and resource metadata.
+   - `src/storage/database/postgres-client.ts` creates a server-only Postgres pool from `BATTLEFLOW_DATABASE_URL` for knowledge-store operations when a full Supabase REST/Auth stack is not available.
    - `scripts/database/001_knowledge_store.sql` bootstraps organizations, knowledge bases, knowledge documents, and lexical/trigram search indexes.
-   - `scripts/database/002_account_org_permissions.sql` bootstraps users, password credentials, sessions, organization members, departments, teams, platform admins, resource grants, audit events, and Skill/workflow metadata tables.
-   - Browser auth uses first-party BattleFlow routes under `/api/auth/*`; injected Supabase browser config remains for legacy Supabase-backed surfaces until those are migrated.
+   - Browser auth uses injected public Supabase config from `src/lib/supabase-config-inject.tsx` and `src/lib/supabase-browser.ts`.
 
 Agents must preserve the distinction between source files and runtime registry data.
 
@@ -47,18 +44,16 @@ Agents must preserve the distinction between source files and runtime registry d
 
 All API handlers use App Router route handlers under `src/app/api`.
 
-- `/api/skills` manages Skill list/detail/download/import/review/rollback/archive through Postgres-backed resource authorization while preserving file-backed package assets.
+- `/api/skills` manages Skill list/detail/download/import/review/rollback/archive.
 - `/api/skills/tune` generates workflow Skill tuning drafts through the Claude Code CLI.
-- `/api/workflows` manages file-backed workspaces and workflows with Postgres metadata and resource grant filtering.
-- `/api/workflows/validation` runs workflow step validation gates and returns the updated workflow.
-- `/api/workflows/snapshots` manages workflow step snapshots after workflow authorization.
-- `/api/workflows/milestones` manages milestones in direct Postgres after workflow authorization.
+- `/api/workflows` manages file-backed workspaces and workflows.
+- `/api/workflows/snapshots` manages workflow step snapshots.
+- `/api/workflows/milestones` manages milestones.
 - `/api/chat` streams product-planning chat responses with knowledge and workflow context.
 - `/api/agent-runtime` reports Claude Code CLI adapter availability.
 - `/api/supabase-config` exposes browser-safe Supabase config.
-- `/api/prd` reads and writes PRD documents through direct Postgres after workflow authorization.
+- `/api/prd` reads and writes PRD documents through Supabase.
 - `/api/knowledge` handles knowledge data for the dashboard. Knowledge document indexing/search uses direct Postgres when `BATTLEFLOW_DATABASE_URL` is configured.
-- `/api/auth/*`, `/api/organizations/*`, and `/api/admin/super-admins` provide first-party account, organization, department, team, and platform admin management.
 
 Route handlers that access the file system or spawn CLI processes must keep `runtime = 'nodejs'`.
 
@@ -77,29 +72,6 @@ The Claude Code CLI adapter lives in `src/lib/agent-adapters/claude-code-cli.ts`
 
 Do not grant CLI tools or broaden permissions without a security review.
 
-## Workflow Validation Loop
-
-Workflow step completion is guarded by a validation loop:
-
-1. The user produces and saves a candidate assistant output for the active step.
-2. The dashboard calls `POST /api/workflows/validation` with `start_step_validation` or `retry_step_validation`.
-3. The route stores the candidate as `step.candidateOutput`, hashes it, writes a `validation_candidate` step snapshot, creates a validation attempt, and moves the step to `self_checking`.
-4. The runtime runs a Skill self-check through the Claude Code CLI adapter in safe mode with no tools and no session persistence, then persists the phase and moves the step to `agent_validating`.
-5. The runtime runs an independent Agent validation against the same candidate and acceptance criteria.
-6. Only when both phases pass does the route set `step.status = "completed"` and promote the candidate into `step.output`.
-7. Failed or error results set `step.status = "validation_failed"`, keep the candidate in candidate fields, leave `step.output` unchanged, and keep downstream steps blocked.
-
-The workflow step status values are:
-
-- `pending`: locked until the active execution group reaches the step;
-- `in_progress`: editable and ready for chat output;
-- `self_checking`: Skill self-check is running;
-- `agent_validating`: independent Agent validation is running;
-- `validation_failed`: current candidate did not pass and the user must revise or retry;
-- `completed`: candidate passed validation and became durable step output.
-
-Each workflow stores `validationAttempts` with criteria, candidate hash, candidate snapshot ID, self-check result, Agent validation result, final attempt status, and timestamps. The dashboard's `门禁` tab reads these records to show criteria, findings, blockers, candidate download, and retry actions.
-
 ## UI Architecture
 
 The dashboard has a fixed viewport shell in `src/app/dashboard/layout.tsx`:
@@ -108,6 +80,6 @@ The dashboard has a fixed viewport shell in `src/app/dashboard/layout.tsx`:
 - mobile horizontal navigation;
 - bounded main scroll regions;
 - theme toggle using `useTheme`;
-- first-party account, active-organization, organization-switching, and capability-gated admin navigation.
+- optional Supabase auth user display.
 
 Pages must own their scroll regions and avoid body-level layout drift. The static validation scripts enforce required class tokens for this.
