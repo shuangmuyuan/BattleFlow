@@ -21,9 +21,12 @@ import {
   ExternalLink,
   Database,
   Clock,
+  LockKeyhole,
+  Users,
 } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import {
   PageHeader,
   ProductEmptyState,
@@ -40,7 +43,10 @@ interface KnowledgeBase {
   dataset_name: string;
   document_count: number;
   updated_at: string;
+  visibility?: KnowledgeVisibility;
 }
+
+type KnowledgeVisibility = 'public' | 'private';
 
 interface SearchResult {
   content: string;
@@ -57,6 +63,7 @@ export default function KnowledgePage() {
   const [newKbName, setNewKbName] = useState('');
   const [newKbDesc, setNewKbDesc] = useState('');
   const [newKbSource, setNewKbSource] = useState<'builtin' | 'external'>('builtin');
+  const [newKbVisibility, setNewKbVisibility] = useState<KnowledgeVisibility>('private');
   const [newKbUrl, setNewKbUrl] = useState('');
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [selectedKb, setSelectedKb] = useState<KnowledgeBase | null>(null);
@@ -145,6 +152,7 @@ export default function KnowledgePage() {
           name: newKbName,
           description: newKbDesc,
           source_type: newKbSource,
+          visibility: newKbVisibility,
           connection_config: newKbSource === 'external' ? { type: 'custom', url: newKbUrl } : null,
         }),
       });
@@ -155,6 +163,7 @@ export default function KnowledgePage() {
       setCreateDialogOpen(false);
       setNewKbName('');
       setNewKbDesc('');
+      setNewKbVisibility('private');
       setNewKbUrl('');
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : '知识库创建失败');
@@ -315,6 +324,12 @@ export default function KnowledgePage() {
                         {kb.source_type === 'builtin' ? '内置' : '外部'}
                       </StatusBadge>
                     </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Badge variant="outline" className="gap-1.5">
+                        {kb.visibility === 'public' ? <Users className="h-3 w-3" /> : <LockKeyhole className="h-3 w-3" />}
+                        {kb.visibility === 'public' ? '公共层' : '私有层'}
+                      </Badge>
+                    </div>
                     <p className="text-sm text-muted-foreground">{kb.description}</p>
                   </CardHeader>
                   <CardContent>
@@ -444,6 +459,24 @@ export default function KnowledgePage() {
                 <TabsTrigger value="external">外部知识库</TabsTrigger>
               </TabsList>
             </Tabs>
+            <Field>
+              <FieldLabel>可见层级</FieldLabel>
+              <ToggleGroup
+                type="single"
+                value={newKbVisibility}
+                onValueChange={(value) => value && setNewKbVisibility(value as KnowledgeVisibility)}
+                className="justify-start"
+              >
+                <ToggleGroupItem value="private">
+                  <LockKeyhole className="h-4 w-4" />
+                  私有层
+                </ToggleGroupItem>
+                <ToggleGroupItem value="public">
+                  <Users className="h-4 w-4" />
+                  公共层
+                </ToggleGroupItem>
+              </ToggleGroup>
+            </Field>
             {newKbSource === 'external' && (
               <Field>
                 <FieldLabel htmlFor="knowledge-url">外部服务 URL</FieldLabel>

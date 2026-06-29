@@ -138,8 +138,8 @@ interface ApiSkillResponse {
 }
 
 const scopeLabels: Record<SkillScope, string> = {
-  personal: '个人私有',
-  team: '团队共享',
+  personal: '私有层',
+  team: '公共层',
   official: '官方模板',
 };
 
@@ -478,6 +478,7 @@ export default function SkillsPage() {
         const formData = new FormData();
         formData.set('action', 'import_upload');
         formData.set('scope', importScope);
+        formData.set('visibility', importScope === 'team' ? 'public' : 'private');
         formData.set('version_bump', versionBump);
         formData.set('changelog_note', importChangelogNote.trim());
         formData.set('file', selectedFile);
@@ -491,6 +492,7 @@ export default function SkillsPage() {
             action: 'import_path',
             path: serverPath.trim(),
             scope: importScope,
+            visibility: importScope === 'team' ? 'public' : 'private',
             version_bump: versionBump,
             changelog_note: importChangelogNote.trim(),
           }),
@@ -504,6 +506,7 @@ export default function SkillsPage() {
             action: 'import_git',
             url: importUrl.trim(),
             scope: importScope,
+            visibility: importScope === 'team' ? 'public' : 'private',
             version_bump: versionBump,
             changelog_note: importChangelogNote.trim(),
           }),
@@ -516,6 +519,7 @@ export default function SkillsPage() {
             action: 'import_registry',
             url: importUrl.trim(),
             scope: importScope,
+            visibility: importScope === 'team' ? 'public' : 'private',
             version_bump: versionBump,
             changelog_note: importChangelogNote.trim(),
           }),
@@ -622,11 +626,11 @@ export default function SkillsPage() {
                   onValueChange={(value) => value && setImportScope(value as 'personal' | 'team')}
                   className="justify-start"
                 >
-                  <ToggleGroupItem value="personal">个人私有</ToggleGroupItem>
-                  <ToggleGroupItem value="team">提交团队审核</ToggleGroupItem>
+                  <ToggleGroupItem value="personal">私有层</ToggleGroupItem>
+                  <ToggleGroupItem value="team">公共层</ToggleGroupItem>
                 </ToggleGroup>
                 <FieldDescription>
-                  个人 Skill 导入后立即可用；团队导入会进入审核队列，通过后才会新增或更新团队 Skill。
+                  私有层在导入后立即可用，并对创建者所在部门可见；公共层会进入审核队列，通过后对全组织可见。
                 </FieldDescription>
               </Field>
 
@@ -826,8 +830,8 @@ export default function SkillsPage() {
                   <TabsList className="w-max bg-muted/70">
                     <TabsTrigger value="all">全部 {skillCounts.all}</TabsTrigger>
                     <TabsTrigger value="official">官方 {skillCounts.official}</TabsTrigger>
-                    <TabsTrigger value="team">团队 {skillCounts.team}</TabsTrigger>
-                    <TabsTrigger value="personal">个人 {skillCounts.personal}</TabsTrigger>
+                    <TabsTrigger value="team">公共 {skillCounts.team}</TabsTrigger>
+                    <TabsTrigger value="personal">私有 {skillCounts.personal}</TabsTrigger>
                   </TabsList>
                 </div>
               </Tabs>
@@ -925,7 +929,7 @@ export default function SkillsPage() {
                               }}
                             >
                               <GitPullRequest />
-                              提交团队审核
+                              提交公共层审核
                             </DropdownMenuItem>
                           )}
                           {skill.scope !== 'official' && (

@@ -16,6 +16,11 @@ import {
   buildKnowledgeDocumentFromUploadFile,
   KnowledgeUploadValidationError,
 } from '@/lib/knowledge-document-upload';
+import {
+  getBusinessVisibilityLayer,
+  type BusinessVisibilityLayer,
+  upsertKnowledgeBaseBusinessMetadata,
+} from '@/lib/resource-metadata-repository';
 
 export const runtime = 'nodejs';
 
@@ -96,6 +101,32 @@ function canAccessKnowledgeBase(
   });
 }
 
+function knowledgeBaseVisibilityLayer(
+  context: Awaited<ReturnType<typeof requireOrganizationContext>>,
+  knowledgeBase: { id: string; organization_id: string },
+): BusinessVisibilityLayer {
+  const hasOrganizationReadGrant = context.resourceGrants.some((grant) => (
+    grant.organizationId === knowledgeBase.organization_id
+    && grant.resourceType === 'knowledge_base'
+    && grant.resourceId === knowledgeBase.id
+    && grant.subjectType === 'organization'
+    && grant.subjectId === knowledgeBase.organization_id
+    && grant.permission === 'read'
+  ));
+
+  return hasOrganizationReadGrant ? 'public' : 'private';
+}
+
+function withKnowledgeBaseVisibility(
+  context: Awaited<ReturnType<typeof requireOrganizationContext>>,
+  knowledgeBases: Awaited<ReturnType<typeof listKnowledgeBases>>,
+) {
+  return knowledgeBases.map((knowledgeBase) => ({
+    ...knowledgeBase,
+    visibility: knowledgeBaseVisibilityLayer(context, knowledgeBase),
+  }));
+}
+
 // GET /api/knowledge - List knowledge bases or search
 export async function GET(request: NextRequest) {
   try {
@@ -112,7 +143,7 @@ export async function GET(request: NextRequest) {
       const knowledgeBases = (await listKnowledgeBases())
         .filter((knowledgeBase) => knowledgeBase.organization_id === context.activeOrganization.id)
         .filter((knowledgeBase) => canAccessKnowledgeBase(context, 'knowledge_base.read', knowledgeBase));
-      return NextResponse.json({ knowledgeBases });
+      return NextResponse.json({ knowledgeBases: withKnowledgeBaseVisibility(context, knowledgeBases) });
     }
 
     const allKnowledgeBases = (await listKnowledgeBases())
@@ -223,8 +254,10 @@ export async function POST(request: NextRequest) {
         datasetName: readString(body.dataset_name) ?? null,
         createdBy: context.user.id,
       });
+      const visibility = getBusinessVisibilityLayer(body.visibility ?? body.layer);
+      await upsertKnowledgeBaseBusinessMetadata(context, knowledgeBase, visibility);
 
-      return NextResponse.json({ knowledgeBase });
+      return NextResponse.json({ knowledgeBase: { ...knowledgeBase, visibility } });
     }
 
     // Add documents to knowledge base

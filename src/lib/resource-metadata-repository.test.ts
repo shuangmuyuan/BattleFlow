@@ -151,4 +151,141 @@ describe('business resource authorization', () => {
 
     expect(canAccessBusinessResource(context, 'workflow.read', row)).toBe(true);
   });
+
+  it('allows organization public layer grants to read and run Skills', () => {
+    const context = makeContext({
+      resourceGrants: [
+        {
+          id: 'grant-read',
+          organizationId: 'org-1',
+          resourceType: 'skill',
+          resourceId: 'skill-public',
+          subjectType: 'organization',
+          subjectId: 'org-1',
+          permission: 'read',
+        },
+        {
+          id: 'grant-run',
+          organizationId: 'org-1',
+          resourceType: 'skill',
+          resourceId: 'skill-public',
+          subjectType: 'organization',
+          subjectId: 'org-1',
+          permission: 'run',
+        },
+      ],
+    });
+    const row = makeRow({
+      resource_id: 'skill-public',
+      owner_user_id: 'user-2',
+      resource_type: 'skill',
+      scope: 'team',
+    });
+
+    expect(canAccessBusinessResource(context, 'skill.read', row)).toBe(true);
+    expect(canAccessBusinessResource(context, 'skill.run', row)).toBe(true);
+    expect(canAccessBusinessResource(context, 'skill.update', row)).toBe(false);
+  });
+
+  it('allows department private layer grants to read knowledge bases inside the department', () => {
+    const context = makeContext({
+      departments: [
+        {
+          id: 'dept-product',
+          organizationId: 'org-1',
+          parentDepartmentId: null,
+          name: 'Product',
+          slug: 'product',
+        },
+      ],
+      departmentMemberships: [{
+        departmentId: 'dept-product',
+        userId: 'user-1',
+        role: 'department_member',
+      }],
+      resourceGrants: [{
+        id: 'grant-knowledge',
+        organizationId: 'org-1',
+        resourceType: 'knowledge_base',
+        resourceId: 'kb-private',
+        subjectType: 'department',
+        subjectId: 'dept-product',
+        permission: 'read',
+      }],
+    });
+    const row = makeRow({
+      resource_id: 'kb-private',
+      owner_user_id: 'user-2',
+      resource_type: 'knowledge_base',
+    });
+
+    expect(canAccessBusinessResource(context, 'knowledge_base.read', row)).toBe(true);
+    expect(canAccessBusinessResource(context, 'knowledge_base.update', row)).toBe(false);
+  });
+
+  it('denies private layer grants to users in a different department', () => {
+    const context = makeContext({
+      departments: [
+        {
+          id: 'dept-product',
+          organizationId: 'org-1',
+          parentDepartmentId: null,
+          name: 'Product',
+          slug: 'product',
+        },
+        {
+          id: 'dept-design',
+          organizationId: 'org-1',
+          parentDepartmentId: null,
+          name: 'Design',
+          slug: 'design',
+        },
+      ],
+      departmentMemberships: [{
+        departmentId: 'dept-design',
+        userId: 'user-1',
+        role: 'department_member',
+      }],
+      resourceGrants: [{
+        id: 'grant-knowledge',
+        organizationId: 'org-1',
+        resourceType: 'knowledge_base',
+        resourceId: 'kb-private',
+        subjectType: 'department',
+        subjectId: 'dept-product',
+        permission: 'read',
+      }],
+    });
+    const row = makeRow({
+      resource_id: 'kb-private',
+      owner_user_id: 'user-2',
+      resource_type: 'knowledge_base',
+    });
+
+    expect(canAccessBusinessResource(context, 'knowledge_base.read', row)).toBe(false);
+  });
+
+  it('allows super admins to see public and private layer resources without grants', () => {
+    const context = makeContext({
+      isSuperAdmin: true,
+      organizationMembership: null,
+      resourceGrants: [],
+    });
+    const privateKnowledgeBase = makeRow({
+      resource_id: 'kb-private',
+      organization_id: 'org-2',
+      owner_user_id: 'user-2',
+      resource_type: 'knowledge_base',
+    });
+    const publicSkill = makeRow({
+      resource_id: 'skill-public',
+      organization_id: 'org-2',
+      owner_user_id: 'user-2',
+      resource_type: 'skill',
+      scope: 'team',
+    });
+
+    expect(canAccessBusinessResource(context, 'knowledge_base.read', privateKnowledgeBase)).toBe(true);
+    expect(canAccessBusinessResource(context, 'skill.read', publicSkill)).toBe(true);
+  });
 });

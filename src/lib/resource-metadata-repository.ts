@@ -5,7 +5,10 @@ import { ForbiddenError, type AuthOrganizationContext, type ResourcePermission, 
 import type { SkillRecord, SkillReviewRequest } from './skill-registry';
 import type { WorkflowRecord, WorkspaceRecord } from './workflow-registry';
 
-type BusinessResourceType = 'skill' | 'workflow' | 'workflow_workspace';
+type BusinessResourceType = 'skill' | 'workflow' | 'workflow_workspace' | 'knowledge_base';
+type LayeredResourceType = 'skill' | 'knowledge_base';
+
+export type BusinessVisibilityLayer = 'public' | 'private';
 
 export interface ResourceMetadataRow extends QueryResultRow {
   resource_id: string;
@@ -68,6 +71,39 @@ function activeOrganizationId(context: AuthOrganizationContext): string {
   return context.activeOrganization.id;
 }
 
+export function getBusinessVisibilityLayer(
+  value: unknown,
+  fallback: BusinessVisibilityLayer = 'private',
+): BusinessVisibilityLayer {
+  if (value === 'public' || value === 'organization' || value === 'org' || value === 'team') {
+    return 'public';
+  }
+
+  if (value === 'private' || value === 'department' || value === 'personal') {
+    return 'private';
+  }
+
+  return fallback;
+}
+
+function skillScopeVisibilityLayer(scope: SkillRecord['scope']): BusinessVisibilityLayer {
+  return scope === 'team' || scope === 'official' ? 'public' : 'private';
+}
+
+function primaryDepartmentId(context: AuthOrganizationContext): string | null {
+  const organizationDepartmentIds = new Set(
+    context.departments
+      .filter((department) => department.organizationId === context.activeOrganization.id)
+      .map((department) => department.id),
+  );
+
+  const scopedMembership = context.departmentMemberships.find((membership) => (
+    organizationDepartmentIds.size === 0 || organizationDepartmentIds.has(membership.departmentId)
+  ));
+
+  return scopedMembership?.departmentId ?? null;
+}
+
 function isOfficialReadableSkill(row: ResourceMetadataRow, action: string): boolean {
   return row.resource_type === 'skill'
     && row.scope === 'official'
@@ -94,7 +130,7 @@ export function canAccessBusinessResource(
 async function upsertResourceGrant(input: {
   client: PoolClient;
   organizationId: string;
-  resourceType: 'skill' | 'workflow';
+  resourceType: LayeredResourceType | 'workflow';
   resourceId: string;
   subjectType: ResourceSubjectType;
   subjectId: string;
@@ -128,6 +164,70 @@ async function upsertResourceGrant(input: {
       input.createdBy,
     ],
   );
+}
+
+async function replaceLayerResourceGrants(input: {
+  client: PoolClient;
+  context: AuthOrganizationContext;
+  organizationId: string;
+  resourceType: LayeredResourceType;
+  resourceId: string;
+  layer: BusinessVisibilityLayer;
+  sharedPermissions: ResourcePermission[];
+  enabled?: boolean;
+}): Promise<void> {
+  await upsertResourceGrant({
+    client: input.client,
+    organizationId: input.organizationId,
+    resourceType: input.resourceType,
+    resourceId: input.resourceId,
+    subjectType: 'user',
+    subjectId: input.context.user.id,
+    permission: 'admin',
+    createdBy: input.context.user.id,
+  });
+
+  await input.client.query(
+    `
+      DELETE FROM resource_access_grants
+      WHERE organization_id = $1
+        AND resource_type = $2
+        AND resource_id = $3
+        AND subject_type IN ('organization', 'department')
+        AND permission = ANY($4::varchar[])
+    `,
+    [
+      input.organizationId,
+      input.resourceType,
+      input.resourceId,
+      input.sharedPermissions,
+    ],
+  );
+
+  if (input.enabled === false) {
+    return;
+  }
+
+  const sharedSubject = input.layer === 'public'
+    ? { subjectType: 'organization' as const, subjectId: input.organizationId }
+    : { subjectType: 'department' as const, subjectId: primaryDepartmentId(input.context) };
+
+  if (!sharedSubject.subjectId) {
+    return;
+  }
+
+  for (const permission of input.sharedPermissions) {
+    await upsertResourceGrant({
+      client: input.client,
+      organizationId: input.organizationId,
+      resourceType: input.resourceType,
+      resourceId: input.resourceId,
+      subjectType: sharedSubject.subjectType,
+      subjectId: sharedSubject.subjectId,
+      permission,
+      createdBy: input.context.user.id,
+    });
+  }
 }
 
 async function upsertSkillAssetRows(client: PoolClient, skill: SkillRecord): Promise<void> {
@@ -254,39 +354,16 @@ export async function upsertSkillBusinessMetadata(
     await upsertSkillAssetRows(client, skill);
 
     if (organizationId) {
-      await upsertResourceGrant({
+      await replaceLayerResourceGrants({
         client,
+        context,
         organizationId,
         resourceType: 'skill',
         resourceId: skill.id,
-        subjectType: 'user',
-        subjectId: context.user.id,
-        permission: 'admin',
-        createdBy: context.user.id,
+        layer: skillScopeVisibilityLayer(skill.scope),
+        sharedPermissions: ['read', 'run'],
+        enabled: skill.scope === 'personal' || (skill.scope === 'team' && skill.status === 'published'),
       });
-
-      if (skill.scope === 'team' && skill.status === 'published') {
-        await upsertResourceGrant({
-          client,
-          organizationId,
-          resourceType: 'skill',
-          resourceId: skill.id,
-          subjectType: 'organization',
-          subjectId: organizationId,
-          permission: 'read',
-          createdBy: context.user.id,
-        });
-        await upsertResourceGrant({
-          client,
-          organizationId,
-          resourceType: 'skill',
-          resourceId: skill.id,
-          subjectType: 'organization',
-          subjectId: organizationId,
-          permission: 'run',
-          createdBy: context.user.id,
-        });
-      }
     }
 
     await client.query('COMMIT');
@@ -304,6 +381,33 @@ export async function upsertSkillsBusinessMetadata(
 ): Promise<void> {
   for (const skill of skills) {
     await upsertSkillBusinessMetadata(context, skill);
+  }
+}
+
+export async function upsertKnowledgeBaseBusinessMetadata(
+  context: AuthOrganizationContext,
+  knowledgeBase: { id: string; organization_id: string; created_by: string | null },
+  layer: BusinessVisibilityLayer = 'private',
+): Promise<void> {
+  const client = await getPostgresPool().connect();
+
+  try {
+    await client.query('BEGIN');
+    await replaceLayerResourceGrants({
+      client,
+      context,
+      organizationId: knowledgeBase.organization_id,
+      resourceType: 'knowledge_base',
+      resourceId: knowledgeBase.id,
+      layer,
+      sharedPermissions: ['read'],
+    });
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
   }
 }
 

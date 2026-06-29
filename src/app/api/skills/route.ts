@@ -3,6 +3,7 @@ import { canAccess, requireOrganizationContext, requirePermission } from '@/lib/
 import { AuthError } from '@/lib/auth/types';
 import {
   filterAuthorizedSkills,
+  getBusinessVisibilityLayer,
   markSkillReviewBusinessDecision,
   requireOwnedCreatePermission,
   requireSkillIdAccess,
@@ -55,6 +56,18 @@ function jsonOk(data: unknown, status = 200) {
 
 function getScope(value: unknown): SkillScope {
   return value === 'team' || value === 'official' || value === 'personal' ? value : 'personal';
+}
+
+function getImportScope(input: { scope?: unknown; visibility?: unknown; layer?: unknown }): SkillScope {
+  const fallback = getScope(input.scope);
+  const layerInput = input.visibility ?? input.layer;
+  if (layerInput === undefined || layerInput === null) {
+    return fallback;
+  }
+
+  return getBusinessVisibilityLayer(layerInput, fallback === 'team' ? 'public' : 'private') === 'public'
+    ? 'team'
+    : 'personal';
 }
 
 function importStatusForScope(scope: SkillScope) {
@@ -196,7 +209,11 @@ export async function POST(request: NextRequest) {
       const file = formData.get('file');
       if (!(file instanceof File)) return jsonError('A zip file is required', 400);
 
-      const scope = getScope(formData.get('scope'));
+      const scope = getImportScope({
+        scope: formData.get('scope'),
+        visibility: formData.get('visibility'),
+        layer: formData.get('layer'),
+      });
       const versionBump = getVersionBump(formData.get('version_bump'));
       const changelogNote = getChangelogNote(formData.get('changelog_note'));
       const skills = await importSkillFromUpload(file, {
@@ -217,7 +234,7 @@ export async function POST(request: NextRequest) {
       requireOwnedCreatePermission(context, 'skill.import');
       const inputPath = String(body.path || '').trim();
       if (!inputPath) return jsonError('path is required', 400);
-      const scope = getScope(body.scope);
+      const scope = getImportScope(body);
       const versionBump = getVersionBump(body.version_bump);
       const changelogNote = getChangelogNote(body.changelog_note);
       const skills = await importSkillFromPath(inputPath, {
@@ -236,7 +253,7 @@ export async function POST(request: NextRequest) {
       requireOwnedCreatePermission(context, 'skill.import');
       const url = String(body.url || '').trim();
       if (!url) return jsonError('url is required', 400);
-      const scope = getScope(body.scope);
+      const scope = getImportScope(body);
       const versionBump = getVersionBump(body.version_bump);
       const changelogNote = getChangelogNote(body.changelog_note);
       const skills = await importSkillFromGit(url, {
