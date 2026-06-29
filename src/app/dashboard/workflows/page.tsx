@@ -5,6 +5,7 @@ import type { ClipboardEvent, DragEvent, KeyboardEvent, MouseEvent, PointerEvent
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -1998,12 +1999,9 @@ export default function WorkflowsPage() {
     createdAt: string,
   ): WorkflowStepSnapshot => {
     const selection = getContextSelection(workflow, step.id);
-    const knowledgeBaseIds = selectedKnowledgeBaseIds.length > 0
-      ? selectedKnowledgeBaseIds
-      : selection.knowledgeBaseIds;
-    const reviewMaterialIds = selectedReviewMaterialIds.length > 0
-      ? selectedReviewMaterialIds
-      : selection.reviewMaterialIds;
+    const isCurrentStepSnapshot = activeStepIdRef.current === step.id;
+    const knowledgeBaseIds = isCurrentStepSnapshot ? selectedKnowledgeBaseIds : selection.knowledgeBaseIds;
+    const reviewMaterialIds = isCurrentStepSnapshot ? selectedReviewMaterialIds : selection.reviewMaterialIds;
     const selectedReviewIds = new Set(reviewMaterialIds);
     const disabledAutoIds = new Set(selection.disabledAutoInjectedStepIds || []);
     const priorSteps = getPriorWorkflowSteps(workflow, step);
@@ -2063,8 +2061,11 @@ export default function WorkflowsPage() {
     const userMessage = stepInput.trim() || (currentStepContextFiles.length > 0 ? '请基于我上传的文件继续分析。' : '');
     if (!userMessage || streamingByStepId[currentStep.id]) return;
 
-    const selectedKnowledgeBases = knowledgeBases.filter((kb) => selectedKnowledgeBaseIds.includes(kb.id));
     const contextSelection = getContextSelection(workflow, currentStep.id);
+    const currentStepKnowledgeBaseIds = selectedKnowledgeBaseIds.filter((id) => (
+      knowledgeBases.some((knowledgeBase) => knowledgeBase.id === id)
+    ));
+    const selectedKnowledgeBases = knowledgeBases.filter((kb) => currentStepKnowledgeBaseIds.includes(kb.id));
     const disabledAutoInjectedStepIds = new Set(contextSelection.disabledAutoInjectedStepIds || []);
     const autoInjectedStepOutputs: Array<{ id: string; name: string; output: string }> = [];
     let remainingStepContextChars = maxTotalStepPromptContextChars;
@@ -2182,6 +2183,7 @@ export default function WorkflowsPage() {
             step_name: step.name,
             step_output: step.output,
           })),
+          knowledge_base_ids: currentStepKnowledgeBaseIds,
           selected_knowledge_bases: selectedKnowledgeBases,
           knowledge_query: userMessage,
           selected_review_materials: [...selectedReviewMaterials, ...selectedUploadedReviewMaterials],
@@ -3971,6 +3973,15 @@ export default function WorkflowsPage() {
       };
     });
   };
+  const setCurrentKnowledgeBaseSelected = (knowledgeBaseId: string, selected: boolean) => {
+    const nextIds = selected
+      ? Array.from(new Set([...selectedKnowledgeBaseIds, knowledgeBaseId]))
+      : selectedKnowledgeBaseIds.filter((id) => id !== knowledgeBaseId);
+    updateCurrentContextSelection(
+      { knowledgeBaseIds: nextIds },
+      () => setSelectedKnowledgeBaseIds(nextIds),
+    );
+  };
   const setAutoInjectedStepEnabled = (stepId: string, enabled: boolean) => {
     if (!currentStep) return;
     const disabledIds = new Set(disabledAutoInjectedStepIds);
@@ -4263,48 +4274,47 @@ export default function WorkflowsPage() {
             ) : (
               knowledgeBases.map((kb) => {
                 const selected = selectedKnowledgeBaseIds.includes(kb.id);
+                const checkboxId = `workflow-kb-${currentStep?.id || 'step'}-${kb.id}`;
                 return (
-                  <div
+                  <label
                     key={kb.id}
+                    htmlFor={checkboxId}
                     className={`flex items-start justify-between gap-3 rounded-lg border p-3 ${
                       selected ? 'border-primary/50 bg-primary/10' : 'border-border/50 bg-background/60'
                     }`}
                   >
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="truncate text-xs font-medium">{kb.name}</p>
-                        <StatusBadge tone={kb.document_count ? 'success' : 'warning'}>
-                          {kb.document_count ? '已连接' : '空库'}
-                        </StatusBadge>
-                        <Badge variant="outline">{kb.document_count || 0} 文档</Badge>
-                      </div>
-                      {kb.description?.trim() ? (
-                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                          {kb.description}
+                    <div className="flex min-w-0 items-start gap-3">
+                      <Checkbox
+                        id={checkboxId}
+                        checked={selected}
+                        className="mt-0.5"
+                        onCheckedChange={(checked) => {
+                          setCurrentKnowledgeBaseSelected(kb.id, checked === true);
+                        }}
+                        aria-label={`勾选知识库 ${kb.name}`}
+                      />
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="truncate text-xs font-medium">{kb.name}</p>
+                          <StatusBadge tone={kb.document_count ? 'success' : 'warning'}>
+                            {kb.document_count ? '已连接' : '空库'}
+                          </StatusBadge>
+                          <Badge variant="outline">{kb.document_count || 0} 文档</Badge>
+                        </div>
+                        {kb.description?.trim() ? (
+                          <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                            {kb.description}
+                          </p>
+                        ) : null}
+                        <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                          数据集 {kb.dataset_name || '未配置'} · 更新于 {kb.updated_at ? formatSnapshotTime(kb.updated_at) : '未知'}
                         </p>
-                      ) : null}
-                      <p className="mt-1 truncate text-[11px] text-muted-foreground">
-                        数据集 {kb.dataset_name || '未配置'} · 更新于 {kb.updated_at ? formatSnapshotTime(kb.updated_at) : '未知'}
-                      </p>
+                      </div>
                     </div>
-                    <Button
-                      type="button"
-                      variant={selected ? 'default' : 'outline'}
-                      size="sm"
-                      className="h-8 shrink-0 text-xs"
-                      onClick={() => {
-                        const nextIds = selected
-                          ? selectedKnowledgeBaseIds.filter((id) => id !== kb.id)
-                          : [...selectedKnowledgeBaseIds, kb.id];
-                        updateCurrentContextSelection(
-                          { knowledgeBaseIds: nextIds },
-                          () => setSelectedKnowledgeBaseIds(nextIds),
-                        );
-                      }}
-                    >
-                      {selected ? '已选' : '选择'}
-                    </Button>
-                  </div>
+                    <Badge variant={selected ? 'default' : 'outline'} className="shrink-0 text-[11px]">
+                      {selected ? '本步骤检索' : '未勾选'}
+                    </Badge>
+                  </label>
                 );
               })
             )}
@@ -5027,48 +5037,47 @@ export default function WorkflowsPage() {
                       ) : (
                         knowledgeBases.map((kb) => {
                           const selected = selectedKnowledgeBaseIds.includes(kb.id);
+                          const checkboxId = `workflow-chat-kb-${currentStep?.id || 'step'}-${kb.id}`;
                           return (
-                            <div
+                            <label
                               key={kb.id}
+                              htmlFor={checkboxId}
                               className={`flex items-start justify-between gap-3 rounded-lg border p-3 ${
                                 selected ? 'border-primary/50 bg-primary/10' : 'border-border/50 bg-background/60'
                               }`}
                             >
-                              <div className="min-w-0">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <p className="text-xs font-medium">{kb.name}</p>
-                                  <StatusBadge tone={kb.document_count ? 'success' : 'warning'}>
-                                    {kb.document_count ? '已连接' : '空库'}
-                                  </StatusBadge>
-                                  <Badge variant="outline">{kb.document_count || 0} 文档</Badge>
-                                </div>
-                                {kb.description?.trim() ? (
-                                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                                    {kb.description}
+                              <div className="flex min-w-0 items-start gap-3">
+                                <Checkbox
+                                  id={checkboxId}
+                                  checked={selected}
+                                  className="mt-0.5"
+                                  onCheckedChange={(checked) => {
+                                    setCurrentKnowledgeBaseSelected(kb.id, checked === true);
+                                  }}
+                                  aria-label={`勾选知识库 ${kb.name}`}
+                                />
+                                <div className="min-w-0">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="text-xs font-medium">{kb.name}</p>
+                                    <StatusBadge tone={kb.document_count ? 'success' : 'warning'}>
+                                      {kb.document_count ? '已连接' : '空库'}
+                                    </StatusBadge>
+                                    <Badge variant="outline">{kb.document_count || 0} 文档</Badge>
+                                  </div>
+                                  {kb.description?.trim() ? (
+                                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                                      {kb.description}
+                                    </p>
+                                  ) : null}
+                                  <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                                    数据集 {kb.dataset_name || '未配置'} · 更新于 {kb.updated_at ? formatSnapshotTime(kb.updated_at) : '未知'}
                                   </p>
-                                ) : null}
-                                <p className="mt-1 truncate text-[11px] text-muted-foreground">
-                                  数据集 {kb.dataset_name || '未配置'} · 更新于 {kb.updated_at ? formatSnapshotTime(kb.updated_at) : '未知'}
-                                </p>
+                                </div>
                               </div>
-                              <Button
-                                type="button"
-                                variant={selected ? 'default' : 'outline'}
-                                size="sm"
-                                className="h-8 shrink-0 text-xs"
-                                onClick={() => {
-                                  const nextIds = selected
-                                    ? selectedKnowledgeBaseIds.filter((id) => id !== kb.id)
-                                    : [...selectedKnowledgeBaseIds, kb.id];
-                                  updateCurrentContextSelection(
-                                    { knowledgeBaseIds: nextIds },
-                                    () => setSelectedKnowledgeBaseIds(nextIds),
-                                  );
-                                }}
-                              >
-                                {selected ? '已选' : '选择'}
-                              </Button>
-                            </div>
+                              <Badge variant={selected ? 'default' : 'outline'} className="shrink-0 text-[11px]">
+                                {selected ? '本步骤检索' : '未勾选'}
+                              </Badge>
+                            </label>
                           );
                         })
                       )}

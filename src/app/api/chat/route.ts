@@ -2,10 +2,17 @@ import { NextRequest } from 'next/server';
 import { streamClaudeCodeCliTurn } from '@/lib/agent-adapters/claude-code-cli';
 import type { AgentEvent } from '@/lib/agent-adapters/types';
 import { requireOrganizationContext, requirePermission } from '@/lib/auth/server';
-import { AuthError } from '@/lib/auth/types';
+import { AuthError, ForbiddenError } from '@/lib/auth/types';
+import {
+  normalizeChatKnowledgeBaseContexts,
+  selectKnowledgeBaseIdsFromChatBody,
+  type ChatKnowledgeBaseContext,
+} from '@/lib/chat-knowledge-context';
 import {
   isKnowledgeDatabaseConfigured,
   KnowledgeDatabaseConfigError,
+  listKnowledgeBases,
+  type KnowledgeBaseRecord,
   searchKnowledgeDocuments,
 } from '@/lib/knowledge-repository';
 import { requireSkillIdAccess, requireWorkflowAccess } from '@/lib/resource-metadata-repository';
@@ -40,14 +47,7 @@ interface StepContext {
   step_output?: string;
 }
 
-interface KnowledgeBaseContext {
-  id?: string;
-  name?: string;
-  description?: string;
-  dataset_name?: string;
-  document_count?: number;
-  updated_at?: string;
-}
+type KnowledgeBaseContext = ChatKnowledgeBaseContext;
 
 interface KnowledgeRetrievalChunk {
   content: string;
@@ -112,7 +112,6 @@ const MAX_TOTAL_STEP_CONTEXT_PROMPT_CHARS = 36_000;
 const MAX_CHAT_PROMPT_MESSAGES = 12;
 const MAX_CHAT_PROMPT_MESSAGE_CHARS = 12_000;
 const MAX_TOTAL_CHAT_PROMPT_MESSAGE_CHARS = 48_000;
-const MAX_KNOWLEDGE_RETRIEVAL_BASES = 8;
 const MAX_KNOWLEDGE_CHUNKS_PER_BASE = 3;
 const MAX_KNOWLEDGE_CHUNK_PROMPT_CHARS = 1_200;
 
@@ -247,15 +246,11 @@ async function authorizeChatBody(
     await requireWorkflowAccess(context, workflowId, 'workflow.read');
   }
 
-  const selectedKnowledgeBases = normalizeSelectedKnowledgeBases(body.selected_knowledge_bases);
-  for (const knowledgeBase of selectedKnowledgeBases) {
-    if (!knowledgeBase.id) continue;
-    requirePermission(context, 'knowledge_base.read', {
-      organizationId: context.activeOrganization.id,
-      resourceType: 'knowledge_base',
-      resourceId: knowledgeBase.id,
-    });
-  }
+  const selectedKnowledgeBases = await resolveSelectedKnowledgeBases(context, body);
+  nextBody.knowledge_base_ids = selectedKnowledgeBases.flatMap((knowledgeBase) => (
+    knowledgeBase.id ? [knowledgeBase.id] : []
+  ));
+  nextBody.selected_knowledge_bases = selectedKnowledgeBases;
 
   const rawSkillDefinition = isRecord(body.skill_definition) ? body.skill_definition : null;
   if (!rawSkillDefinition) {
@@ -354,23 +349,60 @@ function getLastUserMessage(messages: ChatMessage[]) {
   return [...messages].reverse().find((message) => message.role === 'user')?.content || '';
 }
 
-function normalizeSelectedKnowledgeBases(value: unknown): KnowledgeBaseContext[] {
-  if (!Array.isArray(value)) return [];
+function mapKnowledgeBaseRecordToContext(record: KnowledgeBaseRecord): KnowledgeBaseContext {
+  return {
+    id: record.id,
+    name: record.name,
+    description: record.description || '',
+    dataset_name: record.dataset_name || '',
+    document_count: record.document_count,
+    updated_at: record.updated_at || record.created_at,
+  };
+}
 
-  return value.flatMap((item): KnowledgeBaseContext[] => {
-    if (!isRecord(item)) return [];
-    const id = getString(item.id).slice(0, 36);
-    if (!id) return [];
+async function resolveSelectedKnowledgeBases(
+  context: Awaited<ReturnType<typeof requireOrganizationContext>>,
+  body: Record<string, unknown>,
+): Promise<KnowledgeBaseContext[]> {
+  const selectedKnowledgeBaseIds = selectKnowledgeBaseIdsFromChatBody(body);
+  if (selectedKnowledgeBaseIds.length === 0) return [];
 
-    return [{
-      id,
-      name: getString(item.name).slice(0, 128),
-      description: getString(item.description).slice(0, 1000),
-      dataset_name: getString(item.dataset_name).slice(0, 128),
-      document_count: getNumber(item.document_count),
-      updated_at: getString(item.updated_at).slice(0, 64),
-    }];
-  }).slice(0, MAX_KNOWLEDGE_RETRIEVAL_BASES);
+  const legacyKnowledgeBasesById = new Map(
+    normalizeChatKnowledgeBaseContexts(body.selected_knowledge_bases)
+      .flatMap((knowledgeBase) => (knowledgeBase.id ? [[knowledgeBase.id, knowledgeBase] as const] : [])),
+  );
+
+  if (!isKnowledgeDatabaseConfigured()) {
+    return selectedKnowledgeBaseIds.map((id) => {
+      requirePermission(context, 'knowledge_base.read', {
+        organizationId: context.activeOrganization.id,
+        resourceType: 'knowledge_base',
+        resourceId: id,
+      });
+
+      return legacyKnowledgeBasesById.get(id) || { id };
+    });
+  }
+
+  const knowledgeBasesById = new Map(
+    (await listKnowledgeBases()).map((knowledgeBase) => [knowledgeBase.id, knowledgeBase]),
+  );
+
+  return selectedKnowledgeBaseIds.map((id) => {
+    const knowledgeBase = knowledgeBasesById.get(id);
+    if (!knowledgeBase || knowledgeBase.organization_id !== context.activeOrganization.id) {
+      throw new ForbiddenError('Knowledge base not found or permission denied');
+    }
+
+    requirePermission(context, 'knowledge_base.read', {
+      organizationId: knowledgeBase.organization_id,
+      resourceType: 'knowledge_base',
+      resourceId: knowledgeBase.id,
+      ownerUserId: knowledgeBase.created_by,
+    });
+
+    return mapKnowledgeBaseRecordToContext(knowledgeBase);
+  });
 }
 
 function getKnowledgeRetrievalErrorMessage(error: unknown) {
@@ -389,7 +421,7 @@ async function retrieveKnowledgeContext(
   body: Record<string, unknown>,
   messages: ChatMessage[],
 ): Promise<KnowledgeRetrievalContext[]> {
-  const selectedKnowledgeBases = normalizeSelectedKnowledgeBases(body.selected_knowledge_bases);
+  const selectedKnowledgeBases = normalizeChatKnowledgeBaseContexts(body.selected_knowledge_bases);
   if (selectedKnowledgeBases.length === 0) return [];
 
   const query = getString(body.knowledge_query, getLastUserMessage(messages));
