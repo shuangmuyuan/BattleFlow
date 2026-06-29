@@ -12,6 +12,10 @@ import {
   searchKnowledgeDocuments,
   type KnowledgeDocumentInput,
 } from '@/lib/knowledge-repository';
+import {
+  buildKnowledgeDocumentFromUploadFile,
+  KnowledgeUploadValidationError,
+} from '@/lib/knowledge-document-upload';
 
 export const runtime = 'nodejs';
 
@@ -149,6 +153,41 @@ export async function POST(request: NextRequest) {
       return knowledgeUnavailableResponse(503);
     }
 
+    const contentType = request.headers.get('content-type') || '';
+    if (contentType.includes('multipart/form-data')) {
+      const formData = await request.formData();
+      const action = String(formData.get('action') || '');
+      if (action !== 'upload_document') {
+        return NextResponse.json({ error: `Unsupported multipart action: ${action}` }, { status: 400 });
+      }
+
+      const knowledgeBaseId = readString(formData.get('knowledge_base_id')) ?? readString(formData.get('knowledgeBaseId'));
+      const file = formData.get('file');
+      if (!knowledgeBaseId || !(file instanceof File)) {
+        return NextResponse.json({ error: 'Knowledge base ID and file are required' }, { status: 400 });
+      }
+
+      const knowledgeBase = (await listKnowledgeBases()).find((item) => item.id === knowledgeBaseId) ?? null;
+      if (!knowledgeBase || knowledgeBase.organization_id !== context.activeOrganization.id) {
+        return NextResponse.json({ error: 'Knowledge base not found' }, { status: 404 });
+      }
+      requirePermission(context, 'knowledge_base.update', {
+        organizationId: knowledgeBase.organization_id,
+        resourceType: 'knowledge_base',
+        resourceId: knowledgeBase.id,
+        ownerUserId: knowledgeBase.created_by,
+      });
+
+      const document: KnowledgeDocumentInput = await buildKnowledgeDocumentFromUploadFile(file);
+      const result = await addKnowledgeDocuments(knowledgeBaseId, [document]);
+
+      return NextResponse.json({
+        success: true,
+        insertedCount: result.insertedCount,
+        knowledgeBase: result.knowledgeBase,
+      });
+    }
+
     let body: unknown;
     try {
       body = await request.json();
@@ -226,6 +265,9 @@ export async function POST(request: NextRequest) {
       return knowledgeUnavailableResponse(503);
     }
     if (error instanceof KnowledgeValidationError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    if (error instanceof KnowledgeUploadValidationError) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
     if (error instanceof KnowledgeNotFoundError) {

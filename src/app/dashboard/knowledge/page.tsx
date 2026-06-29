@@ -60,7 +60,7 @@ export default function KnowledgePage() {
   const [newKbUrl, setNewKbUrl] = useState('');
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [selectedKb, setSelectedKb] = useState<KnowledgeBase | null>(null);
-  const [uploadContent, setUploadContent] = useState('');
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadFileName, setUploadFileName] = useState('');
   const [uploadFileError, setUploadFileError] = useState('');
   const [activeTab, setActiveTab] = useState('bases');
@@ -162,25 +162,19 @@ export default function KnowledgePage() {
   };
 
   const handleUpload = async () => {
-    if (!selectedKb || !uploadContent) return;
+    if (!selectedKb || !uploadFile) return;
 
     try {
       setErrorMessage('');
       setServiceNotice('');
+      const formData = new FormData();
+      formData.set('action', 'upload_document');
+      formData.set('knowledge_base_id', selectedKb.id);
+      formData.set('file', uploadFile);
+
       const res = await fetch('/api/knowledge', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'add_documents',
-          knowledge_base_id: selectedKb.id,
-          documents: [{
-            title: uploadFileName || null,
-            source_type: 'markdown',
-            source: uploadFileName || null,
-            content: uploadContent,
-            metadata: uploadFileName ? { fileName: uploadFileName } : null,
-          }],
-        }),
+        body: formData,
       });
       const data = await res.json();
       if (applyServiceNotice(data)) return;
@@ -198,7 +192,7 @@ export default function KnowledgePage() {
         )
       );
       setUploadDialogOpen(false);
-      setUploadContent('');
+      setUploadFile(null);
       setUploadFileName('');
       setUploadFileError('');
       setSelectedKb(null);
@@ -210,7 +204,7 @@ export default function KnowledgePage() {
   const handleUploadDialogOpenChange = (open: boolean) => {
     setUploadDialogOpen(open);
     if (!open) {
-      setUploadContent('');
+      setUploadFile(null);
       setUploadFileName('');
       setUploadFileError('');
       setSelectedKb(null);
@@ -219,31 +213,32 @@ export default function KnowledgePage() {
 
   const handleUploadFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    setUploadContent('');
+    setUploadFile(null);
     setUploadFileName('');
     setUploadFileError('');
 
     if (!file) return;
 
-    if (!file.name.toLowerCase().endsWith('.md')) {
-      setUploadFileError('只支持 .md 文件');
+    if (!/\.(md|markdown|doc|docx)$/i.test(file.name)) {
+      setUploadFileError('只支持 .md、.doc、.docx 文件');
       event.target.value = '';
       return;
     }
 
-    try {
-      const content = await file.text();
-      if (!content.trim()) {
-        setUploadFileError('文件内容为空');
-        event.target.value = '';
-        return;
-      }
-      setUploadContent(content);
-      setUploadFileName(file.name);
-    } catch {
-      setUploadFileError('文件读取失败');
+    if (file.size <= 0) {
+      setUploadFileError('文件内容为空');
       event.target.value = '';
+      return;
     }
+
+    if (file.size > 10 * 1024 * 1024) {
+      setUploadFileError('文件不能超过 10 MB');
+      event.target.value = '';
+      return;
+    }
+
+    setUploadFile(file);
+    setUploadFileName(file.name);
   };
 
   return (
@@ -482,13 +477,13 @@ export default function KnowledgePage() {
             >
               <FileUp className="size-6 text-brand" />
               <span className="max-w-full truncate text-sm font-medium">
-                {uploadFileName || '选择 .md 文件'}
+                {uploadFileName || '选择 .md / .doc / .docx 文件'}
               </span>
             </label>
             <Input
               id="knowledge-upload-file"
               type="file"
-              accept=".md,text/markdown"
+              accept=".md,.markdown,.doc,.docx,text/markdown,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
               className="sr-only"
               onChange={handleUploadFileChange}
             />
@@ -497,7 +492,7 @@ export default function KnowledgePage() {
             )}
           </div>
           <DialogFooter>
-            <Button className="w-full sm:w-auto" onClick={handleUpload} disabled={!uploadContent}>
+            <Button className="w-full sm:w-auto" onClick={handleUpload} disabled={!uploadFile}>
               上传文件
             </Button>
           </DialogFooter>
