@@ -5,6 +5,7 @@ import {
   buildValidationCriteria,
   parseValidationResult,
   resolveValidationGateResult,
+  shouldRunWorkflowStepAgentValidation,
   type ParsedWorkflowValidationResult,
 } from './workflow-validation';
 import type { WorkflowStepValidationPhaseRecord } from './workflow-registry';
@@ -137,13 +138,16 @@ describe('workflow validation core logic', () => {
   });
 
   it('allows self-check-only validation when agent validation is disabled', () => {
+    assert.equal(shouldRunWorkflowStepAgentValidation(false), false);
+    assert.equal(shouldRunWorkflowStepAgentValidation(true), true);
+
     const passedSelfCheck = phase({
       outcome: 'pass',
       summary: 'Self-check passed.',
       findings: [],
     });
     const passedResult = resolveValidationGateResult(passedSelfCheck, undefined, {
-      requireAgentValidation: false,
+      requireAgentValidation: shouldRunWorkflowStepAgentValidation(false),
     });
 
     assert.equal(passedResult.attemptStatus, 'passed');
@@ -157,7 +161,7 @@ describe('workflow validation core logic', () => {
       findings: [],
     });
     const failedResult = resolveValidationGateResult(failedSelfCheck, undefined, {
-      requireAgentValidation: false,
+      requireAgentValidation: shouldRunWorkflowStepAgentValidation(false),
     });
 
     assert.equal(failedResult.attemptStatus, 'failed');

@@ -468,6 +468,10 @@ export function runWorkflowStepAgentValidation(input: WorkflowValidationRuntimeI
   return runValidationPrompt(buildAgentValidationPrompt(input), input);
 }
 
+export function shouldRunWorkflowStepAgentValidation(agentValidationEnabled: boolean): boolean {
+  return agentValidationEnabled === true;
+}
+
 export function aggregateValidationStatus(
   selfCheck?: Pick<ParsedWorkflowValidationResult, 'outcome'>,
   agentValidation?: Pick<ParsedWorkflowValidationResult, 'outcome'>,

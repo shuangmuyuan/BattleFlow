@@ -4815,12 +4815,12 @@ export default function WorkflowsPage() {
           <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2">
             <div className="flex min-w-0 items-center gap-2">
               <ShieldCheck className="h-4 w-4 shrink-0 text-primary" />
-              <span className="truncate text-xs font-medium">Agent 验证</span>
+              <span className="truncate text-xs font-medium">独立 Agent 复核</span>
             </div>
             <Switch
               checked={Boolean(activeWorkflow.agentValidationEnabled)}
               disabled={Boolean(confirmingStepId)}
-              aria-label="开启 Agent 验证"
+              aria-label="开启独立 Agent 复核"
               onCheckedChange={handleAgentValidationEnabledChange}
             />
           </div>

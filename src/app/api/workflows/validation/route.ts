@@ -1,5 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
+import { requireOrganizationContext } from '@/lib/auth/server';
+import { AuthError } from '@/lib/auth/types';
+import { requireWorkflowAccess } from '@/lib/resource-metadata-repository';
 import { getSkill } from '@/lib/skill-registry';
 import {
   getWorkflow,
@@ -17,6 +20,7 @@ import {
   resolveValidationGateResult,
   runWorkflowStepAgentValidation,
   runWorkflowStepSelfCheck,
+  shouldRunWorkflowStepAgentValidation,
 } from '@/lib/workflow-validation';
 
 export const runtime = 'nodejs';
@@ -304,7 +308,7 @@ async function runValidation(
     updated_at: selfCheckedAt,
   };
 
-  if (!options.agentValidationEnabled) {
+  if (!shouldRunWorkflowStepAgentValidation(options.agentValidationEnabled)) {
     const gateResult = resolveValidationGateResult(selfCheck, undefined, {
       requireAgentValidation: false,
     });
@@ -384,11 +388,13 @@ async function runValidation(
 
 export async function GET(request: NextRequest) {
   try {
+    const context = await requireOrganizationContext(request);
     const { searchParams } = new URL(request.url);
     const workflowId = getString(searchParams.get('workflow_id') || searchParams.get('workflowId'));
     const stepId = getString(searchParams.get('step_id') || searchParams.get('stepId'));
 
     if (!workflowId) return jsonError('workflowId is required', 400);
+    await requireWorkflowAccess(context, workflowId, 'workflow.read');
 
     const workflow = await getWorkflow(workflowId);
     if (!workflow) return jsonError('Workflow not found', 404);
@@ -403,14 +409,17 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error('Workflow validation GET error:', error);
+    if (error instanceof AuthError) return jsonError(error.message, error.status);
     return jsonError(error instanceof Error ? error.message : 'Failed to fetch workflow validation attempts');
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
+    const context = await requireOrganizationContext(request);
     const parsed = parseValidationRequest(await request.json());
     if (typeof parsed === 'string') return jsonError(parsed, 400);
+    await requireWorkflowAccess(context, parsed.workflowId, 'workflow.update');
 
     const workflow = await getWorkflow(parsed.workflowId);
     if (!workflow) return jsonError('Workflow not found', 404);
@@ -443,6 +452,7 @@ export async function POST(request: NextRequest) {
     return result.response;
   } catch (error) {
     console.error('Workflow validation POST error:', error);
+    if (error instanceof AuthError) return jsonError(error.message, error.status);
     return jsonError(error instanceof Error ? error.message : 'Failed to run workflow validation');
   }
 }
