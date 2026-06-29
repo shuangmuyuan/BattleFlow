@@ -11,6 +11,13 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
+import { AnimatedShinyText } from '@/components/ui/animated-shiny-text';
+import {
+  PromptInput,
+  PromptInputAction,
+  PromptInputActions,
+  PromptInputTextarea,
+} from '@/components/ui/prompt-input';
 import {
   PageHeader,
   ProductEmptyState,
@@ -21,6 +28,7 @@ import {
   CompactMarkdown,
   compactMarkdownPreview,
 } from '@/components/battleflow/compact-markdown';
+import { BentoCard, BentoGrid } from '@/registry/magicui/bento-grid';
 import { cn } from '@/lib/utils';
 import {
   Dialog,
@@ -43,6 +51,7 @@ import {
   Plus,
   Play,
   ArrowLeft,
+  ArrowUp,
   CheckCircle2,
   Circle,
   Clock,
@@ -68,6 +77,7 @@ import {
   CircleStop,
   GripVertical,
   ExternalLink,
+  Square,
 } from 'lucide-react';
 
 interface Skill {
@@ -356,6 +366,22 @@ interface AssistantQuickReplyQuestion {
   prompt: string;
   options: string[];
   multi: boolean;
+}
+
+function AssistantThinkingIndicator() {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={cn(
+        'group w-fit rounded-full border border-border/60 bg-muted/45 text-sm shadow-sm transition-colors',
+      )}
+    >
+      <AnimatedShinyText className="items-center justify-center px-4 py-1.5 font-medium">
+        正在思考
+      </AnimatedShinyText>
+    </div>
+  );
 }
 
 const builtInWorkflowTemplates: WorkflowTemplate[] = [
@@ -1245,8 +1271,8 @@ export default function WorkflowsPage() {
   const [reviewedOutputFiles, setReviewedOutputFiles] = useState<ReviewedOutputFile[]>([]);
   const [reviewComments, setReviewComments] = useState<Record<string, string>>({});
   const [supplementalContextOpen, setSupplementalContextOpen] = useState(false);
-  const [supplementalContextTab, setSupplementalContextTab] = useState<'knowledge' | 'materials' | 'files'>('knowledge');
-  const [rightPanelTab, setRightPanelTab] = useState<'outputs' | 'review' | 'archive'>('outputs');
+  const [supplementalContextTab, setSupplementalContextTab] = useState<'knowledge' | 'materials'>('knowledge');
+  const [rightPanelTab, setRightPanelTab] = useState<'outputs' | 'review' | 'archive' | 'context' | 'demo'>('outputs');
   const [expandedOutputIds, setExpandedOutputIds] = useState<Record<string, boolean>>({});
   const [archivedReviewStepIds, setArchivedReviewStepIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1650,7 +1676,7 @@ export default function WorkflowsPage() {
   }, [updateActiveWorkflow]);
 
 
-  const handlePasteContextFiles = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
+  const handlePasteContextFiles = useCallback((event: ClipboardEvent<HTMLElement>) => {
     const files = Array.from(event.clipboardData.files);
     if (files.length > 0) {
       void addUploadedContextFiles(files);
@@ -2032,11 +2058,11 @@ export default function WorkflowsPage() {
     const currentStep = workflow ? getVisibleSteps(workflow)[activeStepIndex] : undefined;
     if (!workflow || !currentStep) return;
 
+    const currentStepContextFiles = uploadedContextFiles.filter((file) => file.stepId === currentStep.id);
     const stepInput = overrideMessage ?? chatInputByStepId[currentStep.id] ?? chatInput;
-    const userMessage = stepInput.trim();
+    const userMessage = stepInput.trim() || (currentStepContextFiles.length > 0 ? '请基于我上传的文件继续分析。' : '');
     if (!userMessage || streamingByStepId[currentStep.id]) return;
 
-    const currentStepContextFiles = uploadedContextFiles.filter((file) => file.stepId === currentStep.id);
     const selectedKnowledgeBases = knowledgeBases.filter((kb) => selectedKnowledgeBaseIds.includes(kb.id));
     const contextSelection = getContextSelection(workflow, currentStep.id);
     const disabledAutoInjectedStepIds = new Set(contextSelection.disabledAutoInjectedStepIds || []);
@@ -3108,7 +3134,7 @@ export default function WorkflowsPage() {
                 />
               ) : (
                 <div className="max-h-[calc(100dvh-260px)] min-h-0 overflow-y-auto pr-2">
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                  <BentoGrid className="auto-rows-[218px] grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                     {workspaces.map((workspace) => {
                       const workspaceDescription = getWorkspaceDescriptionText(workspace.description);
                       const workspaceWorkflowList = workflows.filter((workflow) => workflow.workspaceId === workspace.id);
@@ -3120,85 +3146,84 @@ export default function WorkflowsPage() {
                         .sort((a, b) => String(b).localeCompare(String(a)))[0];
 
                       return (
-                        <Card
+                        <BentoCard
                           key={workspace.id}
-                          className={`min-w-0 gap-0 overflow-hidden py-0 ${appCardClassName}`}
+                          className="col-span-1 min-h-[218px]"
+                          contentClassName="gap-3"
+                          actions={(
+                            <div className="grid grid-cols-3 gap-2 rounded-lg border border-border/60 bg-card/95 p-1.5 shadow-lg shadow-background/20 backdrop-blur">
+                              <Button
+                                size="sm"
+                                className="h-8 min-w-0 gap-1.5 px-2 text-xs"
+                                onClick={() => openWorkspaceSpace(workspace.id)}
+                              >
+                                进入空间
+                                <ArrowRight className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8 min-w-0 gap-1.5 px-2 text-xs"
+                                onClick={() => handleOpenEditWorkspace(workspace)}
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                                编辑
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8 min-w-0 gap-1.5 px-2 text-xs text-destructive hover:text-destructive"
+                                onClick={() => setDeleteTarget({
+                                  type: 'workspace',
+                                  id: workspace.id,
+                                  name: workspace.name,
+                                  workflowCount: count,
+                                })}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                删除
+                              </Button>
+                            </div>
+                          )}
                         >
-                          <CardContent className="flex h-full flex-col gap-3 p-3.5">
-                            <div className="flex min-w-0 items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <h3 className="truncate text-base font-semibold">{workspace.name}</h3>
-                                {workspaceDescription && (
-                                  <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
-                                    {workspaceDescription}
-                                  </p>
-                                )}
-                              </div>
-                              <div className="flex shrink-0 items-center gap-1.5">
-                                <StatusBadge tone="neutral" className="text-xs">
-                                  {count} 个流程
-                                </StatusBadge>
-                              </div>
+                          <div className="flex min-w-0 items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <h3 className="truncate text-base font-semibold">{workspace.name}</h3>
+                              {workspaceDescription && (
+                                <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+                                  {workspaceDescription}
+                                </p>
+                              )}
                             </div>
+                            <div className="flex shrink-0 items-center gap-1.5">
+                              <StatusBadge tone="neutral" className="text-xs">
+                                {count} 个流程
+                              </StatusBadge>
+                            </div>
+                          </div>
 
-                            <div className="grid grid-cols-3 overflow-hidden rounded-lg border border-border/50 bg-muted/20 text-center text-xs">
-                              <div className="min-w-0 border-r border-border/50 px-2 py-1.5">
-                                <p className="font-semibold">{count}</p>
-                                <p className="mt-0.5 text-muted-foreground">全部</p>
-                              </div>
-                              <div className="min-w-0 border-r border-border/50 px-2 py-1.5">
-                                <p className="font-semibold text-primary">{inProgressCount}</p>
-                                <p className="mt-0.5 text-muted-foreground">进行中</p>
-                              </div>
-                              <div className="min-w-0 px-2 py-1.5">
-                                <p className="font-semibold text-emerald-500">{completedCount}</p>
-                                <p className="mt-0.5 text-muted-foreground">已完成</p>
-                              </div>
+                          <div className="grid grid-cols-3 overflow-hidden rounded-lg border border-border/50 bg-muted/20 text-center text-xs">
+                            <div className="min-w-0 border-r border-border/50 px-2 py-1.5">
+                              <p className="font-semibold">{count}</p>
+                              <p className="mt-0.5 text-muted-foreground">全部</p>
                             </div>
+                            <div className="min-w-0 border-r border-border/50 px-2 py-1.5">
+                              <p className="font-semibold text-primary">{inProgressCount}</p>
+                              <p className="mt-0.5 text-muted-foreground">进行中</p>
+                            </div>
+                            <div className="min-w-0 px-2 py-1.5">
+                              <p className="font-semibold text-emerald-500">{completedCount}</p>
+                              <p className="mt-0.5 text-muted-foreground">已完成</p>
+                            </div>
+                          </div>
 
-                            <div className="mt-auto flex flex-col gap-2">
-                              <p className="truncate text-xs text-muted-foreground">
-                                最近更新：{formatSnapshotTime(latestUpdatedAt)}
-                              </p>
-                              <div className="grid grid-cols-3 gap-2">
-                                <Button
-                                  size="sm"
-                                  className="h-8 min-w-0 gap-1.5 px-2 text-xs"
-                                  onClick={() => openWorkspaceSpace(workspace.id)}
-                                >
-                                  进入空间
-                                  <ArrowRight className="h-3.5 w-3.5" />
-                                </Button>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="h-8 min-w-0 gap-1.5 px-2 text-xs"
-                                  onClick={() => handleOpenEditWorkspace(workspace)}
-                                >
-                                  <Pencil className="h-3.5 w-3.5" />
-                                  编辑
-                                </Button>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="h-8 min-w-0 gap-1.5 px-2 text-xs text-destructive hover:text-destructive"
-                                  onClick={() => setDeleteTarget({
-                                    type: 'workspace',
-                                    id: workspace.id,
-                                    name: workspace.name,
-                                    workflowCount: count,
-                                  })}
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                  删除
-                                </Button>
-                              </div>
-                            </div>
-                          </CardContent>
-                        </Card>
+                          <p className="mt-auto truncate text-xs text-muted-foreground">
+                            最近更新：{formatSnapshotTime(latestUpdatedAt)}
+                          </p>
+                        </BentoCard>
                       );
                     })}
-                  </div>
+                  </BentoGrid>
                 </div>
               )}
             </div>
@@ -3802,6 +3827,12 @@ export default function WorkflowsPage() {
     (latestIndex, message, index) => (message.role === 'assistant' ? index : latestIndex),
     -1,
   );
+  const hasStreamingAssistantPlaceholder = Boolean(
+    isStreaming
+    && lastAssistantMessageIndex >= 0
+    && chatMessages[lastAssistantMessageIndex]?.role === 'assistant'
+    && !chatMessages[lastAssistantMessageIndex]?.content.trim(),
+  );
   const currentSkill = getEffectiveSkillForStep(activeWorkflow, currentStep);
   const previousSteps = currentStep
     ? getPriorWorkflowSteps(activeWorkflow, currentStep).filter((step) => step.output)
@@ -4100,6 +4131,344 @@ export default function WorkflowsPage() {
       </Card>
     );
   };
+
+  const supplementalContextPanel = (
+    <div className="flex h-full min-w-0 flex-col gap-3 overflow-y-auto p-4">
+      <Card className="border-border/60 bg-card/75 shadow-none">
+        <CardContent className="flex flex-col gap-3 p-3">
+          <div className="flex min-w-0 items-start gap-2">
+            <BookOpen className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+            <div className="min-w-0">
+              <p className="text-sm font-medium">补充上下文</p>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                本轮注入 {selectedContextCount} 个来源，包含自动产物 {autoInjectedPreviousSteps.length}、知识库 {selectedKnowledgeBaseOptions.length}、手动材料 {selectedReviewMaterialOptions.length}、文件 {currentContextFiles.length}。
+              </p>
+            </div>
+          </div>
+          {(selectedContextCount > 0 || unavailableKnowledgeBaseCount > 0) && (
+            <div className="flex flex-wrap gap-2 rounded-lg border border-border/50 bg-background/60 p-3">
+              {autoInjectedPreviousSteps.map((step) => (
+                <Badge key={`auto-step-${step.id}`} variant="secondary" className="max-w-full gap-1.5 bg-primary/10 text-primary">
+                  <FileText className="h-3 w-3 shrink-0" />
+                  <span className="truncate">{step.name}</span>
+                  <button
+                    type="button"
+                    className="ml-1 text-primary/70 hover:text-primary"
+                    onClick={() => setAutoInjectedStepEnabled(step.id, false)}
+                    aria-label={`取消自动注入 ${step.name}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </Badge>
+              ))}
+              {selectedKnowledgeBaseOptions.map((kb) => (
+                <Badge key={`selected-kb-${kb.id}`} variant="secondary" className="max-w-full gap-1.5">
+                  <Database className="h-3 w-3 shrink-0" />
+                  <span className="truncate">{kb.name}</span>
+                  <button
+                    type="button"
+                    className="ml-1 text-muted-foreground hover:text-foreground"
+                    onClick={() => {
+                      const nextIds = selectedKnowledgeBaseIds.filter((id) => id !== kb.id);
+                      updateCurrentContextSelection(
+                        { knowledgeBaseIds: nextIds },
+                        () => setSelectedKnowledgeBaseIds(nextIds),
+                      );
+                    }}
+                    aria-label={`移除知识库 ${kb.name}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </Badge>
+              ))}
+              {selectedReviewMaterialOptions.map((material) => (
+                <Badge key={`selected-material-${material.id}`} variant="secondary" className="max-w-full gap-1.5">
+                  <ClipboardCheck className="h-3 w-3 shrink-0" />
+                  <span className="truncate">{material.name}</span>
+                  <button
+                    type="button"
+                    className="ml-1 text-muted-foreground hover:text-foreground"
+                    onClick={() => {
+                      const nextIds = selectedReviewMaterialIds.filter((id) => id !== material.id);
+                      updateCurrentContextSelection(
+                        { reviewMaterialIds: nextIds },
+                        () => setSelectedReviewMaterialIds(nextIds),
+                      );
+                    }}
+                    aria-label={`移除材料 ${material.name}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </Badge>
+              ))}
+              {currentContextFiles.map((file) => (
+                <Badge key={`selected-file-${file.id}`} variant="outline" className="max-w-full gap-1.5 bg-background/60">
+                  {file.isImage ? <ImageIcon className="h-3 w-3 shrink-0" /> : <Paperclip className="h-3 w-3 shrink-0" />}
+                  <span className="truncate">{file.name}</span>
+                  <button
+                    type="button"
+                    className="ml-1 text-muted-foreground hover:text-foreground"
+                    onClick={() => removeContextFile(file.id)}
+                    aria-label={`移除 ${file.name}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </Badge>
+              ))}
+              {unavailableKnowledgeBaseCount > 0 && (
+                <div className="flex w-full items-center justify-between gap-2 rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5">
+                  <span className="text-xs text-warning">{unavailableKnowledgeBaseCount} 个知识库引用不可用</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 shrink-0 px-2 text-xs"
+                    onClick={() => {
+                      const nextIds = selectedKnowledgeBaseIds.filter((id) => knowledgeBases.some((kb) => kb.id === id));
+                      updateCurrentContextSelection(
+                        { knowledgeBaseIds: nextIds },
+                        () => setSelectedKnowledgeBaseIds(nextIds),
+                      );
+                    }}
+                  >
+                    清理
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Tabs value={supplementalContextTab} onValueChange={(value) => setSupplementalContextTab(value as 'knowledge' | 'materials')}>
+        <TabsList className="grid h-8 w-full grid-cols-2">
+          <TabsTrigger value="knowledge" className="text-xs">知识库</TabsTrigger>
+          <TabsTrigger value="materials" className="text-xs">前序产物</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="knowledge" className="mt-3">
+          <div className="flex flex-col gap-2">
+            {knowledgeNotice && (
+              <div className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning">
+                {knowledgeNotice}
+              </div>
+            )}
+            {knowledgeLoading ? (
+              <div className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
+                正在读取真实知识库列表...
+              </div>
+            ) : knowledgeBases.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-border/60 p-3 text-xs leading-5 text-muted-foreground">
+                暂无可选知识库。当前不会向模型注入 Mock 知识库；请先在知识库页面完成服务配置和文档导入。
+              </div>
+            ) : (
+              knowledgeBases.map((kb) => {
+                const selected = selectedKnowledgeBaseIds.includes(kb.id);
+                return (
+                  <div
+                    key={kb.id}
+                    className={`flex items-start justify-between gap-3 rounded-lg border p-3 ${
+                      selected ? 'border-primary/50 bg-primary/10' : 'border-border/50 bg-background/60'
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="truncate text-xs font-medium">{kb.name}</p>
+                        <StatusBadge tone={kb.document_count ? 'success' : 'warning'}>
+                          {kb.document_count ? '已连接' : '空库'}
+                        </StatusBadge>
+                        <Badge variant="outline">{kb.document_count || 0} 文档</Badge>
+                      </div>
+                      {kb.description?.trim() ? (
+                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                          {kb.description}
+                        </p>
+                      ) : null}
+                      <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                        数据集 {kb.dataset_name || '未配置'} · 更新于 {kb.updated_at ? formatSnapshotTime(kb.updated_at) : '未知'}
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant={selected ? 'default' : 'outline'}
+                      size="sm"
+                      className="h-8 shrink-0 text-xs"
+                      onClick={() => {
+                        const nextIds = selected
+                          ? selectedKnowledgeBaseIds.filter((id) => id !== kb.id)
+                          : [...selectedKnowledgeBaseIds, kb.id];
+                        updateCurrentContextSelection(
+                          { knowledgeBaseIds: nextIds },
+                          () => setSelectedKnowledgeBaseIds(nextIds),
+                        );
+                      }}
+                    >
+                      {selected ? '已选' : '选择'}
+                    </Button>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="materials" className="mt-3">
+          <div className="flex flex-col gap-3">
+            <Card className="border-border/60 bg-card/75 shadow-none">
+              <CardContent className="flex flex-col gap-3 p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium">默认注入前序步骤产物</p>
+                    <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
+                      前序 Skill 输出的 Markdown 文档默认会进入当前步骤上下文，可按步骤关闭。
+                    </p>
+                  </div>
+                  <Badge variant="outline" className="shrink-0 text-[11px]">
+                    {autoInjectedPreviousSteps.length}/{previousSteps.length}
+                  </Badge>
+                </div>
+                {previousSteps.length > 0 ? (
+                  <div data-testid="auto-injected-previous-steps-list" className="flex flex-col gap-2">
+                    {previousSteps.map((step) => {
+                      const enabled = !disabledAutoInjectedStepIds.includes(step.id);
+                      return (
+                        <div
+                          key={step.id}
+                          className={cn(
+                            'flex items-start justify-between gap-3 rounded-lg border p-3',
+                            enabled ? 'border-primary/50 bg-primary/10' : 'border-border/50 bg-muted/20',
+                          )}
+                        >
+                          <div className="min-w-0">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <FileText className="h-3.5 w-3.5 shrink-0 text-primary" />
+                              <p className="truncate text-xs font-medium">{step.name}</p>
+                            </div>
+                            <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                              {compactMarkdownPreview(step.output || '', 120)}
+                            </p>
+                          </div>
+                          <Button
+                            type="button"
+                            variant={enabled ? 'default' : 'outline'}
+                            size="sm"
+                            className="h-8 shrink-0 text-xs"
+                            onClick={() => setAutoInjectedStepEnabled(step.id, !enabled)}
+                          >
+                            {enabled ? '已注入' : '已取消'}
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
+                    当前步骤暂无可自动注入的前序产物。
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="border-border/60 bg-card/75 shadow-none">
+              <CardContent className="flex flex-col gap-3 p-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-medium">额外审核材料</p>
+                  <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
+                    这里用于选择非默认链路的产物或本地审核材料。
+                  </p>
+                </div>
+                {additionalReviewMaterials.length > 0 ? (
+                  <div className="flex flex-col gap-2">
+                    {additionalReviewMaterials.map((material) => {
+                      const selected = selectedReviewMaterialIds.includes(material.id);
+                      return (
+                        <div
+                          key={material.id}
+                          className={`flex items-start justify-between gap-3 rounded-lg border p-3 ${
+                            selected ? 'border-primary/50 bg-primary/10' : 'border-border/50 bg-background/60'
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate text-xs font-medium">{material.name}</p>
+                            <p className="mt-1 text-[11px] text-muted-foreground">{material.source}</p>
+                            <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{material.summary}</p>
+                          </div>
+                          <Button
+                            type="button"
+                            variant={selected ? 'default' : 'outline'}
+                            size="sm"
+                            className="h-8 shrink-0 text-xs"
+                            onClick={() => {
+                              const nextIds = selected
+                                ? selectedReviewMaterialIds.filter((id) => id !== material.id)
+                                : [...selectedReviewMaterialIds, material.id];
+                              updateCurrentContextSelection(
+                                { reviewMaterialIds: nextIds },
+                                () => setSelectedReviewMaterialIds(nextIds),
+                              );
+                            }}
+                          >
+                            {selected ? '已选' : '选择'}
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
+                    暂无额外审核材料。步骤产物会默认通过上方链路注入下一步骤，无需手动保存。
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+
+  const demoGenerationPanel = (
+    <div className="flex h-full min-w-0 flex-col gap-3 overflow-y-auto p-4">
+      <Card className="border-border/60 bg-card/75 shadow-none">
+        <CardContent className="flex flex-col gap-3 p-3">
+          <div className="flex min-w-0 items-start gap-2">
+            <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+            <div className="min-w-0">
+              <p className="text-sm font-medium">Demo 生成</p>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">{currentStepDemoHint}</p>
+            </div>
+          </div>
+          {currentStepDemoHandoff?.studioUrl ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full gap-1.5 text-xs"
+              onClick={() => window.open(currentStepDemoHandoff.studioUrl, '_blank', 'noopener,noreferrer')}
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              打开 Demo
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full gap-1.5 text-xs"
+              disabled={!canGenerateCurrentStepDemo}
+              onClick={() => void handleGenerateDemoHandoff()}
+            >
+              {currentStepDemoLoading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="h-3.5 w-3.5" />
+              )}
+              Demo 生成
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-auto lg:flex-row lg:overflow-hidden">
@@ -4440,6 +4809,10 @@ export default function WorkflowsPage() {
             <div className="w-full min-w-0 max-w-full space-y-4 overflow-x-hidden">
               {chatMessages.map((msg, idx) => {
                 const renderDocumentCard = msg.role === 'assistant' && isAssistantDocumentLike(msg.content);
+                const renderThinkingIndicator = isStreaming
+                  && idx === lastAssistantMessageIndex
+                  && msg.role === 'assistant'
+                  && !msg.content.trim();
                 const quickReplyQuestions = msg.role === 'assistant' && idx === lastAssistantMessageIndex && !isStreaming
                   ? extractAssistantQuickReplyQuestions(msg.content)
                   : [];
@@ -4464,19 +4837,23 @@ export default function WorkflowsPage() {
                       </div>
                     ) : (
                       <div className={`flex min-w-0 max-w-full flex-col gap-2 ${msg.role === 'user' ? 'items-end md:max-w-[80%] xl:max-w-2xl' : 'items-start md:max-w-[80%] xl:max-w-2xl'}`}>
-                        <div
-                          className={`w-fit min-w-0 max-w-full overflow-hidden break-words rounded-lg p-3 text-sm [overflow-wrap:anywhere] ${
-                            msg.role === 'user'
-                              ? 'bg-primary text-primary-foreground'
-                              : 'bg-muted/50 border border-border/40'
-                          }`}
-                        >
-                          {msg.role === 'assistant' ? (
-                            <CompactMarkdown content={msg.content} />
-                          ) : (
-                            <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.content}</div>
-                          )}
-                        </div>
+                        {renderThinkingIndicator ? (
+                          <AssistantThinkingIndicator />
+                        ) : (
+                          <div
+                            className={`w-fit min-w-0 max-w-full overflow-hidden break-words rounded-lg p-3 text-sm [overflow-wrap:anywhere] ${
+                              msg.role === 'user'
+                                ? 'bg-primary text-primary-foreground'
+                                : 'bg-muted/50 border border-border/40'
+                            }`}
+                          >
+                            {msg.role === 'assistant' ? (
+                              <CompactMarkdown content={msg.content} />
+                            ) : (
+                              <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.content}</div>
+                            )}
+                          </div>
+                        )}
                         {quickReplyQuestions.length > 0 && (
                           <AssistantQuickReplyPanel
                             questions={quickReplyQuestions}
@@ -4491,11 +4868,9 @@ export default function WorkflowsPage() {
                   </div>
                 );
               })}
-              {isStreaming && (
+              {isStreaming && !hasStreamingAssistantPlaceholder && (
                 <div className="flex justify-start">
-                  <div className="bg-muted/50 border border-border/40 rounded-lg p-3">
-                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                  </div>
+                  <AssistantThinkingIndicator />
                 </div>
               )}
               <div ref={chatEndRef} />
@@ -4505,7 +4880,7 @@ export default function WorkflowsPage() {
 
         {/* Chat Input */}
         <div className="flex flex-col gap-3 border-t border-border/40 p-4">
-          <div className="flex flex-col gap-3 rounded-lg border border-border/40 bg-muted/20 p-3">
+          <div className="hidden">
             <div className="flex w-full items-center justify-between gap-3">
               <div className="flex min-w-0 items-center gap-2">
                 <BookOpen className="h-4 w-4 text-primary" />
@@ -4528,18 +4903,6 @@ export default function WorkflowsPage() {
                 <ChevronDown className={`h-3.5 w-3.5 transition-transform ${supplementalContextOpen ? 'rotate-180' : ''}`} />
               </Button>
             </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept=".txt,.md,image/*"
-              className="hidden"
-              onChange={(event) => {
-                void addUploadedContextFiles(Array.from(event.target.files || []));
-                event.target.value = '';
-              }}
-            />
-
             {supplementalContextOpen && (
               <div className="flex flex-col gap-3 border-t border-border/40 pt-3">
                 {(selectedContextCount > 0 || unavailableKnowledgeBaseCount > 0) && (
@@ -4640,11 +5003,10 @@ export default function WorkflowsPage() {
                   </div>
                 )}
 
-                <Tabs value={supplementalContextTab} onValueChange={(value) => setSupplementalContextTab(value as 'knowledge' | 'materials' | 'files')}>
-                  <TabsList className="grid h-8 w-full grid-cols-3">
+                <Tabs value={supplementalContextTab} onValueChange={(value) => setSupplementalContextTab(value as 'knowledge' | 'materials')}>
+                  <TabsList className="grid h-8 w-full grid-cols-2">
                     <TabsTrigger value="knowledge" className="text-xs">知识库</TabsTrigger>
                     <TabsTrigger value="materials" className="text-xs">前序产物</TabsTrigger>
-                    <TabsTrigger value="files" className="text-xs">本地文件</TabsTrigger>
                   </TabsList>
 
                   <TabsContent value="knowledge" className="mt-3">
@@ -4827,62 +5189,12 @@ export default function WorkflowsPage() {
                     </div>
                   </TabsContent>
 
-                  <TabsContent value="files" className="mt-3">
-                    <div className="flex flex-col gap-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-xs text-muted-foreground">支持 .txt、.md、图片，也可直接粘贴图片到输入框。</p>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-8 shrink-0 gap-1.5 text-xs"
-                          onClick={() => fileInputRef.current?.click()}
-                        >
-                          <Paperclip className="h-3.5 w-3.5" />
-                          上传文件
-                        </Button>
-                      </div>
-                      {currentContextFiles.length > 0 ? (
-                        <div className="flex flex-col gap-2">
-                          {currentContextFiles.map((file) => (
-                            <div
-                              key={file.id}
-                              className="flex max-w-full items-center justify-between gap-3 rounded-lg border border-border/50 bg-background/60 px-3 py-2 text-xs"
-                            >
-                              <div className="flex min-w-0 items-center gap-2">
-                                {file.isImage ? (
-                                  <ImageIcon className="h-3.5 w-3.5 shrink-0 text-primary" />
-                                ) : (
-                                  <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                                )}
-                                <span className="truncate">{file.name}</span>
-                                <span className="shrink-0 text-muted-foreground">{formatFileSize(file.size)}</span>
-                              </div>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon-sm"
-                                className="shrink-0"
-                                onClick={() => removeContextFile(file.id)}
-                                aria-label={`移除 ${file.name}`}
-                              >
-                                <X className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
-                          暂无上传文件。
-                        </div>
-                      )}
-                    </div>
-                  </TabsContent>
                 </Tabs>
               </div>
             )}
           </div>
 
-          <div className="flex flex-col gap-3 rounded-lg border border-border/40 bg-background/70 p-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="hidden">
             <div className="flex min-w-0 items-center gap-2">
               <Sparkles className="h-4 w-4 shrink-0 text-primary" />
               <div className="min-w-0">
@@ -4922,49 +5234,110 @@ export default function WorkflowsPage() {
             </div>
           </div>
 
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-            <Textarea
+          <PromptInput
+            value={chatInput}
+            onValueChange={(nextValue) => {
+              setChatInput(nextValue);
+              if (currentStep?.id) {
+                setChatInputByStepId((prev) => ({ ...prev, [currentStep.id]: nextValue }));
+              }
+            }}
+            isLoading={isStreaming}
+            onSubmit={() => {
+              void handleSendMessage();
+            }}
+            className="bg-background/70"
+          >
+            {currentContextFiles.length > 0 && (
+              <div className="flex flex-wrap gap-2 px-1 pb-2">
+                {currentContextFiles.map((file) => (
+                  <div
+                    key={file.id}
+                    className="flex min-w-0 items-center gap-2 rounded-lg bg-secondary px-2.5 py-1.5 text-xs"
+                  >
+                    {file.isImage ? (
+                      <ImageIcon className="size-3.5 shrink-0 text-primary" />
+                    ) : (
+                      <Paperclip className="size-3.5 shrink-0 text-primary" />
+                    )}
+                    <span className="max-w-40 truncate">{file.name}</span>
+                    <span className="shrink-0 text-muted-foreground">{formatFileSize(file.size)}</span>
+                    <button
+                      type="button"
+                      className="rounded-full p-0.5 text-muted-foreground hover:bg-secondary-foreground/10 hover:text-foreground"
+                      onClick={() => {
+                        removeContextFile(file.id);
+                        if (fileInputRef.current) {
+                          fileInputRef.current.value = '';
+                        }
+                      }}
+                      aria-label={`移除 ${file.name}`}
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <PromptInputTextarea
               placeholder="输入你的问题或指令..."
-              value={chatInput}
-              onChange={(e) => {
-                const nextValue = e.target.value;
-                setChatInput(nextValue);
-                if (currentStep?.id) {
-                  setChatInputByStepId((prev) => ({ ...prev, [currentStep.id]: nextValue }));
-                }
-              }}
               onPaste={handlePasteContextFiles}
               onKeyDown={handleChatInputKeyDown}
-              disabled={isStreaming}
               rows={3}
-              className="max-h-40 min-h-20 min-w-0 flex-1 resize-none overflow-y-auto"
             />
-            {isStreaming ? (
-              <Button
-                type="button"
-                variant="outline"
-                className="gap-2 border-destructive/40 text-destructive hover:bg-destructive/10 sm:w-auto"
-                onClick={handleStopStreaming}
-                aria-label="终止当前任务"
-              >
-                <CircleStop className="h-4 w-4" />
-                终止
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                className="gap-2 sm:w-auto"
-                onClick={() => {
-                  void handleSendMessage();
-                }}
-                disabled={!chatInput.trim()}
-                aria-label="发送消息"
-              >
-                <ArrowRight className="h-4 w-4" />
-                发送
-              </Button>
-            )}
-          </div>
+
+            <PromptInputActions className="justify-between px-1 pt-2">
+              <PromptInputAction tooltip="上传文件">
+                <label
+                  htmlFor="workflow-chat-file-upload"
+                  className={cn(
+                    'flex size-8 cursor-pointer items-center justify-center rounded-full text-primary transition-colors hover:bg-secondary-foreground/10',
+                    isStreaming && 'pointer-events-none opacity-50',
+                  )}
+                >
+                  <input
+                    ref={fileInputRef}
+                    id="workflow-chat-file-upload"
+                    type="file"
+                    multiple
+                    accept=".txt,.md,image/*"
+                    className="hidden"
+                    disabled={isStreaming}
+                    onChange={(event) => {
+                      void addUploadedContextFiles(Array.from(event.target.files || []));
+                      event.target.value = '';
+                    }}
+                  />
+                  <Paperclip className="size-5" />
+                </label>
+              </PromptInputAction>
+
+              <PromptInputAction tooltip={isStreaming ? '停止生成' : '发送消息'}>
+                <Button
+                  type="button"
+                  variant="default"
+                  size="icon"
+                  className="size-8 rounded-full"
+                  onClick={() => {
+                    if (isStreaming) {
+                      handleStopStreaming();
+                      return;
+                    }
+                    void handleSendMessage();
+                  }}
+                  disabled={!isStreaming && !chatInput.trim() && currentContextFiles.length === 0}
+                  aria-label={isStreaming ? '停止生成' : '发送消息'}
+                >
+                  {isStreaming ? (
+                    <Square className="size-4 fill-current" />
+                  ) : (
+                    <ArrowUp className="size-4" />
+                  )}
+                </Button>
+              </PromptInputAction>
+            </PromptInputActions>
+          </PromptInput>
         </div>
       </div>
 
@@ -4980,10 +5353,12 @@ export default function WorkflowsPage() {
             <p className="mt-1 truncate text-xs text-muted-foreground">
               {currentStep?.name || '未选择步骤'}
             </p>
-            <TabsList className="mt-3 grid h-auto w-full grid-cols-3 gap-1">
+            <TabsList className="mt-3 grid h-auto w-full grid-cols-5 gap-1">
               <TabsTrigger value="outputs" className="text-xs">产出</TabsTrigger>
               <TabsTrigger value="review" className="text-xs">审核</TabsTrigger>
               <TabsTrigger value="archive" className="text-xs">沉淀</TabsTrigger>
+              <TabsTrigger value="context" className="text-xs">上下文</TabsTrigger>
+              <TabsTrigger value="demo" className="text-xs">Demo</TabsTrigger>
             </TabsList>
           </div>
 
@@ -5215,6 +5590,12 @@ export default function WorkflowsPage() {
                   </Card>
                 )}
             </div>
+          </TabsContent>
+          <TabsContent value="context" className="min-h-0 flex-1 overflow-hidden">
+            {supplementalContextPanel}
+          </TabsContent>
+          <TabsContent value="demo" className="min-h-0 flex-1 overflow-hidden">
+            {demoGenerationPanel}
           </TabsContent>
         </Tabs>
       </div>

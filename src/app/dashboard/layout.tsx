@@ -10,16 +10,14 @@ import {
   FileCode2,
   LayoutDashboard,
   LogOut,
-  Moon,
   Play,
   Rocket,
   Shield,
-  Sun,
   Swords,
   User as UserIcon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { useTheme } from '@/hooks/use-theme';
+import { AnimatedThemeToggler } from '@/registry/magicui/animated-theme-toggler';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -107,7 +105,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [showLogoutDialog, setShowLogoutDialog] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
-  const { theme, toggleTheme } = useTheme();
 
   useEffect(() => {
     let cancelled = false;
@@ -296,25 +293,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           })}
         </nav>
 
-        <div className="shrink-0 px-2 pb-2">
-          <Button
-            variant="ghost"
-            className={`w-full justify-start gap-3 text-muted-foreground hover:bg-secondary hover:text-foreground ${
-              collapsed ? 'justify-center px-0' : ''
-            }`}
-            onClick={toggleTheme}
-          >
-            {theme === 'dark' ? (
-              <Sun className="h-4 w-4 shrink-0" />
-            ) : (
-              <Moon className="h-4 w-4 shrink-0" />
-            )}
-            {!collapsed && (
-              <span className="text-sm">{theme === 'dark' ? '浅色模式' : '深色模式'}</span>
-            )}
-          </Button>
-        </div>
-
         <div className="shrink-0 border-t border-border p-2">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -368,9 +346,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <span className="truncate text-sm text-muted-foreground">{dashboardTitle(pathname)}</span>
           </div>
           <div className="flex min-w-0 items-center gap-2">
-            <span className="hidden max-w-48 truncate text-xs text-muted-foreground sm:inline">
-              {activeOrganization.name}
-            </span>
+            <AnimatedThemeToggler variant="square" className="size-8 md:size-9" />
             <Button
               variant="ghost"
               size="icon"

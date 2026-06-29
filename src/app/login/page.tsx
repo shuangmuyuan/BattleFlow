@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { KineticText } from '@/registry/magicui/kinetic-text';
 
 const APP_NAME = 'BattleFlow';
 
@@ -174,7 +175,9 @@ export default function LoginPage() {
             <Swords className="size-6 [@media_(min-height:760px)]:size-8" />
           </div>
           <div className="space-y-1">
-            <h1 className="text-2xl font-semibold text-foreground">{APP_NAME}</h1>
+            <h1 className="text-2xl font-semibold text-foreground">
+              <KineticText text={APP_NAME} />
+            </h1>
             <p className="text-sm text-muted-foreground">AI 原生产品规划平台</p>
           </div>
         </div>
