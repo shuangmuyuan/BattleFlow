@@ -32,9 +32,12 @@ Use this skill when changing first-party accounts, sessions, organizations, depa
 5. Store only password hashes and session token hashes. Do not log or return plaintext auth tokens.
 6. Write audit events for membership, department, team, platform admin, and destructive authorization changes.
 7. Keep Skill/workflow package assets in file/object storage. Postgres stores business metadata, version/state indexes, asset manifests, and grants.
-8. For historical file-backed Skill/workflow data, update `scripts/migrate-resource-metadata.mjs` and docs instead of silently granting access during reads.
-9. Update docs when env vars, bootstrap steps, migration behavior, authorization semantics, or first-release exclusions change.
-10. Add or update focused tests for changed permission decisions or auth/session helpers.
+8. Map public/private business layers to existing grants instead of adding a parallel permission engine:
+   - public layer: organization read/run for Skills or organization read for knowledge bases;
+   - private layer: creator department read/run or read, falling back to the owner admin grant when no department is available.
+9. For historical file-backed Skill/workflow data, update `scripts/migrate-resource-metadata.mjs` and docs instead of silently granting access during reads.
+10. Update docs when env vars, bootstrap steps, migration behavior, authorization semantics, or first-release exclusions change.
+11. Add or update focused tests for changed permission decisions or auth/session helpers.
 
 ## Validation
 
