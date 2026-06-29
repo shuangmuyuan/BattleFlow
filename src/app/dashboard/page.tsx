@@ -15,7 +15,6 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import {
-  PageHeader,
   ProductEmptyState,
   StatusBadge,
   appCardClassName,
@@ -57,7 +56,7 @@ export default function DashboardPage() {
         const skills = Array.isArray(skillsData.skills) ? skillsData.skills : [];
         if (!ignore) {
           setRecentWorkflows(workflows);
-          setRecentSkills(skills.slice(0, 5));
+          setRecentSkills(skills.slice(0, 4));
           setStats({
             totalSkills: statsData.skillCount || skills.length || 0,
             totalWorkflows: statsData.workflowCount || workflows.length || 0,
@@ -77,18 +76,20 @@ export default function DashboardPage() {
     };
   }, []);
 
+  const visibleRecentWorkflows = recentWorkflows.slice(0, 3);
+
   return (
-    <div className="flex h-full min-h-0 flex-col gap-8 overflow-auto p-4 md:p-6">
-      <PageHeader
-        title="工作台"
-        description="汇总 Skill、工作流和知识资产状态，快速进入产品规划核心任务。"
-      />
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto p-3 md:p-4">
+      <div className="flex shrink-0 flex-col gap-1 border-b border-border/60 pb-3">
+        <h1 className="truncate text-2xl font-semibold tracking-tight text-foreground">工作台</h1>
+        <p className="text-sm text-muted-foreground">汇总 Skill、工作流和知识资产状态，快速进入产品规划核心任务。</p>
+      </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <Card className={appCardClassName}>
-          <CardContent className="p-4 flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-primary/10">
+          <CardContent className="flex h-20 items-center gap-3 p-3">
+            <div className="rounded-lg bg-primary/10 p-2">
               <FileCode2 className="h-5 w-5 text-primary" />
             </div>
             <div>
@@ -98,8 +99,8 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
         <Card className={appCardClassName}>
-          <CardContent className="p-4 flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-blue-500/10">
+          <CardContent className="flex h-20 items-center gap-3 p-3">
+            <div className="rounded-lg bg-blue-500/10 p-2">
               <Play className="h-5 w-5 text-blue-500" />
             </div>
             <div>
@@ -109,8 +110,8 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
         <Card className={appCardClassName}>
-          <CardContent className="p-4 flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-amber-500/10">
+          <CardContent className="flex h-20 items-center gap-3 p-3">
+            <div className="rounded-lg bg-amber-500/10 p-2">
               <TrendingUp className="h-5 w-5 text-amber-500" />
             </div>
             <div>
@@ -120,8 +121,8 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
         <Card className={appCardClassName}>
-          <CardContent className="p-4 flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-emerald-500/10">
+          <CardContent className="flex h-20 items-center gap-3 p-3">
+            <div className="rounded-lg bg-emerald-500/10 p-2">
               <BookOpen className="h-5 w-5 text-emerald-500" />
             </div>
             <div>
@@ -131,8 +132,8 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
         <Card className={appCardClassName}>
-          <CardContent className="p-4 flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-purple-500/10">
+          <CardContent className="flex h-20 items-center gap-3 p-3">
+            <div className="rounded-lg bg-purple-500/10 p-2">
               <FileText className="h-5 w-5 text-purple-500" />
             </div>
             <div>
@@ -144,17 +145,17 @@ export default function DashboardPage() {
       </div>
 
       {/* Quick Actions */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+      <div className="grid shrink-0 grid-cols-1 gap-3 md:grid-cols-3">
         <Link href="/dashboard/workflows">
           <Card className={`${appCardClassName} cursor-pointer group`}>
-            <CardContent className="flex min-w-0 items-center justify-between gap-4 p-6">
+            <CardContent className="flex h-20 min-w-0 items-center justify-between gap-3 p-4">
               <div className="flex min-w-0 items-center gap-3">
-                <div className="p-3 rounded-lg bg-primary/10">
-                  <Play className="h-6 w-6 text-primary" />
+                <div className="rounded-lg bg-primary/10 p-2.5">
+                  <Play className="h-5 w-5 text-primary" />
                 </div>
                 <div className="min-w-0">
-                  <p className="font-semibold">新建工作流</p>
-                  <p className="text-sm text-muted-foreground">编排 Skill 产出 PRD</p>
+                  <p className="text-sm font-semibold">新建工作流</p>
+                  <p className="text-xs text-muted-foreground">编排 Skill 产出 PRD</p>
                 </div>
               </div>
               <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:translate-x-1 transition-transform" />
@@ -163,14 +164,14 @@ export default function DashboardPage() {
         </Link>
         <Link href="/dashboard/skills">
           <Card className={`${appCardClassName} cursor-pointer group`}>
-            <CardContent className="flex min-w-0 items-center justify-between gap-4 p-6">
+            <CardContent className="flex h-20 min-w-0 items-center justify-between gap-3 p-4">
               <div className="flex min-w-0 items-center gap-3">
-                <div className="p-3 rounded-lg bg-blue-500/10">
-                  <FileCode2 className="h-6 w-6 text-blue-500" />
+                <div className="rounded-lg bg-blue-500/10 p-2.5">
+                  <FileCode2 className="h-5 w-5 text-blue-500" />
                 </div>
                 <div className="min-w-0">
-                  <p className="font-semibold">管理 Skills</p>
-                  <p className="text-sm text-muted-foreground">导入和更新 Skill</p>
+                  <p className="text-sm font-semibold">管理 Skills</p>
+                  <p className="text-xs text-muted-foreground">导入和更新 Skill</p>
                 </div>
               </div>
               <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:translate-x-1 transition-transform" />
@@ -179,14 +180,14 @@ export default function DashboardPage() {
         </Link>
         <Link href="/dashboard/knowledge">
           <Card className={`${appCardClassName} cursor-pointer group`}>
-            <CardContent className="flex min-w-0 items-center justify-between gap-4 p-6">
+            <CardContent className="flex h-20 min-w-0 items-center justify-between gap-3 p-4">
               <div className="flex min-w-0 items-center gap-3">
-                <div className="p-3 rounded-lg bg-emerald-500/10">
-                  <BookOpen className="h-6 w-6 text-emerald-500" />
+                <div className="rounded-lg bg-emerald-500/10 p-2.5">
+                  <BookOpen className="h-5 w-5 text-emerald-500" />
                 </div>
                 <div className="min-w-0">
-                  <p className="font-semibold">知识库</p>
-                  <p className="text-sm text-muted-foreground">管理和检索知识</p>
+                  <p className="text-sm font-semibold">知识库</p>
+                  <p className="text-xs text-muted-foreground">管理和检索知识</p>
                 </div>
               </div>
               <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:translate-x-1 transition-transform" />
@@ -196,9 +197,9 @@ export default function DashboardPage() {
       </div>
 
       {/* Recent Workflows & Skills */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <Card className={appCardClassName}>
-          <CardHeader className="pb-3">
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-2">
+        <Card className={`${appCardClassName} flex min-h-0 flex-col overflow-hidden`}>
+          <CardHeader className="shrink-0 px-4 py-3">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">最近工作流</CardTitle>
               <Button variant="ghost" size="sm" asChild>
@@ -206,17 +207,17 @@ export default function DashboardPage() {
               </Button>
             </div>
           </CardHeader>
-          <CardContent>
-            <div className="flex flex-col gap-3">
-              {recentWorkflows.length === 0 && !loading ? (
+          <CardContent className="min-h-0 overflow-hidden px-4 pb-4 pt-0">
+            <div className="flex min-h-0 flex-col gap-2 overflow-hidden">
+              {visibleRecentWorkflows.length === 0 && !loading ? (
                 <ProductEmptyState
                   icon={<Play />}
                   title="暂无最近工作流"
                   description="创建工作流后，最近更新会显示在这里。"
-                  className="min-h-48 border-0 bg-muted/30"
+                  className="min-h-32 border-0 bg-muted/30"
                 />
-              ) : recentWorkflows.map((wf) => (
-                <div key={wf.id} className="flex min-w-0 flex-col gap-3 rounded-lg p-3 transition-colors hover:bg-muted/50 sm:flex-row sm:items-center sm:justify-between">
+              ) : visibleRecentWorkflows.map((wf) => (
+                <div key={wf.id} className="flex min-w-0 items-center justify-between gap-3 rounded-lg p-2.5 transition-colors hover:bg-muted/50">
                   <div className="flex min-w-0 items-center gap-3">
                     {wf.status === 'completed' ? (
                       <CheckCircle2 className="h-4 w-4 text-emerald-500" />
@@ -241,8 +242,8 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        <Card className={appCardClassName}>
-          <CardHeader className="pb-3">
+        <Card className={`${appCardClassName} flex min-h-0 flex-col overflow-hidden`}>
+          <CardHeader className="shrink-0 px-4 py-3">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">最近使用的 Skills</CardTitle>
               <Button variant="ghost" size="sm" asChild>
@@ -250,17 +251,17 @@ export default function DashboardPage() {
               </Button>
             </div>
           </CardHeader>
-          <CardContent>
-            <div className="flex flex-col gap-3">
+          <CardContent className="min-h-0 overflow-hidden px-4 pb-4 pt-0">
+            <div className="flex min-h-0 flex-col gap-2 overflow-hidden">
               {recentSkills.length === 0 && !loading ? (
                 <ProductEmptyState
                   icon={<FileCode2 />}
                   title="暂无最近 Skill"
                   description="导入或发布 Skill 后，常用能力会显示在这里。"
-                  className="min-h-48 border-0 bg-muted/30"
+                  className="min-h-32 border-0 bg-muted/30"
                 />
               ) : recentSkills.map((skill) => (
-                <div key={skill.id} className="flex min-w-0 items-center justify-between gap-3 rounded-lg p-3 transition-colors hover:bg-muted/50">
+                <div key={skill.id} className="flex min-w-0 items-center justify-between gap-3 rounded-lg p-2.5 transition-colors hover:bg-muted/50">
                   <div className="flex min-w-0 items-center gap-3">
                     <FileCode2 className="h-4 w-4 text-muted-foreground" />
                     <div className="min-w-0">

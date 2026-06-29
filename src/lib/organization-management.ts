@@ -19,6 +19,7 @@ interface MemberRow extends QueryResultRow {
   user_id: string;
   email: string;
   display_name: string | null;
+  department: string | null;
   role: OrganizationRole;
   status: string;
   joined_at: Date | string;
@@ -401,13 +402,31 @@ export async function listOrganizationMembers(organizationId: string) {
     `
       SELECT
         m.user_id,
-        u.email,
-        u.display_name,
+        COALESCE(sso_user.email, u.email) AS email,
+        COALESCE(sso_user.display_name, u.display_name) AS display_name,
+        sso_user.department,
         m.role,
         m.status,
         m.joined_at
       FROM organization_members m
       JOIN users u ON u.id = m.user_id
+      LEFT JOIN LATERAL (
+        SELECT bfu.email, bfu.display_name, bfu.department
+        FROM battleflow_users bfu
+        WHERE (bfu.email IS NOT NULL AND lower(bfu.email) = lower(u.email))
+           OR bfu.sso_id = u.id
+           OR bfu.username = u.id
+           OR (bfu.display_name IS NOT NULL AND u.display_name IS NOT NULL AND bfu.display_name = u.display_name)
+        ORDER BY
+          CASE
+            WHEN bfu.email IS NOT NULL AND lower(bfu.email) = lower(u.email) THEN 0
+            WHEN bfu.sso_id = u.id OR bfu.username = u.id THEN 1
+            ELSE 2
+          END,
+          bfu.updated_at DESC NULLS LAST,
+          bfu.created_at DESC
+        LIMIT 1
+      ) sso_user ON true
       WHERE m.organization_id = $1
       ORDER BY m.joined_at ASC
     `,
@@ -418,6 +437,7 @@ export async function listOrganizationMembers(organizationId: string) {
     userId: row.user_id,
     email: row.email,
     displayName: row.display_name,
+    department: row.department,
     role: row.role,
     status: row.status,
     joinedAt: toIso(row.joined_at),

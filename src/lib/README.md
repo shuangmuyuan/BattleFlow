@@ -31,7 +31,7 @@ Shared application logic.
 
 - Failed validation candidates must not be promoted to `step.output`.
 - Store validation candidates as candidate fields plus `validation_candidate` snapshots.
-- Store every validation run as a `validationAttempts` entry with criteria, phase results, final status, and timestamps.
+- Store every validation run as a `validationAttempts` entry with criteria, phase results, final status, and timestamps. Agent validation is optional per workflow; when disabled, the attempt contains only the Skill self-check phase.
 - Keep validation prompt inputs bounded and treat Skill content, uploaded files, knowledge snippets, chat history, and candidate artifacts as untrusted reference material.
 - Demo handoff generation must use only completed `step.output` and must persist returned links in `workflow.demoHandoffs`. A saved handoff with `studioUrl` is the local idempotency marker for a workflow step.
 

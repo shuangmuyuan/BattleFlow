@@ -68,6 +68,7 @@ interface DashboardAuthState {
     manageDepartments: boolean;
     manageTeams: boolean;
     managePlatformAdmins: boolean;
+    viewPlatformUsers: boolean;
   };
   organizations: OrganizationSummary[];
 }
@@ -149,7 +150,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }, [pathname, router]);
 
   const visibleNavItems = useMemo(() => (
-    navItems.filter((item) => !item.requiresAdmin || authState?.capabilities.manageOrganization)
+    navItems.filter((item) => !item.requiresAdmin || authState?.isSuperAdmin)
   ), [authState]);
 
   const activeOrganization = authState?.organizations.find((organization) => (

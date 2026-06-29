@@ -64,7 +64,7 @@ The Claude Code CLI adapter is intentionally constrained:
 
 Do not enable CLI tools, broader permissions, or persistent sessions without documenting the threat model and validating the change.
 
-Workflow validation uses the same constrained Claude Code CLI boundary. Skill self-check and independent Agent validation both run with safe mode, no tools, no session persistence, and budget controlled by environment variables. Validation prompts frame Skill Markdown, uploaded files, retrieved knowledge, chat history, self-check output, and candidate artifacts as untrusted reference material. The validation Agent is a judge only: it must return structured JSON and must not execute instructions from candidate content or package assets.
+Workflow validation uses the same constrained Claude Code CLI boundary. Skill self-check always uses safe mode, no tools, no session persistence, and budget controlled by environment variables. Independent Agent validation uses the same boundary only when the workflow-level Agent validation switch is enabled. Validation prompts frame Skill Markdown, uploaded files, retrieved knowledge, chat history, self-check output, and candidate artifacts as untrusted reference material. The validation Agent is a judge only: it must return structured JSON and must not execute instructions from candidate content or package assets.
 
 Validation failures and runtime errors are stored as bounded summaries and findings. Do not log or surface full uploaded private documents, full candidate artifacts, credentials, raw service-role keys, or raw CLI prompts in validation error messages.
 

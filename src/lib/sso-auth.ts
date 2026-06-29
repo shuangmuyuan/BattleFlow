@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { queryPostgres } from '@/storage/database/postgres-client';
+import { isConfiguredSuperAdminPrincipal } from './auth/super-admins';
+import { queryPostgres } from '../storage/database/postgres-client';
 
 const stateMaxAgeSeconds = 600;
 const defaultTokenMaxAgeSeconds = 24 * 60 * 60;
@@ -25,6 +26,7 @@ export interface BattleFlowUser {
 interface StatePayload {
   nonce: string;
   redirectUri: string;
+  nextPath?: string;
   iat: number;
 }
 
@@ -64,10 +66,11 @@ function parseJsonPart<T>(value: string): T | null {
   }
 }
 
-export function createSsoState(redirectUri: string) {
+export function createSsoState(redirectUri: string, nextPath?: string) {
   const payload: StatePayload = {
     nonce: randomBytes(16).toString('base64url'),
     redirectUri,
+    ...(nextPath ? { nextPath } : {}),
     iat: Math.floor(Date.now() / 1000),
   };
   const body = base64UrlJson(payload);
@@ -117,18 +120,56 @@ function getString(record: Record<string, unknown>, keys: string[]) {
   return '';
 }
 
-export function normalizeIdTrustUser(raw: unknown) {
-  const record = raw && typeof raw === 'object' && !Array.isArray(raw)
-    ? raw as Record<string, unknown>
+function toRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
     : {};
-  const ssoId = getString(record, ['id', 'user_id', 'userid', 'uid', 'name', 'account', 'username', 'login_name', 'employee_id']);
-  const displayName = getString(record, ['display_name', 'displayName', 'real_name', 'realName', 'nick_name', 'nickname', 'cn', 'name']);
-  const username = getString(record, ['username', 'account', 'login_name', 'loginName', 'name']) || displayName || ssoId;
-  const email = getString(record, ['email', 'mail', 'user_email', 'email_address']);
-  const department = getString(record, ['department', 'department_name', 'departmentName', 'dept', 'dept_name', 'deptName', 'org_name', 'organization']);
-  const departmentId = getString(record, ['department_id', 'departmentId', 'dept_id', 'deptId', 'org_id', 'organization_id']);
-  const title = getString(record, ['title', 'job_title', 'jobTitle', 'position']);
-  const mobile = getString(record, ['mobile', 'phone', 'telephone', 'phone_number']);
+}
+
+export function normalizeIdTrustUser(raw: unknown) {
+  const record = toRecord(raw);
+  const rawProfile = toRecord(record.raw_profile);
+  const profileRecord = Object.keys(rawProfile).length > 0 ? { ...record, ...rawProfile } : record;
+  const storedRawProfile = Object.keys(rawProfile).length > 0 ? rawProfile : record;
+  const ssoId = getString(profileRecord, [
+    'sub_account',
+    'subAccount',
+    'sso_id',
+    'ssoId',
+    'name',
+    'id',
+    'user_id',
+    'userid',
+    'uid',
+    'account',
+    'username',
+    'login_name',
+    'employee_id',
+  ]);
+  const displayName = getString(profileRecord, [
+    'display_name',
+    'displayName',
+    'real_name',
+    'realName',
+    'nick_name',
+    'nickname',
+    'cn',
+    'name',
+  ]);
+  const username = getString(profileRecord, [
+    'sub_account',
+    'subAccount',
+    'username',
+    'account',
+    'login_name',
+    'loginName',
+    'name',
+  ]) || ssoId || displayName;
+  const email = getString(profileRecord, ['email', 'mail', 'user_email', 'email_address']);
+  const department = getString(profileRecord, ['dept', 'dept_name', 'deptName', 'department', 'department_name', 'departmentName', 'org_name', 'organization']);
+  const departmentId = getString(profileRecord, ['department_id', 'departmentId', 'dept_id', 'deptId', 'org_id', 'organization_id']);
+  const title = getString(profileRecord, ['title', 'job_title', 'jobTitle', 'position']);
+  const mobile = getString(profileRecord, ['mobile', 'phone', 'telephone', 'phone_number']);
 
   return {
     ssoId,
@@ -139,7 +180,7 @@ export function normalizeIdTrustUser(raw: unknown) {
     departmentId,
     title,
     mobile,
-    rawProfile: record,
+    rawProfile: storedRawProfile,
   };
 }
 
@@ -147,6 +188,13 @@ export async function upsertSsoUser(profile: ReturnType<typeof normalizeIdTrustU
   if (!profile.ssoId) {
     throw new Error('SSO user profile is missing a stable user id');
   }
+
+  const isAdmin = isConfiguredSuperAdminPrincipal({
+    email: profile.email,
+    username: profile.username,
+    ssoId: profile.ssoId,
+    userId: profile.ssoId,
+  });
 
   const result = await queryPostgres<BattleFlowUser>(`
     INSERT INTO battleflow_users (
@@ -159,10 +207,11 @@ export async function upsertSsoUser(profile: ReturnType<typeof normalizeIdTrustU
       title,
       mobile,
       raw_profile,
+      is_admin,
       created_at,
       updated_at
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, now(), now())
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, now(), now())
     ON CONFLICT (sso_id) DO UPDATE SET
       username = EXCLUDED.username,
       display_name = EXCLUDED.display_name,
@@ -172,6 +221,7 @@ export async function upsertSsoUser(profile: ReturnType<typeof normalizeIdTrustU
       title = EXCLUDED.title,
       mobile = EXCLUDED.mobile,
       raw_profile = EXCLUDED.raw_profile,
+      is_admin = battleflow_users.is_admin OR EXCLUDED.is_admin,
       updated_at = now()
     RETURNING
       id,
@@ -197,9 +247,19 @@ export async function upsertSsoUser(profile: ReturnType<typeof normalizeIdTrustU
     profile.title || null,
     profile.mobile || null,
     JSON.stringify(profile.rawProfile),
+    isAdmin,
   ]);
 
   return result.rows[0];
+}
+
+export async function getUserBySessionToken(token: string): Promise<BattleFlowUser | null> {
+  const payload = token ? verifySessionToken(token) : null;
+  if (!payload?.sub) {
+    return null;
+  }
+
+  return getUserById(payload.sub);
 }
 
 export async function getUserById(id: string): Promise<BattleFlowUser | null> {

@@ -2,10 +2,15 @@ import type { PoolClient, QueryResultRow } from 'pg';
 import { getPostgresPool, hasPostgresDatabaseConfig } from '@/storage/database/postgres-client';
 import { assertPasswordAllowed, hashPassword, verifyPassword } from './password';
 import { createSessionExpiration, createSessionToken, hashToken } from './session';
+import { builtInSuperAdminPrincipal } from './super-admins';
 import { AuthConfigError, type AuthUser } from './types';
 
 const MAX_FAILED_ATTEMPTS = 8;
 const LOCK_MINUTES = 15;
+const BUILT_IN_SUPER_ADMIN_PASSWORD = 'superadmin';
+const DEFAULT_ORGANIZATION_ID = '00000000-0000-0000-0000-000000000001';
+const DEFAULT_ORGANIZATION_NAME = 'Default Organization';
+const DEFAULT_ORGANIZATION_SLUG = 'default';
 
 export class AuthInputError extends Error {
   readonly status = 400;
@@ -86,6 +91,12 @@ function normalizeOptionalText(value: string | null | undefined, maxLength: numb
 
 function displayNameFromEmail(email: string): string {
   return email.split('@')[0]?.slice(0, 128) || 'BattleFlow User';
+}
+
+function isBuiltInSuperAdminIdentifier(identifier: string): boolean {
+  const normalized = identifier.trim().toLowerCase();
+  return normalized === builtInSuperAdminPrincipal.username
+    || normalized === builtInSuperAdminPrincipal.email;
 }
 
 function slugify(value: string): string {
@@ -208,6 +219,59 @@ async function createOwnedOrganizationWithClient(
   return organizationId;
 }
 
+async function ensureBuiltInSuperAdminOrganization(client: PoolClient, userId: string): Promise<string> {
+  const existing = await client.query<{ id: string }>(
+    `
+      SELECT id
+      FROM organizations
+      WHERE id = $1 OR slug = $2
+      ORDER BY CASE WHEN id = $1 THEN 0 ELSE 1 END
+      LIMIT 1
+    `,
+    [DEFAULT_ORGANIZATION_ID, DEFAULT_ORGANIZATION_SLUG],
+  );
+
+  const organizationId = existing.rows[0]?.id ?? DEFAULT_ORGANIZATION_ID;
+  if (existing.rowCount && existing.rowCount > 0) {
+    await client.query(
+      `
+        UPDATE organizations
+        SET status = 'active',
+            settings = COALESCE(settings, '{}'::jsonb),
+            updated_at = now()
+        WHERE id = $1
+      `,
+      [organizationId],
+    );
+  } else {
+    await client.query(
+      `
+        INSERT INTO organizations (id, name, slug, description, status, settings, created_by, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, 'active', '{}'::jsonb, $5, now(), now())
+      `,
+      [
+        organizationId,
+        DEFAULT_ORGANIZATION_NAME,
+        DEFAULT_ORGANIZATION_SLUG,
+        'Default BattleFlow organization for built-in platform administration.',
+        userId,
+      ],
+    );
+  }
+
+  await client.query(
+    `
+      INSERT INTO organization_members (organization_id, user_id, role, status, joined_at, updated_at)
+      VALUES ($1, $2, 'org_owner', 'active', now(), now())
+      ON CONFLICT (organization_id, user_id)
+      DO UPDATE SET role = 'org_owner', status = 'active', updated_at = now()
+    `,
+    [organizationId, userId],
+  );
+
+  return organizationId;
+}
+
 async function fetchFirstMembershipOrganizationId(client: PoolClient, userId: string): Promise<string | null> {
   const result = await client.query<{ organization_id: string }>(
     `
@@ -296,7 +360,71 @@ async function recordFailedLogin(client: PoolClient, userId: string, failedAttem
   );
 }
 
+async function loginBuiltInSuperAdmin(): Promise<AuthFlowResult> {
+  return withTransaction(async (client) => {
+    const passwordHash = await hashPassword(BUILT_IN_SUPER_ADMIN_PASSWORD);
+    const userResult = await client.query<UserRow>(
+      `
+        INSERT INTO users (id, email, display_name, status, created_at, updated_at)
+        VALUES ($1, $2, $3, 'active', now(), now())
+        ON CONFLICT (id)
+        DO UPDATE SET
+          email = EXCLUDED.email,
+          display_name = EXCLUDED.display_name,
+          status = 'active',
+          updated_at = now()
+        RETURNING id, email, display_name, avatar_url, status
+      `,
+      [
+        builtInSuperAdminPrincipal.userId,
+        builtInSuperAdminPrincipal.email,
+        builtInSuperAdminPrincipal.displayName,
+      ],
+    );
+    const user = userResult.rows[0];
+    if (!user) {
+      throw new AuthInputError('Unable to create account');
+    }
+
+    await client.query(
+      `
+        INSERT INTO user_password_credentials (
+          user_id,
+          password_hash,
+          password_updated_at,
+          failed_attempt_count,
+          locked_until,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, now(), 0, null, now(), now())
+        ON CONFLICT (user_id)
+        DO UPDATE SET
+          password_hash = EXCLUDED.password_hash,
+          password_updated_at = now(),
+          failed_attempt_count = 0,
+          locked_until = null,
+          updated_at = now()
+      `,
+      [user.id, passwordHash],
+    );
+
+    return {
+      user: mapUser(user),
+      session: await createSessionWithClient(client, user.id),
+      activeOrganizationId: await ensureBuiltInSuperAdminOrganization(client, user.id),
+    };
+  });
+}
+
 export async function loginAccount(input: LoginAccountInput): Promise<AuthFlowResult> {
+  if (isBuiltInSuperAdminIdentifier(input.email)) {
+    if (input.password !== BUILT_IN_SUPER_ADMIN_PASSWORD) {
+      throw new InvalidCredentialsError();
+    }
+    return loginBuiltInSuperAdmin();
+  }
+
   const email = normalizeEmail(input.email);
 
   return withTransaction(async (client) => {

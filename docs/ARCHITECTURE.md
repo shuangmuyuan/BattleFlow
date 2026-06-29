@@ -80,10 +80,10 @@ Workflow step completion is guarded by a validation loop:
 1. The user produces and saves a candidate assistant output for the active step.
 2. The dashboard calls `POST /api/workflows/validation` with `start_step_validation` or `retry_step_validation`.
 3. The route stores the candidate as `step.candidateOutput`, hashes it, writes a `validation_candidate` step snapshot, creates a validation attempt, and moves the step to `self_checking`.
-4. The runtime runs a Skill self-check through the Claude Code CLI adapter in safe mode with no tools and no session persistence, then persists the phase and moves the step to `agent_validating`.
-5. The runtime runs an independent Agent validation against the same candidate and acceptance criteria.
-6. Only when both phases pass does the route set `step.status = "completed"` and promote the candidate into `step.output`.
-7. Failed or error results set `step.status = "validation_failed"`, keep the candidate in candidate fields, leave `step.output` unchanged, and keep downstream steps blocked.
+4. The runtime runs a Skill self-check through the Claude Code CLI adapter in safe mode with no tools and no session persistence, then persists the phase.
+5. If the workflow-level Agent validation switch is enabled, the runtime runs an independent Agent validation against the same candidate and acceptance criteria. The switch is off by default while the Agent gate is being refined.
+6. When the required phases pass, the route sets `step.status = "completed"` and promotes the candidate into `step.output`. With Agent validation disabled, Skill self-check is the only required phase.
+7. Failed or error results from any required phase set `step.status = "validation_failed"`, keep the candidate in candidate fields, leave `step.output` unchanged, and keep downstream steps blocked.
 
 The workflow step status values are:
 
@@ -94,7 +94,7 @@ The workflow step status values are:
 - `validation_failed`: current candidate did not pass and the user must revise or retry;
 - `completed`: candidate passed validation and became durable step output.
 
-Each workflow stores `validationAttempts` with criteria, candidate hash, candidate snapshot ID, self-check result, Agent validation result, final attempt status, and timestamps. The dashboard's `门禁` tab reads these records to show criteria, findings, blockers, candidate download, and retry actions.
+Each workflow stores `validationAttempts` with criteria, candidate hash, candidate snapshot ID, self-check result, optional Agent validation result, final attempt status, and timestamps. The dashboard reads these records to show blockers and retry actions.
 
 ## Demo Handoff Integration
 

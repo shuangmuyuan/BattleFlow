@@ -1,11 +1,10 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, type ChangeEvent } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Dialog,
   DialogContent,
@@ -24,7 +23,6 @@ import {
   Clock,
 } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Textarea } from '@/components/ui/textarea';
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
 import {
   PageHeader,
@@ -63,6 +61,8 @@ export default function KnowledgePage() {
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [selectedKb, setSelectedKb] = useState<KnowledgeBase | null>(null);
   const [uploadContent, setUploadContent] = useState('');
+  const [uploadFileName, setUploadFileName] = useState('');
+  const [uploadFileError, setUploadFileError] = useState('');
   const [activeTab, setActiveTab] = useState('bases');
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
@@ -173,7 +173,13 @@ export default function KnowledgePage() {
         body: JSON.stringify({
           action: 'add_documents',
           knowledge_base_id: selectedKb.id,
-          documents: [{ source_type: 'text', content: uploadContent }],
+          documents: [{
+            title: uploadFileName || null,
+            source_type: 'markdown',
+            source: uploadFileName || null,
+            content: uploadContent,
+            metadata: uploadFileName ? { fileName: uploadFileName } : null,
+          }],
         }),
       });
       const data = await res.json();
@@ -193,9 +199,50 @@ export default function KnowledgePage() {
       );
       setUploadDialogOpen(false);
       setUploadContent('');
+      setUploadFileName('');
+      setUploadFileError('');
       setSelectedKb(null);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : '文档上传失败');
+    }
+  };
+
+  const handleUploadDialogOpenChange = (open: boolean) => {
+    setUploadDialogOpen(open);
+    if (!open) {
+      setUploadContent('');
+      setUploadFileName('');
+      setUploadFileError('');
+      setSelectedKb(null);
+    }
+  };
+
+  const handleUploadFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    setUploadContent('');
+    setUploadFileName('');
+    setUploadFileError('');
+
+    if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith('.md')) {
+      setUploadFileError('只支持 .md 文件');
+      event.target.value = '';
+      return;
+    }
+
+    try {
+      const content = await file.text();
+      if (!content.trim()) {
+        setUploadFileError('文件内容为空');
+        event.target.value = '';
+        return;
+      }
+      setUploadContent(content);
+      setUploadFileName(file.name);
+    } catch {
+      setUploadFileError('文件读取失败');
+      event.target.value = '';
     }
   };
 
@@ -203,7 +250,6 @@ export default function KnowledgePage() {
     <div className="flex h-full min-h-0 flex-col">
       <PageHeader
         title="知识库"
-        description="管理规划过程中的知识资产，让工作流能够引用真实上下文和评审材料。"
         action={(
           <>
           <Button variant="outline" className="gap-2" onClick={() => setActiveTab('search')}>
@@ -295,7 +341,7 @@ export default function KnowledgePage() {
                         }}
                       >
                         <FileUp className="h-3 w-3" />
-                        上传
+                        上传文件
                       </Button>
                       <Button variant="outline" size="sm" className="gap-1">
                         <Search className="h-3 w-3" />
@@ -424,27 +470,35 @@ export default function KnowledgePage() {
       </Dialog>
 
       {/* Upload Document Dialog */}
-      <Dialog open={uploadDialogOpen} onOpenChange={setUploadDialogOpen}>
+      <Dialog open={uploadDialogOpen} onOpenChange={handleUploadDialogOpenChange}>
         <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden">
           <DialogHeader>
-            <DialogTitle>上传文档到「{selectedKb?.name}」</DialogTitle>
-            <DialogDescription>将文档内容添加到知识库中</DialogDescription>
+            <DialogTitle>上传文件到「{selectedKb?.name}」</DialogTitle>
           </DialogHeader>
-          <FieldGroup className="min-h-0 flex-1 gap-4 overflow-y-auto pr-1">
-            <Field>
-              <FieldLabel htmlFor="knowledge-upload-content">文档内容</FieldLabel>
-              <Textarea
-                id="knowledge-upload-content"
-                className="min-h-[200px] resize-none"
-                placeholder="粘贴文档内容..."
-                value={uploadContent}
-                onChange={(e) => setUploadContent(e.target.value)}
-              />
-            </Field>
-          </FieldGroup>
+          <div className="min-h-0 flex-1">
+            <label
+              htmlFor="knowledge-upload-file"
+              className="flex min-h-28 cursor-pointer flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border bg-secondary/40 px-4 py-6 text-center transition-colors hover:border-brand/60 hover:bg-brand/5"
+            >
+              <FileUp className="size-6 text-brand" />
+              <span className="max-w-full truncate text-sm font-medium">
+                {uploadFileName || '选择 .md 文件'}
+              </span>
+            </label>
+            <Input
+              id="knowledge-upload-file"
+              type="file"
+              accept=".md,text/markdown"
+              className="sr-only"
+              onChange={handleUploadFileChange}
+            />
+            {uploadFileError && (
+              <p className="mt-2 text-sm text-destructive">{uploadFileError}</p>
+            )}
+          </div>
           <DialogFooter>
             <Button className="w-full sm:w-auto" onClick={handleUpload} disabled={!uploadContent}>
-              上传文档
+              上传文件
             </Button>
           </DialogFooter>
         </DialogContent>

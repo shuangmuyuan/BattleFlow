@@ -27,8 +27,9 @@ Product workspace UI for BattleFlow.
 The workflow page treats step completion as a validation gate:
 
 - the primary step action is `运行验证`, not direct local completion;
-- failed gates keep the user on the same step and show a non-modal blocker summary in the chat area;
-- the right `门禁` tab shows current status, criteria, self-check result, Agent validation result, blockers, latest attempt time, candidate download, and retry action;
+- the workflow-level `Agent 验证` switch is off by default; when off, validation stops after Skill self-check, and when on it also runs the independent Agent gate;
+- failed gates keep the user on the same step and show a compact non-modal blocker summary in the chat area;
+- the right context panel stays focused on outputs, review materials, and archived material instead of duplicating validation internals;
 - only server-returned passed workflows should advance the active step;
 - re-editing a completed step clears old output and gate fields so downstream context no longer uses stale output.
 

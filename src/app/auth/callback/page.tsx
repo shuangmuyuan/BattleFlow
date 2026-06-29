@@ -26,9 +26,9 @@ function CallbackContent() {
           credentials: 'include',
           body: JSON.stringify({ code, state }),
         });
-        const data = await response.json() as { error?: string };
+        const data = await response.json() as { error?: string; redirectTo?: string };
         if (!response.ok) throw new Error(data.error || '企业账号登录失败');
-        router.replace('/dashboard');
+        router.replace(data.redirectTo || '/dashboard');
       } catch (error) {
         setMessage(error instanceof Error ? error.message : '企业账号登录失败');
         setTimeout(() => router.replace('/login'), 1800);

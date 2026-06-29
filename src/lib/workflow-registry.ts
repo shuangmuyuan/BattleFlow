@@ -210,6 +210,7 @@ export interface WorkflowRecord {
   name: string;
   description: string;
   status: WorkflowStatus;
+  agentValidationEnabled: boolean;
   steps: WorkflowStepRecord[];
   contextFiles: WorkflowContextFileRecord[];
   reviewedOutputFiles: WorkflowReviewedOutputFileRecord[];
@@ -715,6 +716,7 @@ function normalizeWorkflow(workflow: Partial<WorkflowRecord>): WorkflowRecord {
     name: workflow.name || '未命名工作流',
     description: workflow.description || '',
     status: workflow.status === 'completed' || workflow.status === 'draft' ? workflow.status : 'in_progress',
+    agentValidationEnabled: Boolean(workflow.agentValidationEnabled),
     steps: sortWorkflowSteps(steps),
     contextFiles: Array.isArray(workflow.contextFiles)
       ? workflow.contextFiles.map((file, index) => normalizeContextFile(file, index))

@@ -32,6 +32,7 @@ interface ValidationRequestBody {
   workflowId: string;
   stepId: string;
   candidateOutput?: string;
+  agentValidationEnabled: boolean;
 }
 
 function jsonError(message: string, status = 500) {
@@ -59,6 +60,15 @@ function getRecord(value: unknown): Record<string, unknown> {
 
 function getString(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function getBoolean(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+  return undefined;
 }
 
 function parseAction(value: unknown): ValidationAction | null {
@@ -92,6 +102,11 @@ function parseValidationRequest(value: unknown): ValidationRequestBody | string 
     workflowId,
     stepId,
     candidateOutput: candidateOutput || undefined,
+    agentValidationEnabled: getBoolean(
+      body.agentValidationEnabled
+      ?? body.enableAgentValidation
+      ?? body.runAgentValidation,
+    ) ?? false,
   };
 }
 
@@ -231,6 +246,7 @@ async function runValidation(
   workflow: WorkflowRecord,
   step: WorkflowStepRecord,
   candidateOutput: string,
+  options: { agentValidationEnabled: boolean },
 ) {
   const skillContext = await resolveSkillForValidation(workflow, step);
   if (!skillContext?.skill) {
@@ -287,6 +303,37 @@ async function runValidation(
     selfCheck,
     updated_at: selfCheckedAt,
   };
+
+  if (!options.agentValidationEnabled) {
+    const gateResult = resolveValidationGateResult(selfCheck, undefined, {
+      requireAgentValidation: false,
+    });
+    const finalAttempt: WorkflowStepValidationAttemptRecord = {
+      ...selfCheckedAttempt,
+      status: gateResult.attemptStatus,
+      updated_at: selfCheckedAt,
+    };
+    const finalWorkflow = await persistValidationState(upsertAttempt(updateStep(startedWorkflow, step.id, {
+      status: gateResult.stepStatus,
+      output: gateResult.shouldPromoteCandidate ? normalizedOutput : step.output,
+      completed_at: gateResult.shouldPromoteCandidate ? selfCheckedAt : step.completed_at,
+      validationStatus: gateResult.validationStatus,
+      validationSummary: gateResult.summary || (gateResult.shouldPromoteCandidate ? '验证通过' : '验证未通过'),
+    }, selfCheckedAt), finalAttempt, selfCheckedAt));
+    const finalStep = finalWorkflow.steps.find((item) => item.id === step.id);
+
+    return {
+      response: jsonOk({
+        workflow: finalWorkflow,
+        step: finalStep,
+        attempt: finalAttempt,
+        attempts: getValidationAttempts(finalWorkflow, step.id),
+        status: gateResult.attemptStatus,
+        passed: gateResult.shouldPromoteCandidate,
+      }),
+    };
+  }
+
   const selfCheckedWorkflow = await persistValidationState(upsertAttempt(updateStep(startedWorkflow, step.id, {
     status: 'agent_validating',
     validationStatus: 'running',
@@ -390,7 +437,9 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const result = await runValidation(workflow, step, parsed.candidateOutput || '');
+    const result = await runValidation(workflow, step, parsed.candidateOutput || '', {
+      agentValidationEnabled: parsed.agentValidationEnabled,
+    });
     return result.response;
   } catch (error) {
     console.error('Workflow validation POST error:', error);

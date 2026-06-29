@@ -135,4 +135,34 @@ describe('workflow validation core logic', () => {
     assert.equal(result.shouldPromoteCandidate, false);
     assert.equal(result.summary, 'The candidate is missing evidence.');
   });
+
+  it('allows self-check-only validation when agent validation is disabled', () => {
+    const passedSelfCheck = phase({
+      outcome: 'pass',
+      summary: 'Self-check passed.',
+      findings: [],
+    });
+    const passedResult = resolveValidationGateResult(passedSelfCheck, undefined, {
+      requireAgentValidation: false,
+    });
+
+    assert.equal(passedResult.attemptStatus, 'passed');
+    assert.equal(passedResult.stepStatus, 'completed');
+    assert.equal(passedResult.validationStatus, 'passed');
+    assert.equal(passedResult.shouldPromoteCandidate, true);
+
+    const failedSelfCheck = phase({
+      outcome: 'needs_revision',
+      summary: 'Self-check found missing scope.',
+      findings: [],
+    });
+    const failedResult = resolveValidationGateResult(failedSelfCheck, undefined, {
+      requireAgentValidation: false,
+    });
+
+    assert.equal(failedResult.attemptStatus, 'failed');
+    assert.equal(failedResult.stepStatus, 'validation_failed');
+    assert.equal(failedResult.validationStatus, 'failed');
+    assert.equal(failedResult.shouldPromoteCandidate, false);
+  });
 });

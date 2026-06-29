@@ -22,16 +22,46 @@ interface PlatformAdminRow extends QueryResultRow {
   revoked_at: Date | string | null;
 }
 
+interface PlatformUserRow extends QueryResultRow {
+  id: string;
+  sso_id: string;
+  username: string;
+  display_name: string | null;
+  email: string | null;
+  department: string | null;
+  department_id: string | null;
+  title: string | null;
+  mobile: string | null;
+  is_active: boolean;
+  is_admin: boolean;
+  created_at: Date | string | null;
+  updated_at: Date | string | null;
+}
+
 export interface ConfiguredSuperAdmins {
   emails: string[];
   userIds: string[];
 }
+
+export const builtInSuperAdminPrincipal = {
+  userId: 'superadmin',
+  username: 'superadmin',
+  email: 'superadmin@battleflow.local',
+  displayName: 'Built-in Super Admin',
+} as const;
+
+export const defaultSuperAdminEmails = ['94399@sangfor.com', builtInSuperAdminPrincipal.email] as const;
+export const defaultSuperAdminUserIds = ['94399', builtInSuperAdminPrincipal.userId] as const;
 
 function splitEnvList(value: string | undefined): string[] {
   return [...new Set((value ?? '')
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean))];
+}
+
+function uniqueList(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
 }
 
 function toIso(value: Date | string | null): string | null {
@@ -43,8 +73,14 @@ export function parseConfiguredSuperAdmins(
   env: Partial<Record<string, string | undefined>> = process.env,
 ): ConfiguredSuperAdmins {
   return {
-    emails: [...new Set(splitEnvList(env.BATTLEFLOW_SUPER_ADMIN_EMAILS).map((email) => email.toLowerCase()))],
-    userIds: splitEnvList(env.BATTLEFLOW_SUPER_ADMIN_USER_IDS),
+    emails: uniqueList([
+      ...defaultSuperAdminEmails,
+      ...splitEnvList(env.BATTLEFLOW_SUPER_ADMIN_EMAILS),
+    ].map((email) => email.toLowerCase())),
+    userIds: uniqueList([
+      ...defaultSuperAdminUserIds,
+      ...splitEnvList(env.BATTLEFLOW_SUPER_ADMIN_USER_IDS),
+    ]),
   };
 }
 
@@ -56,6 +92,26 @@ export function userMatchesConfiguredSuperAdmin(user: Pick<AuthUser, 'id' | 'ema
     matchedByEmail: config.emails.includes(user.email.toLowerCase()),
     matchedByUserId: config.userIds.includes(user.id),
   };
+}
+
+export function isConfiguredSuperAdminPrincipal(input: {
+  email?: string | null;
+  userId?: string | null;
+  username?: string | null;
+  ssoId?: string | null;
+}): boolean {
+  const config = parseConfiguredSuperAdmins();
+  const email = input.email?.trim().toLowerCase();
+  const identifiers = [
+    input.userId,
+    input.username,
+    input.ssoId,
+  ].map((value) => value?.trim()).filter((value): value is string => Boolean(value));
+
+  return Boolean(
+    (email && config.emails.includes(email))
+    || identifiers.some((identifier) => config.userIds.includes(identifier)),
+  );
 }
 
 export function canRevokeSuperAdmin(input: {
@@ -76,6 +132,24 @@ function mapPlatformAdmin(row: PlatformAdminRow) {
     grantedAt: toIso(row.granted_at),
     revokedBy: row.revoked_by,
     revokedAt: toIso(row.revoked_at),
+  };
+}
+
+function mapPlatformUser(row: PlatformUserRow) {
+  return {
+    id: row.id,
+    ssoId: row.sso_id,
+    username: row.username,
+    displayName: row.display_name,
+    email: row.email,
+    department: row.department,
+    departmentId: row.department_id,
+    title: row.title,
+    mobile: row.mobile,
+    isActive: row.is_active,
+    isAdmin: row.is_admin,
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
   };
 }
 
@@ -190,6 +264,95 @@ export async function listSuperAdmins() {
   );
 
   return result.rows.map(mapPlatformAdmin);
+}
+
+export async function listPlatformUsers() {
+  const result = await queryPostgres<PlatformUserRow>(
+    `
+      SELECT
+        id,
+        sso_id,
+        username,
+        display_name,
+        email,
+        department,
+        department_id,
+        title,
+        mobile,
+        is_active,
+        is_admin,
+        created_at,
+        updated_at
+      FROM battleflow_users
+      ORDER BY updated_at DESC NULLS LAST,
+               created_at DESC NULLS LAST,
+               display_name ASC NULLS LAST,
+               email ASC NULLS LAST
+    `,
+  );
+
+  return result.rows.map(mapPlatformUser);
+}
+
+export async function updatePlatformUserAdmin(input: {
+  actorUserId: string | null;
+  targetUserId: string;
+  isAdmin: boolean;
+}) {
+  const targetUserId = input.targetUserId.trim();
+  if (!targetUserId) {
+    throw new SuperAdminManagementError('Target user ID is required');
+  }
+
+  const client = await getPostgresPool().connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query<PlatformUserRow>(
+      `
+        UPDATE battleflow_users
+        SET is_admin = $2, updated_at = now()
+        WHERE id = $1
+        RETURNING
+          id,
+          sso_id,
+          username,
+          display_name,
+          email,
+          department,
+          department_id,
+          title,
+          mobile,
+          is_active,
+          is_admin,
+          created_at,
+          updated_at
+      `,
+      [targetUserId, input.isAdmin],
+    );
+    const user = result.rows[0];
+    if (!user) {
+      throw new SuperAdminManagementError('Target user not found', 404);
+    }
+
+    await writePlatformAudit({
+      actorUserId: input.actorUserId,
+      action: input.isAdmin ? 'platform.sso_user_admin.grant' : 'platform.sso_user_admin.revoke',
+      targetUserId,
+      metadata: {
+        targetEmail: user.email,
+        targetUsername: user.username,
+        targetSsoId: user.sso_id,
+      },
+    }, client);
+
+    await client.query('COMMIT');
+    return mapPlatformUser(user);
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function grantSuperAdmin(input: {

@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -294,6 +295,7 @@ interface Workflow {
   name: string;
   description: string;
   status: 'draft' | 'in_progress' | 'completed';
+  agentValidationEnabled?: boolean;
   steps: WorkflowStep[];
   contextFiles?: UploadedContextFile[];
   reviewedOutputFiles?: ReviewedOutputFile[];
@@ -359,9 +361,9 @@ interface AssistantQuickReplyQuestion {
 const builtInWorkflowTemplates: WorkflowTemplate[] = [
   {
     id: 'ai-native-product-planning-e2e',
-    name: 'AI Native 产品规划端到端验证',
+    name: 'BattleFlow标准化工作流',
     description: '按产品规划输入、并行分析、用户旅程、TR1、Demo、TR2 并行产物的链路进行端到端验证。',
-    defaultWorkflowName: 'AI Native 产品规划端到端验证',
+    defaultWorkflowName: 'BattleFlow标准化工作流',
     defaultWorkflowDescription: '基于内置产品规划 Skill 模板，完成输入、分析、旅程、TR1、Demo 与 TR2 产物生成。',
     steps: [
       {
@@ -682,10 +684,9 @@ function AssistantQuickReplyPanel({
   return (
     <div className="w-full min-w-0 rounded-lg border border-primary/25 bg-primary/5 p-3 text-sm shadow-sm">
       <div className="flex min-w-0 items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-xs font-semibold text-primary">快速确认</p>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">选择后直接发送，无需手动组织回复。</p>
-        </div>
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-primary">快速确认</p>
+          </div>
         <Button
           type="button"
           size="sm"
@@ -849,55 +850,6 @@ function getStepStatusLabel(status: WorkflowStepStatus) {
     default:
       return '未开始';
   }
-}
-
-function getValidationAttemptStatusLabel(status?: WorkflowStepValidationAttempt['status']) {
-  switch (status) {
-    case 'passed':
-      return '已通过';
-    case 'failed':
-      return '未通过';
-    case 'error':
-      return '运行错误';
-    case 'running':
-      return '运行中';
-    default:
-      return '未开始';
-  }
-}
-
-function getValidationAttemptTone(status?: WorkflowStepValidationAttempt['status']) {
-  if (status === 'passed') return 'success';
-  if (status === 'failed' || status === 'error') return 'danger';
-  if (status === 'running') return 'brand';
-  return 'neutral';
-}
-
-function getValidationOutcomeLabel(outcome?: WorkflowValidationOutcome) {
-  switch (outcome) {
-    case 'pass':
-      return '通过';
-    case 'needs_revision':
-      return '需要修订';
-    case 'blocked':
-      return '阻塞';
-    case 'error':
-      return '错误';
-    default:
-      return '未运行';
-  }
-}
-
-function getFindingSeverityLabel(severity: WorkflowStepValidationFinding['severity']) {
-  if (severity === 'blocking') return '阻塞';
-  if (severity === 'warning') return '警告';
-  return '建议';
-}
-
-function getFindingSeverityTone(severity: WorkflowStepValidationFinding['severity']) {
-  if (severity === 'blocking') return 'danger';
-  if (severity === 'warning') return 'warning';
-  return 'neutral';
 }
 
 function normalizeWorkflowExecutionPlan(workflow: Workflow, updatedAt = new Date().toISOString()): Workflow {
@@ -1294,7 +1246,7 @@ export default function WorkflowsPage() {
   const [reviewComments, setReviewComments] = useState<Record<string, string>>({});
   const [supplementalContextOpen, setSupplementalContextOpen] = useState(false);
   const [supplementalContextTab, setSupplementalContextTab] = useState<'knowledge' | 'materials' | 'files'>('knowledge');
-  const [rightPanelTab, setRightPanelTab] = useState<'outputs' | 'gate' | 'review' | 'archive'>('outputs');
+  const [rightPanelTab, setRightPanelTab] = useState<'outputs' | 'review' | 'archive'>('outputs');
   const [expandedOutputIds, setExpandedOutputIds] = useState<Record<string, boolean>>({});
   const [archivedReviewStepIds, setArchivedReviewStepIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1387,14 +1339,7 @@ export default function WorkflowsPage() {
     if (nextStep?.id) {
       setStepChatPersistenceStatus(nextStep.id, hasConfirmableAssistantMessage(nextStepMessages) ? 'saved' : 'idle');
     }
-    const priorSteps = nextStep ? getPriorWorkflowSteps(workflow, nextStep) : [];
-    setRightPanelTab(
-      nextStep?.status === 'validation_failed'
-        ? 'gate'
-        : nextStep?.output || priorSteps.some((step) => step.output)
-        ? 'outputs'
-        : 'outputs',
-    );
+    setRightPanelTab('outputs');
   };
 
   const persistWorkflow = useCallback(async (workflow: Workflow) => {
@@ -1446,6 +1391,17 @@ export default function WorkflowsPage() {
     setActiveWorkflow((prev) => (prev?.id === workflowId ? updatedWorkflow : prev));
     void persistWorkflow(updatedWorkflow);
   }, [activeWorkflow, persistWorkflow, workflows]);
+
+  const handleAgentValidationEnabledChange = useCallback((checked: boolean) => {
+    if (!activeWorkflow) return;
+
+    const updatedAt = new Date().toISOString();
+    updateActiveWorkflow((workflow) => ({
+      ...workflow,
+      agentValidationEnabled: checked,
+      updated_at: updatedAt,
+    }));
+  }, [activeWorkflow, updateActiveWorkflow]);
 
   const saveStepChatMessages = useCallback((
     workflow: Workflow,
@@ -1605,9 +1561,14 @@ export default function WorkflowsPage() {
     }
   }, []);
 
-  const startValidationStage = useCallback((stepId: string) => {
+  const startValidationStage = useCallback((
+    stepId: string,
+    options: { agentValidationEnabled?: boolean } = {},
+  ) => {
     clearValidationStage(stepId);
     setValidationStageByStepId((prev) => ({ ...prev, [stepId]: 'self_checking' }));
+    if (!options.agentValidationEnabled) return;
+
     validationStageTimersRef.current[stepId] = setTimeout(() => {
       setValidationStageByStepId((prev) => (
         prev[stepId] === 'self_checking'
@@ -2349,8 +2310,9 @@ export default function WorkflowsPage() {
 
     try {
       const stepOutputDocument = normalizeSkillOutputDocument(activeWorkflow, currentStep, lastAssistantMsg.content);
+      const agentValidationEnabled = Boolean(activeWorkflow.agentValidationEnabled);
       setErrorMessage('');
-      startValidationStage(currentStep.id);
+      startValidationStage(currentStep.id, { agentValidationEnabled });
       const response = await fetch('/api/workflows/validation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2359,6 +2321,7 @@ export default function WorkflowsPage() {
           workflowId: activeWorkflow.id,
           stepId: currentStep.id,
           candidateOutput: stepOutputDocument,
+          agentValidationEnabled,
         }),
       });
       const data = await response.json();
@@ -2393,7 +2356,7 @@ export default function WorkflowsPage() {
       syncWorkflowSupportingState(savedWorkflow, currentStepIndex);
       setChatMessages(getStepChatMessages(savedWorkflow, currentStep.id));
       setChatInput(chatInputByStepId[currentStep.id] || '');
-      setRightPanelTab('gate');
+      setRightPanelTab('outputs');
       const failedStep = savedWorkflow.steps.find((step) => step.id === currentStep.id);
       const summary = failedStep?.validationSummary || data.attempt?.agentValidation?.summary || data.attempt?.selfCheck?.summary || '';
       const message = summary ? `验证未通过：${summary}` : '验证未通过，请修订后重新验证。';
@@ -3123,7 +3086,7 @@ export default function WorkflowsPage() {
 
         {!openedWorkspace ? (
           <div className="min-h-0 flex-1 overflow-auto px-4 py-3 md:px-5 md:py-4">
-            <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-3">
+            <div className="flex w-full flex-col gap-3">
               <div className="flex justify-end border-b border-border/40 pb-2">
                 <StatusBadge tone="neutral" className="w-fit text-xs">
                   共 {workspaces.length} 个空间
@@ -3242,7 +3205,7 @@ export default function WorkflowsPage() {
           </div>
         ) : (
           <div className="min-h-0 flex-1 overflow-auto px-4 py-3 md:px-5 md:py-4">
-            <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-3">
+            <div className="flex w-full flex-col gap-3">
               <div className="flex justify-end border-b border-border/40 pb-2">
                 <StatusBadge tone="brand" className="w-fit text-xs">
                   {workspaceWorkflows.length} 个工作流
@@ -3910,27 +3873,6 @@ export default function WorkflowsPage() {
   const currentValidationAttempt = currentStep?.validationAttemptId
     ? currentValidationAttempts.find((attempt) => attempt.id === currentStep.validationAttemptId) || currentValidationAttempts[0]
     : currentValidationAttempts[0];
-  const currentCandidateSnapshot = currentValidationAttempt?.artifactSnapshotId
-    ? (activeWorkflow.stepSnapshots || []).find((snapshot) => snapshot.id === currentValidationAttempt.artifactSnapshotId)
-    : currentStep?.candidateSnapshotId
-      ? (activeWorkflow.stepSnapshots || []).find((snapshot) => snapshot.id === currentStep.candidateSnapshotId)
-      : undefined;
-  const currentValidationCandidate = currentStep?.candidateOutput || currentCandidateSnapshot?.output || '';
-  const currentSkillCriteria = [
-    ...(currentSkill?.acceptanceCriteria || []),
-    ...(currentSkill?.requiredSections || []).map((section) => `产物必须包含「${section}」章节。`),
-    ...(currentSkill?.evidenceRules || []),
-    ...(currentSkill?.failureConditions || []).map((condition) => `若出现以下情况必须判定为未通过：${condition}`),
-    ...(currentSkill?.checklist || []),
-  ];
-  const currentValidationCriteria = currentValidationAttempt?.criteria?.length
-    ? currentValidationAttempt.criteria
-    : currentSkillCriteria;
-  const currentValidationFindings = [
-    ...(currentValidationAttempt?.selfCheck?.findings || []),
-    ...(currentValidationAttempt?.agentValidation?.findings || []),
-  ];
-  const currentBlockingFindings = currentValidationFindings.filter((finding) => finding.severity === 'blocking');
   const currentGateBlocked = Boolean(
     currentStep?.status === 'validation_failed'
       || currentValidationAttempt?.status === 'failed'
@@ -3968,62 +3910,12 @@ export default function WorkflowsPage() {
       && !currentStepValidationStage
       && currentStepChatPersistenceStatus === 'saved',
   );
-  const currentStepConfirmHint = (() => {
-    if (currentStepChatPersistenceStatus === 'saving') return '正在保存对话记录，保存完成后才能确认。';
-    if (currentStepChatPersistenceStatus === 'failed') return '对话记录保存失败，请重新发送或刷新后再试。';
-    if (isStreaming) return 'AI 正在生成，完成后会自动保存对话记录。';
-    if (currentStepValidationStage === 'self_checking') return 'Skill 正在基于验收标准自检候选产物。';
-    if (currentStepValidationStage === 'agent_validating') return '独立 Agent 正在校验候选产物。';
-    if (currentStepIsConfirming) return '正在运行验证门禁。';
-    if (currentStep?.status === 'validation_failed') {
-      return currentStep.validationSummary
-        ? `上次验证未通过：${currentStep.validationSummary}`
-        : '上次验证未通过，修订后可重新验证。';
-    }
-    return 'AI 已产出并保存，可运行验证门禁。';
-  })();
   const currentStepConfirmLabel = (() => {
     if (currentStepValidationStage === 'self_checking' || currentStepEffectiveStatus === 'self_checking') return 'Skill 自检中';
     if (currentStepValidationStage === 'agent_validating' || currentStepEffectiveStatus === 'agent_validating') return 'Agent 校验中';
     if (currentStep?.status === 'validation_failed') return '重新验证';
     return '运行验证';
   })();
-  const renderValidationPhase = (label: string, phase?: WorkflowStepValidationPhase) => (
-    <div className="rounded-lg border border-border/50 bg-background/60 p-3">
-      <div className="flex min-w-0 items-center justify-between gap-2">
-        <p className="truncate text-xs font-medium">{label}</p>
-        <StatusBadge
-          tone={phase?.outcome === 'pass' ? 'success' : phase ? 'warning' : 'neutral'}
-          className="shrink-0 text-[11px]"
-        >
-          {getValidationOutcomeLabel(phase?.outcome)}
-        </StatusBadge>
-      </div>
-      {phase?.summary ? (
-        <p className="mt-2 text-xs leading-5 text-muted-foreground">{phase.summary}</p>
-      ) : (
-        <p className="mt-2 text-xs leading-5 text-muted-foreground">暂无结果。</p>
-      )}
-      {phase?.findings && phase.findings.length > 0 && (
-        <div className="mt-3 flex flex-col gap-2">
-          {phase.findings.slice(0, 4).map((finding) => (
-            <div key={finding.id} className="rounded-md border border-border/40 bg-muted/25 p-2">
-              <div className="flex min-w-0 items-center gap-2">
-                <StatusBadge tone={getFindingSeverityTone(finding.severity)} className="shrink-0 text-[10px]">
-                  {getFindingSeverityLabel(finding.severity)}
-                </StatusBadge>
-                <p className="min-w-0 truncate text-[11px] text-muted-foreground">{finding.criterion || '未指定验收标准'}</p>
-              </div>
-              <p className="mt-1 text-xs leading-5">{finding.issue}</p>
-              {finding.recommendation && (
-                <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{finding.recommendation}</p>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
   const updateCurrentContextSelection = (
     nextSelection: Partial<WorkflowContextSelection>,
     localStateUpdate?: () => void,
@@ -4224,7 +4116,18 @@ export default function WorkflowsPage() {
             ← 返回列表
           </Button>
           <h2 className="mt-2 truncate font-semibold">{activeWorkflow.name}</h2>
-          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{activeWorkflow.description}</p>
+          <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <ShieldCheck className="h-4 w-4 shrink-0 text-primary" />
+              <span className="truncate text-xs font-medium">Agent 验证</span>
+            </div>
+            <Switch
+              checked={Boolean(activeWorkflow.agentValidationEnabled)}
+              disabled={Boolean(confirmingStepId)}
+              aria-label="开启 Agent 验证"
+              onCheckedChange={handleAgentValidationEnabledChange}
+            />
+          </div>
         </div>
 
         <ScrollArea className="min-h-0 flex-1">
@@ -4296,16 +4199,6 @@ export default function WorkflowsPage() {
                                 <Badge variant="secondary" className="ml-auto text-[10px]">并行</Badge>
                               )}
                             </div>
-                            {step.status === 'validation_failed' && step.validationSummary && (
-                              <p className="mt-1 ml-7 line-clamp-2 text-xs text-destructive/80">
-                                验证未通过 — {compactMarkdownPreview(step.validationSummary, 64)}
-                              </p>
-                            )}
-                            {showNodeConfirm && (
-                              <p className="mt-2 ml-7 text-[11px] leading-4 text-muted-foreground">
-                                {currentStepConfirmHint}
-                              </p>
-                            )}
                           </button>
                           {showNodeConfirm && (
                             <div className="border-t border-primary/20 px-3 pb-3 pt-2">
@@ -4432,32 +4325,13 @@ export default function WorkflowsPage() {
               <div className="min-w-0">
                 <div className="flex min-w-0 items-center gap-2">
                   <CircleStop className="h-4 w-4 shrink-0 text-destructive" />
-                  <p className="truncate text-sm font-medium text-destructive">验证门禁阻塞</p>
+                  <p className="truncate text-sm font-medium text-destructive">验证未通过</p>
                 </div>
-                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
                   {currentStep?.validationSummary || currentValidationAttempt?.agentValidation?.summary || currentValidationAttempt?.selfCheck?.summary || '候选产物未通过验收标准，请继续对话修订。'}
                 </p>
-                {currentBlockingFindings.length > 0 && (
-                  <div className="mt-2 flex flex-col gap-1.5">
-                    {currentBlockingFindings.slice(0, 2).map((finding) => (
-                      <p key={finding.id} className="line-clamp-2 text-[11px] leading-4 text-muted-foreground">
-                        {finding.criterion ? `${finding.criterion}：` : ''}{finding.issue}
-                      </p>
-                    ))}
-                  </div>
-                )}
               </div>
               <div className="flex shrink-0 gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8 gap-1.5 text-xs"
-                  onClick={() => setRightPanelTab('gate')}
-                >
-                  <ShieldCheck className="h-3.5 w-3.5" />
-                  查看门禁
-                </Button>
                 <Button
                   type="button"
                   size="sm"
@@ -5106,133 +4980,12 @@ export default function WorkflowsPage() {
             <p className="mt-1 truncate text-xs text-muted-foreground">
               {currentStep?.name || '未选择步骤'}
             </p>
-            <TabsList className="mt-3 grid h-auto w-full grid-cols-4 gap-1">
+            <TabsList className="mt-3 grid h-auto w-full grid-cols-3 gap-1">
               <TabsTrigger value="outputs" className="text-xs">产出</TabsTrigger>
-              <TabsTrigger value="gate" className="text-xs">门禁</TabsTrigger>
               <TabsTrigger value="review" className="text-xs">审核</TabsTrigger>
               <TabsTrigger value="archive" className="text-xs">沉淀</TabsTrigger>
             </TabsList>
           </div>
-
-          <TabsContent value="gate" className="min-h-0 flex-1 overflow-hidden">
-            <div className="flex h-full min-w-0 flex-col gap-3 overflow-y-auto p-4">
-              {currentStep ? (
-                <>
-                  <div className="rounded-lg border border-border/50 bg-background/60 p-3">
-                    <div className="flex min-w-0 items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-xs font-medium">当前门禁状态</p>
-                        <p className="mt-1 truncate text-[11px] text-muted-foreground">
-                          {currentValidationAttempt?.updated_at ? `最近验证：${formatSnapshotTime(currentValidationAttempt.updated_at)}` : '尚未运行验证'}
-                        </p>
-                      </div>
-                      <StatusBadge tone={getValidationAttemptTone(currentValidationAttempt?.status)} className="shrink-0 text-[11px]">
-                        {getValidationAttemptStatusLabel(currentValidationAttempt?.status)}
-                      </StatusBadge>
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <StatusBadge tone={currentStep.status === 'validation_failed' ? 'danger' : currentStep.status === 'completed' ? 'success' : 'brand'} className="text-[11px]">
-                        {getStepStatusLabel((currentStepEffectiveStatus || currentStep.status) as WorkflowStepStatus)}
-                      </StatusBadge>
-                      <Badge variant="outline" className="text-[11px]">
-                        Attempts {currentValidationAttempts.length}
-                      </Badge>
-                    </div>
-                    {(currentStep.validationSummary || currentValidationAttempt?.agentValidation?.summary || currentValidationAttempt?.selfCheck?.summary) && (
-                      <p className="mt-3 text-xs leading-5 text-muted-foreground">
-                        {currentStep.validationSummary || currentValidationAttempt?.agentValidation?.summary || currentValidationAttempt?.selfCheck?.summary}
-                      </p>
-                    )}
-                    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8 gap-1.5 text-xs"
-                        disabled={!currentValidationCandidate}
-                        onClick={() => currentValidationCandidate && downloadMarkdownDocument(`${currentStep.name}-验证候选产物`, currentValidationCandidate)}
-                      >
-                        <Download className="h-3.5 w-3.5" />
-                        下载候选
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        className="h-8 gap-1.5 text-xs"
-                        disabled={!currentStepCanConfirm}
-                        onClick={() => void handleConfirmStep()}
-                      >
-                        {currentStepIsConfirming || currentStepValidationStage ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <RotateCcw className="h-3.5 w-3.5" />
-                        )}
-                        {currentStep.status === 'validation_failed' ? '重新验证' : '运行验证'}
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="rounded-lg border border-border/50 bg-background/60 p-3">
-                    <div className="flex min-w-0 items-center justify-between gap-2">
-                      <p className="text-xs font-medium">验收标准</p>
-                      <Badge variant="outline" className="shrink-0 text-[11px]">
-                        {currentValidationCriteria.length}
-                      </Badge>
-                    </div>
-                    {currentValidationCriteria.length > 0 ? (
-                      <div className="mt-3 flex flex-col gap-2">
-                        {currentValidationCriteria.map((criterion, index) => (
-                          <div key={`${criterion}-${index}`} className="flex gap-2 rounded-md bg-muted/25 px-2.5 py-2 text-[11px] leading-5">
-                            <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-medium text-primary">
-                              {index + 1}
-                            </span>
-                            <span className="min-w-0 break-words text-muted-foreground">{criterion}</span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="mt-3 rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
-                        当前 Skill 暂无显式验收标准；系统会使用通用 BattleFlow 产物标准。
-                      </p>
-                    )}
-                  </div>
-
-                  {renderValidationPhase('Skill 自检结果', currentValidationAttempt?.selfCheck)}
-                  {renderValidationPhase('Agent 校验结果', currentValidationAttempt?.agentValidation)}
-
-                  <div className="rounded-lg border border-border/50 bg-background/60 p-3">
-                    <div className="flex min-w-0 items-center justify-between gap-2">
-                      <p className="text-xs font-medium">阻塞项</p>
-                      <StatusBadge tone={currentBlockingFindings.length > 0 ? 'danger' : 'success'} className="shrink-0 text-[11px]">
-                        {currentBlockingFindings.length > 0 ? `${currentBlockingFindings.length} 项` : '无阻塞'}
-                      </StatusBadge>
-                    </div>
-                    {currentBlockingFindings.length > 0 ? (
-                      <div className="mt-3 flex flex-col gap-2">
-                        {currentBlockingFindings.map((finding) => (
-                          <div key={finding.id} className="rounded-md border border-destructive/20 bg-destructive/5 p-2">
-                            <p className="text-[11px] font-medium text-destructive">{finding.criterion || '未指定验收标准'}</p>
-                            <p className="mt-1 text-xs leading-5">{finding.issue}</p>
-                            {finding.recommendation && (
-                              <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{finding.recommendation}</p>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="mt-3 rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
-                        暂无阻塞项。若验证尚未运行，请先在当前步骤生成候选产物并运行验证。
-                      </p>
-                    )}
-                  </div>
-                </>
-              ) : (
-                <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
-                  选择一个步骤后查看验证门禁。
-                </p>
-              )}
-            </div>
-          </TabsContent>
 
           <TabsContent value="outputs" className="min-h-0 flex-1 overflow-hidden">
             <div className="flex h-full min-w-0 flex-col gap-4 overflow-y-auto p-4">

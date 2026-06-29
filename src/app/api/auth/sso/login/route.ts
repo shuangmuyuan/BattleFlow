@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { safeRedirectPath } from '@/lib/auth/redirect';
 import { createSsoState } from '@/lib/sso-auth';
 
 export const runtime = 'nodejs';
@@ -28,7 +29,8 @@ export async function GET(request: Request) {
     const baseUrl = process.env.SSO_BASE_URL?.trim() || 'https://idtrust.atrust.sangfor.com';
     const clientId = getRequiredEnv('SSO_CLIENT_ID');
     const redirectUri = getRedirectUri(request);
-    const state = createSsoState(redirectUri);
+    const nextPath = safeRedirectPath(new URL(request.url).searchParams.get('next'));
+    const state = createSsoState(redirectUri, nextPath);
     const authorizeUrl = new URL('/oauth2/authorize', baseUrl);
     authorizeUrl.searchParams.set('response_type', 'code');
     authorizeUrl.searchParams.set('client_id', clientId);

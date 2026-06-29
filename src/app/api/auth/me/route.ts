@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { fetchOrganizationById, fetchOrganizationMemberships } from '@/lib/auth/fetch';
 import { requireUser } from '@/lib/auth/server';
 import { ACTIVE_ORGANIZATION_COOKIE_NAME } from '@/lib/auth/types';
-import { battleflowAuthCookieName, getUserById, verifySessionToken } from '@/lib/sso-auth';
+import { battleflowAuthCookieName, getUserBySessionToken } from '@/lib/sso-auth';
 import { authErrorResponse } from '../_shared';
 
 export const runtime = 'nodejs';
@@ -35,6 +35,7 @@ export async function GET(request: NextRequest) {
         manageDepartments: canManageOrganization,
         manageTeams: canManageOrganization,
         managePlatformAdmins: context.isSuperAdmin,
+        viewPlatformUsers: context.isSuperAdmin,
       },
       organizations: memberships.map((membership) => ({
         id: membership.organization.id,
@@ -50,22 +51,17 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     const token = request.cookies.get(battleflowAuthCookieName)?.value || '';
-    const payload = token ? verifySessionToken(token) : null;
-
-    if (!payload?.sub) {
-      return authErrorResponse(error);
-    }
-
-    const ssoUser = await getUserById(payload.sub);
+    const ssoUser = await getUserBySessionToken(token);
     if (!ssoUser || !ssoUser.is_active) {
       return authErrorResponse(error);
     }
 
+    const isSuperAdmin = Boolean(ssoUser.is_admin);
     const activeOrganization = {
       id: 'default',
       name: 'Default Organization',
       slug: 'default',
-      role: ssoUser.is_admin ? 'org_owner' : 'org_member',
+      role: 'org_member',
       status: 'active',
     };
 
@@ -76,14 +72,15 @@ export async function GET(request: NextRequest) {
         displayName: ssoUser.display_name ?? ssoUser.username,
         avatarUrl: null,
       },
-      isSuperAdmin: Boolean(ssoUser.is_admin),
+      isSuperAdmin,
       activeOrganizationId: activeOrganization.id,
       capabilities: {
-        manageOrganization: Boolean(ssoUser.is_admin),
-        manageMembers: Boolean(ssoUser.is_admin),
-        manageDepartments: Boolean(ssoUser.is_admin),
-        manageTeams: Boolean(ssoUser.is_admin),
-        managePlatformAdmins: Boolean(ssoUser.is_admin),
+        manageOrganization: false,
+        manageMembers: false,
+        manageDepartments: false,
+        manageTeams: false,
+        managePlatformAdmins: false,
+        viewPlatformUsers: isSuperAdmin,
       },
       organizations: [activeOrganization],
     }, {

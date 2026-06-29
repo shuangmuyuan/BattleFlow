@@ -19,6 +19,7 @@ function workflow(overrides: Partial<WorkflowRecord> = {}): WorkflowRecord {
     name: 'End-to-end validation',
     description: '',
     status: 'in_progress',
+    agentValidationEnabled: false,
     steps: [],
     contextFiles: [],
     reviewedOutputFiles: [],

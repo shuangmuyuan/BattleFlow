@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { safeRedirectPath } from '@/lib/auth/redirect';
 import {
   battleflowAuthCookieName,
   createSessionToken,
@@ -95,6 +96,7 @@ export async function POST(request: NextRequest) {
       token_type: 'bearer',
       expires_in: getTokenMaxAgeSeconds(),
       user: publicUser(user),
+      redirectTo: safeRedirectPath(statePayload.nextPath),
     });
     response.cookies.set({
       name: battleflowAuthCookieName,

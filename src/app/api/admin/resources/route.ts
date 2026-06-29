@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { requireOrganizationContext, requirePermission } from '@/lib/auth/server';
+import { ForbiddenError } from '@/lib/auth/types';
 import { queryPostgres } from '@/storage/database/postgres-client';
 import { managementErrorResponse, noStoreJson } from '../../organizations/_shared';
 
@@ -24,6 +25,9 @@ export async function GET(request: NextRequest) {
     const context = await requireOrganizationContext(request, {
       organizationId: requestedOrganizationId(request),
     });
+    if (!context.isSuperAdmin) {
+      throw new ForbiddenError();
+    }
     requirePermission(context, 'organization.members.manage', {
       organizationId: context.activeOrganization.id,
     });

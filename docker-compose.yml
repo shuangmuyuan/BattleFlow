@@ -5,12 +5,12 @@ services:
     container_name: battleflow
     restart: unless-stopped
     environment:
-      COZE_PROJECT_ENV: PROD
+      BATTLEFLOW_PROJECT_ENV: PROD
       NODE_ENV: production
       HOSTNAME: 0.0.0.0
       DEPLOY_RUN_PORT: "5001"
       PORT: "5001"
-      COZE_WORKSPACE_PATH: /app
+      BATTLEFLOW_WORKSPACE_PATH: /app
       SKILL_REGISTRY_DIR: /app/data/skill-registry
       WORKFLOW_REGISTRY_DIR: /app/data/workflows
       BATTLEFLOW_DATABASE_URL: "postgresql://battleflow:${BATTLEFLOW_POSTGRES_PASSWORD:?BATTLEFLOW_POSTGRES_PASSWORD is required}@postgres:5432/battleflow"

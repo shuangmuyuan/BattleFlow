@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
   const email = readString(body.email);
   const password = readString(body.password);
   if (!email || !password) {
-    return NextResponse.json({ error: 'Email and password are required' }, { status: 400 });
+    return NextResponse.json({ error: 'Account and password are required' }, { status: 400 });
   }
 
   try {

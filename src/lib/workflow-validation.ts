@@ -64,10 +64,14 @@ export type WorkflowValidationParseResult =
 
 export interface WorkflowValidationGateResult {
   attemptStatus: WorkflowStepValidationAttemptStatus;
-  stepStatus: Extract<WorkflowStepStatus, 'agent_validating' | 'validation_failed' | 'completed'>;
+  stepStatus: Extract<WorkflowStepStatus, 'self_checking' | 'agent_validating' | 'validation_failed' | 'completed'>;
   validationStatus: WorkflowStepValidationStatus;
   shouldPromoteCandidate: boolean;
   summary: string;
+}
+
+export interface WorkflowValidationGateOptions {
+  requireAgentValidation?: boolean;
 }
 
 const MAX_ARTIFACT_PROMPT_CHARS = 18_000;
@@ -474,6 +478,15 @@ export function aggregateValidationStatus(
   return 'failed';
 }
 
+function aggregateSelfCheckOnlyStatus(
+  selfCheck?: Pick<ParsedWorkflowValidationResult, 'outcome'>,
+): WorkflowStepValidationAttemptStatus {
+  if (!selfCheck) return 'running';
+  if (selfCheck.outcome === 'error') return 'error';
+  if (selfCheck.outcome === 'pass') return 'passed';
+  return 'failed';
+}
+
 function summarizeValidationPhase(phase?: Pick<WorkflowStepValidationPhaseRecord, 'summary' | 'findings'>) {
   if (!phase) return '';
   return phase.summary || phase.findings.find((finding) => finding.issue)?.issue || '';
@@ -489,14 +502,23 @@ function toStepValidationStatus(status: WorkflowStepValidationAttemptStatus): Wo
 export function resolveValidationGateResult(
   selfCheck?: WorkflowStepValidationPhaseRecord,
   agentValidation?: WorkflowStepValidationPhaseRecord,
+  options: WorkflowValidationGateOptions = {},
 ): WorkflowValidationGateResult {
-  const attemptStatus = aggregateValidationStatus(selfCheck, agentValidation);
-  const summary = summarizeValidationPhase(agentValidation) || summarizeValidationPhase(selfCheck);
+  const requireAgentValidation = options.requireAgentValidation ?? true;
+  const attemptStatus = requireAgentValidation
+    ? aggregateValidationStatus(selfCheck, agentValidation)
+    : aggregateSelfCheckOnlyStatus(selfCheck);
+  const summary = (requireAgentValidation ? summarizeValidationPhase(agentValidation) : '')
+    || summarizeValidationPhase(selfCheck);
   const shouldPromoteCandidate = attemptStatus === 'passed';
 
   return {
     attemptStatus,
-    stepStatus: shouldPromoteCandidate ? 'completed' : attemptStatus === 'running' ? 'agent_validating' : 'validation_failed',
+    stepStatus: shouldPromoteCandidate
+      ? 'completed'
+      : attemptStatus === 'running'
+        ? requireAgentValidation ? 'agent_validating' : 'self_checking'
+        : 'validation_failed',
     validationStatus: toStepValidationStatus(attemptStatus),
     shouldPromoteCandidate,
     summary,

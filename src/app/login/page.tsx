@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Eye, EyeOff, Swords } from 'lucide-react';
+import { Building2, Eye, EyeOff, Swords } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -23,6 +23,34 @@ function readInitialSearchParam(name: string): string {
     return '';
   }
   return new URLSearchParams(window.location.search).get(name) || '';
+}
+
+function normalizePostLoginPath(path: string): string {
+  if (!path) {
+    return '/dashboard';
+  }
+
+  if (
+    path === '/dashboard/workflows' ||
+    path.startsWith('/dashboard/workflows?') ||
+    path.startsWith('/dashboard/workflows/')
+  ) {
+    return '/dashboard';
+  }
+
+  if (path === '/onboarding' || path.startsWith('/dashboard')) {
+    return path;
+  }
+
+  return '/dashboard';
+}
+
+function buildSsoLoginHref(nextPath: string): string {
+  const params = new URLSearchParams({
+    redirect: '1',
+    next: nextPath,
+  });
+  return `/api/auth/sso/login?${params.toString()}`;
 }
 
 async function submitAuthRequest(endpoint: string, payload: Record<string, string>): Promise<AuthResponse> {
@@ -48,9 +76,10 @@ function authErrorMessage(error: unknown, fallback: string): string {
     case 'Authentication failed':
       return '认证失败，请稍后重试';
     case 'Email and password are required':
-      return '请输入邮箱和密码';
+    case 'Account and password are required':
+      return '请输入邮箱或用户名和密码';
     case 'Invalid email or password':
-      return '邮箱或密码不正确';
+      return '邮箱或用户名、密码不正确';
     case 'Password must be at least 8 characters':
       return '密码至少需要 8 个字符';
     case 'Organization name is required':
@@ -78,7 +107,7 @@ export default function LoginPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
-    setNextPath(readInitialSearchParam('next') || '/dashboard');
+    setNextPath(normalizePostLoginPath(readInitialSearchParam('next')));
   }, []);
 
   async function handleLogin(event: React.FormEvent<HTMLFormElement>) {
@@ -92,7 +121,7 @@ export default function LoginPage() {
         password,
         next: nextPath,
       });
-      router.replace(data.redirectTo || '/dashboard');
+      router.replace(normalizePostLoginPath(data.redirectTo || '/dashboard'));
       router.refresh();
     } catch (authError) {
       setError(authErrorMessage(authError, '认证失败，请稍后重试'));
@@ -125,7 +154,7 @@ export default function LoginPage() {
         organizationName,
         next: nextPath,
       });
-      router.replace(data.redirectTo || '/dashboard');
+      router.replace(normalizePostLoginPath(data.redirectTo || '/dashboard'));
       router.refresh();
     } catch (authError) {
       setError(authErrorMessage(authError, '注册失败，请稍后重试'));
@@ -135,14 +164,14 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-background p-4">
-      <div className="w-full max-w-md space-y-6">
-        <div className="flex flex-col items-center gap-4 text-center">
+    <main className="min-h-dvh overflow-y-auto bg-background px-4 py-4 md:px-6 [@media_(min-height:760px)]:flex [@media_(min-height:760px)]:items-center [@media_(min-height:760px)]:justify-center [@media_(min-height:760px)]:py-8">
+      <div className="mx-auto flex w-full max-w-md flex-col gap-4 [@media_(min-height:760px)]:gap-6">
+        <div className="flex flex-col items-center gap-3 text-center [@media_(min-height:760px)]:gap-4">
           <div
             aria-label={APP_NAME}
-            className="flex size-16 items-center justify-center rounded-xl bg-brand/15 text-brand"
+            className="flex size-12 items-center justify-center rounded-xl bg-brand/15 text-brand [@media_(min-height:760px)]:size-16"
           >
-            <Swords className="size-8" />
+            <Swords className="size-6 [@media_(min-height:760px)]:size-8" />
           </div>
           <div className="space-y-1">
             <h1 className="text-2xl font-semibold text-foreground">{APP_NAME}</h1>
@@ -151,13 +180,13 @@ export default function LoginPage() {
         </div>
 
         <Card className="border-border bg-card">
-          <CardHeader className="pb-4">
+          <CardHeader className="pb-3 [@media_(min-height:760px)]:pb-4">
             <CardTitle className="text-lg text-card-foreground">账号登录</CardTitle>
             <CardDescription className="text-muted-foreground">
               登录或创建你的工作区账号
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pb-4 [@media_(min-height:760px)]:pb-6">
             <Tabs value={mode} onValueChange={(value) => setMode(value as AuthMode)} className="w-full">
               <TabsList className="grid w-full grid-cols-2 bg-secondary">
                 <TabsTrigger
@@ -174,22 +203,22 @@ export default function LoginPage() {
                 </TabsTrigger>
               </TabsList>
 
-              <TabsContent value="login" className="mt-4">
-                <form onSubmit={handleLogin} className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="login-email" className="text-card-foreground">邮箱</Label>
+              <TabsContent value="login" className="mt-3 [@media_(min-height:760px)]:mt-4">
+                <form onSubmit={handleLogin} className="space-y-3 [@media_(min-height:760px)]:space-y-4">
+                  <div className="space-y-1.5 [@media_(min-height:760px)]:space-y-2">
+                    <Label htmlFor="login-email" className="text-card-foreground">邮箱或用户名</Label>
                     <Input
                       id="login-email"
-                      type="email"
-                      autoComplete="email"
-                      placeholder="you@example.com"
+                      type="text"
+                      autoComplete="username"
+                      placeholder="you@example.com / superadmin"
                       value={email}
                       onChange={(event) => setEmail(event.target.value)}
                       required
                       className="border-border bg-secondary text-card-foreground placeholder:text-muted-foreground"
                     />
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-1.5 [@media_(min-height:760px)]:space-y-2">
                     <Label htmlFor="login-password" className="text-card-foreground">密码</Label>
                     <div className="relative">
                       <Input
@@ -222,9 +251,9 @@ export default function LoginPage() {
                 </form>
               </TabsContent>
 
-              <TabsContent value="register" className="mt-4">
-                <form onSubmit={handleRegister} className="space-y-4">
-                  <div className="space-y-2">
+              <TabsContent value="register" className="mt-3 [@media_(min-height:760px)]:mt-4">
+                <form onSubmit={handleRegister} className="space-y-3 [@media_(min-height:760px)]:space-y-4">
+                  <div className="space-y-1.5 [@media_(min-height:760px)]:space-y-2">
                     <Label htmlFor="register-email" className="text-card-foreground">邮箱</Label>
                     <Input
                       id="register-email"
@@ -237,7 +266,7 @@ export default function LoginPage() {
                       className="border-border bg-secondary text-card-foreground placeholder:text-muted-foreground"
                     />
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-1.5 [@media_(min-height:760px)]:space-y-2">
                     <Label htmlFor="display-name" className="text-card-foreground">显示名称</Label>
                     <Input
                       id="display-name"
@@ -249,7 +278,7 @@ export default function LoginPage() {
                       className="border-border bg-secondary text-card-foreground placeholder:text-muted-foreground"
                     />
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-1.5 [@media_(min-height:760px)]:space-y-2">
                     <Label htmlFor="organization-name" className="text-card-foreground">组织名称</Label>
                     <Input
                       id="organization-name"
@@ -262,7 +291,7 @@ export default function LoginPage() {
                       className="border-border bg-secondary text-card-foreground placeholder:text-muted-foreground"
                     />
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-1.5 [@media_(min-height:760px)]:space-y-2">
                     <Label htmlFor="register-password" className="text-card-foreground">密码</Label>
                     <Input
                       id="register-password"
@@ -275,7 +304,7 @@ export default function LoginPage() {
                       className="border-border bg-secondary text-card-foreground placeholder:text-muted-foreground"
                     />
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-1.5 [@media_(min-height:760px)]:space-y-2">
                     <Label htmlFor="confirm-password" className="text-card-foreground">确认密码</Label>
                     <Input
                       id="confirm-password"
@@ -295,6 +324,23 @@ export default function LoginPage() {
                 </form>
               </TabsContent>
             </Tabs>
+
+            <div className="my-4 flex items-center gap-3">
+              <div className="h-px flex-1 bg-border" />
+              <span className="text-xs text-muted-foreground">或</span>
+              <div className="h-px flex-1 bg-border" />
+            </div>
+
+            <Button
+              asChild
+              variant="outline"
+              className="w-full border-border bg-secondary text-card-foreground hover:bg-secondary/80"
+            >
+              <a href={buildSsoLoginHref(nextPath)}>
+                <Building2 className="h-4 w-4" />
+                使用企业账户登录
+              </a>
+            </Button>
           </CardContent>
         </Card>
       </div>
