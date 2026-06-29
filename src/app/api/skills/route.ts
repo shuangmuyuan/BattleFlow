@@ -22,6 +22,7 @@ import {
   listSkills,
   rejectSkillReview,
   renderSkillMarkdown,
+  renderStandardSkillTemplateMarkdown,
   requestSkillReview,
   SkillImportValidationError,
   type SkillRecord,
@@ -130,7 +131,18 @@ export async function GET(request: NextRequest) {
     const scope = searchParams.get('scope') || undefined;
     const status = searchParams.get('status') || undefined;
     const downloadVersion = searchParams.get('downloadVersion') || undefined;
+    const template = searchParams.get('template') || undefined;
     const inline = searchParams.get('inline') === '1';
+
+    if (template === 'standard') {
+      return new NextResponse(renderStandardSkillTemplateMarkdown(), {
+        headers: {
+          'Content-Type': 'text/markdown; charset=utf-8',
+          'Content-Disposition': 'attachment; filename="battleflow-skill-template.md"',
+          'Cache-Control': 'no-store',
+        },
+      });
+    }
 
     if (id && downloadVersion !== undefined) {
       await requireSkillAccessBeforeAssetRead(context, id, 'skill.read');

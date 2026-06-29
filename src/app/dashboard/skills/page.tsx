@@ -600,6 +600,20 @@ export default function SkillsPage() {
             </DialogHeader>
 
             <FieldGroup className="min-h-0 flex-1 gap-5 overflow-y-auto px-6 py-4">
+              <Alert>
+                <FileCode2 />
+                <AlertTitle>标准 Skill 模板</AlertTitle>
+                <AlertDescription className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <span>导入前可下载模板，按必填章节和 validation contract 补全后再打包上传。</span>
+                  <Button asChild variant="outline" size="sm" className="w-full sm:w-auto">
+                    <a href="/api/skills?template=standard" download>
+                      <Download data-icon="inline-start" />
+                      下载模板
+                    </a>
+                  </Button>
+                </AlertDescription>
+              </Alert>
+
               <Field>
                 <FieldLabel>导入目标</FieldLabel>
                 <ToggleGroup
@@ -765,7 +779,7 @@ export default function SkillsPage() {
               </Field>
 
               {errorMessage && (
-                <FieldError>{errorMessage}</FieldError>
+                <FieldError className="whitespace-pre-line">{errorMessage}</FieldError>
               )}
 
               <Button onClick={handleImport} disabled={actionLoading}>

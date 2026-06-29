@@ -159,6 +159,19 @@ export interface WorkflowSkillReviewInput {
   note?: string;
 }
 
+export interface SkillPackageSpecValidationInput {
+  packagePath?: string;
+  skillMd: string;
+  name?: string;
+  description?: string;
+  version?: string;
+  methodology?: string;
+  outputs?: Record<string, unknown>;
+  checklist?: string[];
+  validationContract?: SkillValidationContract;
+  contentMd?: string;
+}
+
 const cwd = process.cwd();
 const registryRoot = process.env.SKILL_REGISTRY_DIR || path.join(cwd, 'data', 'skill-registry');
 const indexPath = path.join(registryRoot, 'index.json');
@@ -260,6 +273,73 @@ const MAX_SKILL_ZIP_ENTRY_BYTES = readPositiveIntegerEnv('SKILL_IMPORT_MAX_ZIP_E
 const MAX_SKILL_ZIP_ENTRIES = readPositiveIntegerEnv('SKILL_IMPORT_MAX_ZIP_ENTRIES', 1_000);
 const MAX_SKILL_ZIP_COMPRESSION_RATIO = readPositiveIntegerEnv('SKILL_IMPORT_MAX_ZIP_COMPRESSION_RATIO', 100);
 
+const STANDARD_SKILL_TEMPLATE_MARKDOWN = `---
+id: example-product-planning-skill
+name: Example Product Planning Skill
+description: A reusable product planning method that produces reviewed markdown output.
+version: 1.0.0
+author: Your Team
+tags: [product-planning, example]
+---
+
+# Example Product Planning Skill
+
+## Description
+
+Describe when to use this Skill, what input it expects, and what decision or artifact it helps produce.
+
+## Methodology
+
+1. Clarify the planning context, users, constraints, and available evidence.
+2. Analyze the problem using the method-specific framework.
+3. Produce the durable markdown artifact requested by the workflow step.
+4. Check the artifact against the acceptance criteria before returning it.
+
+## Outputs
+
+\`\`\`json
+{
+  "format": "structured_markdown",
+  "sections": ["Context", "Analysis", "Recommendation", "Risks", "Next Steps"]
+}
+\`\`\`
+
+## Checklist
+
+- The output is a standalone markdown document.
+- Claims are tied to evidence or explicitly marked as assumptions.
+- Risks and follow-up questions are listed separately.
+
+## Acceptance Criteria
+
+- The artifact covers every required section.
+- The artifact can be understood without reading the chat transcript.
+- Evidence, assumptions, and open questions are clearly separated.
+
+## Required Sections
+
+- Context
+- Analysis
+- Recommendation
+- Risks
+- Next Steps
+
+## Evidence Rules
+
+- Cite source material, previous-step outputs, or user-provided evidence when making factual claims.
+- Mark unsupported claims as assumptions and state what would validate them.
+
+## Failure Conditions
+
+- Missing one or more required sections.
+- Presents assumptions as facts.
+- Produces conversational notes instead of a durable artifact.
+
+## Prompt Template
+
+You are an expert product planning assistant. Follow the methodology and produce the requested standalone markdown artifact.
+`;
+
 interface ZipEntryInfo {
   name: string;
   mode: string;
@@ -341,6 +421,128 @@ function getSkillValidationContract(...sources: Record<string, unknown>[]): Skil
     ...(contract.evidenceRules.length > 0 ? { evidenceRules: contract.evidenceRules } : {}),
     ...(contract.failureConditions.length > 0 ? { failureConditions: contract.failureConditions } : {}),
   };
+}
+
+function deriveSkillValidationContract(contentMd: string, ...sources: Record<string, unknown>[]): SkillValidationContract {
+  const base = getSkillValidationContract(...sources);
+  const contract: Required<SkillValidationContract> = {
+    acceptanceCriteria: [...(base.acceptanceCriteria || [])],
+    requiredSections: [...(base.requiredSections || [])],
+    evidenceRules: [...(base.evidenceRules || [])],
+    failureConditions: [...(base.failureConditions || [])],
+  };
+
+  addUniqueStrings(contract.acceptanceCriteria, parseMarkdownList(extractMarkdownSection(contentMd, [
+    'Acceptance Criteria',
+    '验收标准',
+    '验收清单',
+  ])));
+  addUniqueStrings(contract.requiredSections, parseMarkdownList(extractMarkdownSection(contentMd, [
+    'Required Sections',
+    'Output Sections',
+    '必需章节',
+    '输出章节',
+  ])));
+  addUniqueStrings(contract.evidenceRules, parseMarkdownList(extractMarkdownSection(contentMd, [
+    'Evidence Rules',
+    'Evidence Requirements',
+    '证据规则',
+    '证据要求',
+  ])));
+  addUniqueStrings(contract.failureConditions, parseMarkdownList(extractMarkdownSection(contentMd, [
+    'Failure Conditions',
+    'Reject Conditions',
+    '失败条件',
+    '打回条件',
+  ])));
+
+  return {
+    ...(contract.acceptanceCriteria.length > 0 ? { acceptanceCriteria: contract.acceptanceCriteria } : {}),
+    ...(contract.requiredSections.length > 0 ? { requiredSections: contract.requiredSections } : {}),
+    ...(contract.evidenceRules.length > 0 ? { evidenceRules: contract.evidenceRules } : {}),
+    ...(contract.failureConditions.length > 0 ? { failureConditions: contract.failureConditions } : {}),
+  };
+}
+
+function hasMarkdownSection(markdown: string, headings: string[]) {
+  return Boolean(extractMarkdownSection(markdown, headings).trim());
+}
+
+export function validateSkillPackageSpec(input: SkillPackageSpecValidationInput): string[] {
+  const issues: string[] = [];
+  const contentMd = input.contentMd || parseFrontmatter(input.skillMd).body || input.skillMd;
+  const validationContract = input.validationContract || {};
+
+  if (!input.skillMd.trim()) {
+    issues.push('SKILL.md or skill.md is required.');
+  }
+  if (!getString(input.name)) {
+    issues.push('Skill name is required in frontmatter or meta.json.');
+  }
+  if (!getString(input.description)) {
+    issues.push('Skill description is required in frontmatter, meta.json, or the Description section.');
+  }
+  const version = getString(input.version);
+  if (!version) {
+    issues.push('Skill version is required.');
+  } else if (!SEMVER_PATTERN.test(version)) {
+    issues.push(`Skill version must be semantic versioning, received "${version}".`);
+  }
+  if (!getString(input.methodology) && !hasMarkdownSection(contentMd, [
+    'Methodology',
+    'Procedure',
+    'Process',
+    '方法论框架',
+    '流程',
+    '步骤',
+  ])) {
+    issues.push('Methodology or process section is required.');
+  }
+  if (Object.keys(input.outputs || {}).length === 0 && !hasMarkdownSection(contentMd, [
+    'Outputs',
+    'Output',
+    'Output Structure',
+    'Expected Output',
+    '输出结构',
+    '输出',
+  ])) {
+    issues.push('Outputs definition or output section is required.');
+  }
+  if (
+    (input.checklist || []).length === 0
+    && (validationContract.acceptanceCriteria || []).length === 0
+    && !hasMarkdownSection(contentMd, ['Checklist', 'Quality Gates', 'Acceptance Criteria', '质量 Checklist', '质量检查', '验收标准'])
+  ) {
+    issues.push('Checklist or acceptance criteria are required.');
+  }
+  if ((validationContract.acceptanceCriteria || []).length === 0) {
+    issues.push('Validation contract must include acceptanceCriteria.');
+  }
+  if ((validationContract.requiredSections || []).length === 0) {
+    issues.push('Validation contract must include requiredSections.');
+  }
+  if ((validationContract.evidenceRules || []).length === 0) {
+    issues.push('Validation contract must include evidenceRules.');
+  }
+  if ((validationContract.failureConditions || []).length === 0) {
+    issues.push('Validation contract must include failureConditions.');
+  }
+
+  return issues;
+}
+
+export function assertSkillPackageSpec(input: SkillPackageSpecValidationInput) {
+  const issues = validateSkillPackageSpec(input);
+  if (issues.length === 0) return;
+
+  const location = input.packagePath ? ` in ${input.packagePath}` : '';
+  throw new SkillImportValidationError(
+    `Skill package does not match the BattleFlow Skill specification${location}:\n- ${issues.join('\n- ')}`,
+  );
+}
+
+export function renderStandardSkillTemplateMarkdown() {
+  return STANDARD_SKILL_TEMPLATE_MARKDOWN;
 }
 
 function getScope(value: unknown, fallback: SkillScope): SkillScope {
@@ -1344,9 +1546,8 @@ async function loadSkillFromPackage(packagePath: string, options: ImportOptions 
   const id = getString(meta.id, slugify(sourceName));
   const displayName = deriveSkillDisplayName(skillMd, meta, sourceName || id);
   const version = getString(meta.version, '1.0.0');
-  if (!SEMVER_PATTERN.test(version)) {
-    throw new Error(`Skill ${displayName} has invalid semantic version: ${version}`);
-  }
+  const runtime = deriveSkillRuntimeFields(skillMd, meta);
+  const description = getString(meta.description, runtime.description);
 
   const methodology = deriveMethodology(contentMd, definition);
   const checklist = deriveChecklist(contentMd, definition);
@@ -1356,7 +1557,8 @@ async function loadSkillFromPackage(packagePath: string, options: ImportOptions 
   const outputs = Object.keys(toRecord(definition.outputs)).length
     ? toRecord(definition.outputs)
     : toRecord(meta.outputs);
-  const validationContract = getSkillValidationContract(
+  const validationContract = deriveSkillValidationContract(
+    contentMd,
     meta,
     definition,
     toRecord(meta.validation),
@@ -1364,6 +1566,18 @@ async function loadSkillFromPackage(packagePath: string, options: ImportOptions 
     toRecord(definition.validation),
     toRecord(definition.validationContract),
   );
+  assertSkillPackageSpec({
+    packagePath,
+    skillMd,
+    name: sourceName || displayName,
+    description,
+    version,
+    methodology,
+    outputs,
+    checklist,
+    validationContract,
+    contentMd,
+  });
 
   const timestamp = nowIso();
   const changelogVersions = parseChangelog(changelog);
@@ -1373,17 +1587,13 @@ async function loadSkillFromPackage(packagePath: string, options: ImportOptions 
   const scope = options.scope || getScope(meta.scope, 'personal');
   const status = options.status || getStatus(meta.status, scope === 'team' ? 'pending_review' : 'imported');
   const packageAssets = await discoverPackageAssets(packagePath);
-  const runtime = deriveSkillRuntimeFields(skillMd, meta);
 
   return {
     id,
     skill_id: id,
     display_name: displayName,
     name: displayName,
-    description: getString(
-      meta.description,
-      runtime.description,
-    ),
+    description,
     version,
     author: getString(meta.author, options.sourceType === 'git' ? 'External Git Repository' : 'BattleFlow Team'),
     tags: toStringArray(meta.tags),
