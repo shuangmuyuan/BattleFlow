@@ -10,6 +10,13 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Switch } from '@/components/ui/switch';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { AnimatedShinyText } from '@/components/ui/animated-shiny-text';
@@ -1080,6 +1087,18 @@ interface ReviewedOutputFile {
   created_at?: string;
 }
 
+type ReviewedOutputSavePromptKind = 'upload' | 'step_output';
+
+interface ReviewedOutputSavePrompt {
+  kind: ReviewedOutputSavePromptKind;
+  stepId: string;
+  files: File[];
+  saveToKnowledge: boolean | null;
+  knowledgeBaseId: string;
+  isSubmitting: boolean;
+  error?: string;
+}
+
 interface WorkflowStepSnapshot {
   id: string;
   workflowId: string;
@@ -1271,6 +1290,7 @@ export default function WorkflowsPage() {
   const [uploadedContextFiles, setUploadedContextFiles] = useState<UploadedContextFile[]>([]);
   const [reviewedOutputFiles, setReviewedOutputFiles] = useState<ReviewedOutputFile[]>([]);
   const [reviewComments, setReviewComments] = useState<Record<string, string>>({});
+  const [reviewedOutputSavePrompt, setReviewedOutputSavePrompt] = useState<ReviewedOutputSavePrompt | null>(null);
   const [supplementalContextOpen, setSupplementalContextOpen] = useState(false);
   const [supplementalContextTab, setSupplementalContextTab] = useState<'knowledge' | 'materials'>('knowledge');
   const [rightPanelTab, setRightPanelTab] = useState<'outputs' | 'review' | 'archive' | 'context' | 'demo'>('outputs');
@@ -1651,11 +1671,12 @@ export default function WorkflowsPage() {
     }));
   }, [activeStepIndex, activeWorkflow, updateActiveWorkflow]);
 
-  const addReviewedOutputFiles = useCallback(async (files: File[], stepId?: string) => {
-    if (!stepId || files.length === 0) return;
-
-    const createdAt = new Date().toISOString();
-    const nextFiles = await Promise.all(files.map(async (file) => {
+  const buildReviewedOutputFiles = useCallback(async (
+    files: File[],
+    stepId: string,
+    createdAt: string,
+  ): Promise<ReviewedOutputFile[]> => (
+    Promise.all(files.map(async (file) => {
       const payload = await buildWorkflowFilePayload(file);
       return {
         id: `reviewed-${Date.now()}-${file.name}-${Math.random().toString(16).slice(2)}`,
@@ -1666,16 +1687,18 @@ export default function WorkflowsPage() {
         created_at: createdAt,
         ...payload,
       };
-    }));
+    }))
+  ), []);
 
+  const persistReviewedOutputFiles = useCallback((nextFiles: ReviewedOutputFile[], updatedAt: string) => {
+    if (nextFiles.length === 0) return;
     setReviewedOutputFiles((prev) => [...prev, ...nextFiles]);
     updateActiveWorkflow((workflow) => ({
       ...workflow,
       reviewedOutputFiles: [...(workflow.reviewedOutputFiles || []), ...nextFiles],
-      updated_at: createdAt,
+      updated_at: updatedAt,
     }));
   }, [updateActiveWorkflow]);
-
 
   const handlePasteContextFiles = useCallback((event: ClipboardEvent<HTMLElement>) => {
     const files = Array.from(event.clipboardData.files);
@@ -1966,6 +1989,55 @@ export default function WorkflowsPage() {
     link.download = file.name.replace(/[\\/:*?"<>|]/g, '-');
     link.click();
     URL.revokeObjectURL(url);
+  };
+
+  const getKnowledgeSavableReviewedOutputFiles = (files: ReviewedOutputFile[]) => (
+    files.filter((file) => file.contentKind === 'text' && Boolean(file.content?.trim()))
+  );
+
+  const saveReviewedOutputFilesToKnowledge = async (
+    workflow: Workflow,
+    step: WorkflowStep,
+    knowledgeBaseId: string,
+    files: ReviewedOutputFile[],
+  ) => {
+    const documents = getKnowledgeSavableReviewedOutputFiles(files).map((file) => ({
+      title: file.name,
+      sourceType: 'reviewed_output',
+      source: `${workflow.name} / ${step.name} / ${file.name}`,
+      content: file.content || '',
+      metadata: {
+        workflowId: workflow.id,
+        workflowName: workflow.name,
+        stepId: step.id,
+        stepName: step.name,
+        reviewedOutputId: file.id,
+        fileName: file.name,
+        fileType: file.type,
+        fileSize: file.size,
+        createdAt: file.created_at,
+      },
+    }));
+
+    if (documents.length === 0) {
+      throw new Error('没有可保存到知识库的文本或 Markdown 产物');
+    }
+
+    const response = await fetch('/api/knowledge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'add_documents',
+        knowledge_base_id: knowledgeBaseId,
+        documents,
+      }),
+    });
+    const data = await response.json().catch(() => ({})) as { error?: string; insertedCount?: number };
+    if (!response.ok) {
+      throw new Error(data.error || '保存到知识库失败');
+    }
+
+    return data.insertedCount || documents.length;
   };
 
   const downloadWorkflowFinalOutput = (workflow: Workflow, steps: WorkflowStep[]) => {
@@ -3914,6 +3986,21 @@ export default function WorkflowsPage() {
   const savedCurrentStepOutputIsCurrent = Boolean(
     savedCurrentStepOutput?.content && savedCurrentStepOutput.content === currentStepOutputMarkdown,
   );
+  const reviewedOutputPromptSavableFileCount = reviewedOutputSavePrompt?.kind === 'upload'
+    ? reviewedOutputSavePrompt.files.filter(isReadableTextFile).length
+    : (reviewedOutputSavePrompt?.kind === 'step_output' ? 1 : 0);
+  const reviewedOutputPromptStep = reviewedOutputSavePrompt
+    ? visibleWorkflowSteps.find((step) => step.id === reviewedOutputSavePrompt.stepId)
+    : undefined;
+  const reviewedOutputPromptCanSubmit = Boolean(
+    reviewedOutputSavePrompt
+      && reviewedOutputSavePrompt.saveToKnowledge !== null
+      && !reviewedOutputSavePrompt.isSubmitting
+      && (
+        !reviewedOutputSavePrompt.saveToKnowledge
+        || (reviewedOutputSavePrompt.knowledgeBaseId && reviewedOutputPromptSavableFileCount > 0)
+      ),
+  );
   const maxVisibleStepIndex = visibleWorkflowSteps.length > 0
     ? Math.max(...visibleWorkflowSteps.map((step) => step.step_index))
     : -1;
@@ -4046,12 +4133,29 @@ export default function WorkflowsPage() {
       updated_at: updatedAt,
     }));
   };
-  const saveCurrentStepOutput = () => {
-    if (!activeWorkflow || !currentStep?.output) return;
-
-    const updatedAt = new Date().toISOString();
-    const outputFile = buildSavedStepOutputFile(activeWorkflow, currentStep, updatedAt);
-
+  const openReviewedOutputUploadPrompt = (files: File[], stepId: string) => {
+    if (files.length === 0) return;
+    setReviewedOutputSavePrompt({
+      kind: 'upload',
+      stepId,
+      files,
+      saveToKnowledge: null,
+      knowledgeBaseId: '',
+      isSubmitting: false,
+    });
+  };
+  const openCurrentStepOutputSavePrompt = () => {
+    if (!currentStep?.output) return;
+    setReviewedOutputSavePrompt({
+      kind: 'step_output',
+      stepId: currentStep.id,
+      files: [],
+      saveToKnowledge: null,
+      knowledgeBaseId: '',
+      isSubmitting: false,
+    });
+  };
+  const persistSavedStepOutputFile = (outputFile: ReviewedOutputFile, updatedAt: string) => {
     setReviewedOutputFiles((prev) => [
       outputFile,
       ...prev.filter((file) => file.id !== outputFile.id),
@@ -4064,6 +4168,80 @@ export default function WorkflowsPage() {
       ],
       updated_at: updatedAt,
     }));
+  };
+  const handleReviewedOutputPromptOpenChange = (open: boolean) => {
+    if (open || reviewedOutputSavePrompt?.isSubmitting) return;
+    setReviewedOutputSavePrompt(null);
+  };
+  const handleConfirmReviewedOutputSavePrompt = async () => {
+    if (!reviewedOutputSavePrompt || !activeWorkflow) return;
+    if (reviewedOutputSavePrompt.saveToKnowledge === null) {
+      setReviewedOutputSavePrompt((prev) => (prev ? { ...prev, error: '请选择是否保存到知识库' } : prev));
+      return;
+    }
+
+    const targetStep = getVisibleSteps(activeWorkflow).find((step) => step.id === reviewedOutputSavePrompt.stepId);
+    if (!targetStep) {
+      setReviewedOutputSavePrompt((prev) => (prev ? { ...prev, error: '当前步骤不存在' } : prev));
+      return;
+    }
+
+    if (reviewedOutputSavePrompt.saveToKnowledge && !reviewedOutputSavePrompt.knowledgeBaseId) {
+      setReviewedOutputSavePrompt((prev) => (prev ? { ...prev, error: '请选择目标知识库' } : prev));
+      return;
+    }
+
+    setReviewedOutputSavePrompt((prev) => (prev ? { ...prev, isSubmitting: true, error: undefined } : prev));
+
+    try {
+      const createdAt = new Date().toISOString();
+      let filesToPersist: ReviewedOutputFile[];
+      let persistStepOutputFile: ReviewedOutputFile | null = null;
+
+      if (reviewedOutputSavePrompt.kind === 'upload') {
+        filesToPersist = await buildReviewedOutputFiles(reviewedOutputSavePrompt.files, targetStep.id, createdAt);
+      } else {
+        const outputFile = buildSavedStepOutputFile(activeWorkflow, targetStep, createdAt);
+        filesToPersist = [outputFile];
+        persistStepOutputFile = outputFile;
+      }
+
+      const savableFiles = getKnowledgeSavableReviewedOutputFiles(filesToPersist);
+      if (reviewedOutputSavePrompt.saveToKnowledge) {
+        if (savableFiles.length === 0) {
+          throw new Error('没有可保存到知识库的文本或 Markdown 产物');
+        }
+        const insertedCount = await saveReviewedOutputFilesToKnowledge(
+          activeWorkflow,
+          targetStep,
+          reviewedOutputSavePrompt.knowledgeBaseId,
+          savableFiles,
+        );
+        toast.success('已保存到知识库', {
+          description: `写入 ${insertedCount} 个文档。`,
+        });
+      }
+
+      if (persistStepOutputFile) {
+        persistSavedStepOutputFile(persistStepOutputFile, createdAt);
+      } else {
+        persistReviewedOutputFiles(filesToPersist, createdAt);
+      }
+
+      if (!reviewedOutputSavePrompt.saveToKnowledge) {
+        toast.success('已保存审核产物', { description: '本次未写入知识库。' });
+      } else if (filesToPersist.length > savableFiles.length) {
+        toast.warning('部分产物未入库', {
+          description: '仅文本或 Markdown 内容已写入知识库，其他文件保留为工作流材料。',
+        });
+      }
+
+      setReviewedOutputSavePrompt(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '保存审核产物失败';
+      toast.error('保存失败', { description: message });
+      setReviewedOutputSavePrompt((prev) => (prev ? { ...prev, isSubmitting: false, error: message } : prev));
+    }
   };
   const workflowStepGroups = getWorkflowExecutionGroups(visibleWorkflowSteps);
   const toggleOutputExpanded = (stepId: string) => {
@@ -4482,6 +4660,145 @@ export default function WorkflowsPage() {
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-auto lg:flex-row lg:overflow-hidden">
+      <Dialog open={Boolean(reviewedOutputSavePrompt)} onOpenChange={handleReviewedOutputPromptOpenChange}>
+        <DialogContent className="max-w-lg">
+          {reviewedOutputSavePrompt && (
+            <>
+              <DialogHeader>
+                <DialogTitle>
+                  {reviewedOutputSavePrompt.kind === 'upload' ? '上传审核产物' : '保存步骤产出'}
+                </DialogTitle>
+                <DialogDescription>
+                  {reviewedOutputPromptStep?.name || '当前步骤'} · {
+                    reviewedOutputSavePrompt.kind === 'upload'
+                      ? `${reviewedOutputSavePrompt.files.length} 个文件`
+                      : 'Markdown 产出'
+                  }
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    type="button"
+                    variant={reviewedOutputSavePrompt.saveToKnowledge === false ? 'default' : 'outline'}
+                    className="h-9"
+                    disabled={reviewedOutputSavePrompt.isSubmitting}
+                    onClick={() => {
+                      setReviewedOutputSavePrompt((prev) => (prev
+                        ? { ...prev, saveToKnowledge: false, error: undefined }
+                        : prev));
+                    }}
+                  >
+                    不保存到知识库
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={reviewedOutputSavePrompt.saveToKnowledge === true ? 'default' : 'outline'}
+                    className="h-9"
+                    disabled={reviewedOutputSavePrompt.isSubmitting}
+                    onClick={() => {
+                      setReviewedOutputSavePrompt((prev) => (prev
+                        ? { ...prev, saveToKnowledge: true, error: undefined }
+                        : prev));
+                    }}
+                  >
+                    保存到知识库
+                  </Button>
+                </div>
+
+                {reviewedOutputSavePrompt.kind === 'upload' && (
+                  <div className="rounded-lg border border-border/50 bg-background/60 p-3">
+                    <p className="text-xs font-medium">待上传文件</p>
+                    <div className="mt-2 flex flex-col gap-1.5">
+                      {reviewedOutputSavePrompt.files.slice(0, 4).map((file) => (
+                        <div key={`${file.name}-${file.size}-${file.lastModified}`} className="flex items-center justify-between gap-2 text-xs">
+                          <span className="min-w-0 truncate">{file.name}</span>
+                          <span className="shrink-0 text-muted-foreground">{formatFileSize(file.size)}</span>
+                        </div>
+                      ))}
+                      {reviewedOutputSavePrompt.files.length > 4 && (
+                        <p className="text-xs text-muted-foreground">
+                          另有 {reviewedOutputSavePrompt.files.length - 4} 个文件
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {reviewedOutputSavePrompt.saveToKnowledge && (
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium">目标知识库</label>
+                    <Select
+                      value={reviewedOutputSavePrompt.knowledgeBaseId}
+                      disabled={reviewedOutputSavePrompt.isSubmitting || knowledgeBases.length === 0}
+                      onValueChange={(value) => {
+                        setReviewedOutputSavePrompt((prev) => (prev
+                          ? { ...prev, knowledgeBaseId: value, error: undefined }
+                          : prev));
+                      }}
+                    >
+                      <SelectTrigger className="h-9 w-full text-xs">
+                        <SelectValue placeholder={knowledgeBases.length === 0 ? '暂无可用知识库' : '选择知识库'} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {knowledgeBases.map((knowledgeBase) => (
+                          <SelectItem key={knowledgeBase.id} value={knowledgeBase.id}>
+                            {knowledgeBase.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {reviewedOutputPromptSavableFileCount === 0 && (
+                      <p className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning">
+                        当前选择中没有可保存到知识库的文本或 Markdown 内容。
+                      </p>
+                    )}
+                    {knowledgeBases.length === 0 && (
+                      <p className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning">
+                        当前没有可写入的知识库。
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {reviewedOutputSavePrompt.error && (
+                  <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs leading-5 text-destructive">
+                    {reviewedOutputSavePrompt.error}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={reviewedOutputSavePrompt.isSubmitting}
+                  onClick={() => setReviewedOutputSavePrompt(null)}
+                >
+                  取消
+                </Button>
+                <Button
+                  type="button"
+                  disabled={!reviewedOutputPromptCanSubmit}
+                  onClick={() => void handleConfirmReviewedOutputSavePrompt()}
+                >
+                  {reviewedOutputSavePrompt.isSubmitting ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      保存中
+                    </>
+                  ) : reviewedOutputSavePrompt.saveToKnowledge ? (
+                    reviewedOutputSavePrompt.kind === 'upload' ? '上传并保存' : '保存并入库'
+                  ) : (
+                    reviewedOutputSavePrompt.kind === 'upload' ? '仅上传' : '仅保存'
+                  )}
+                </Button>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
       {/* Left: Pipeline Panel */}
       <div className="flex max-h-80 min-h-0 w-full shrink-0 flex-col border-b border-border/40 lg:max-h-none lg:w-64 lg:border-b-0 lg:border-r xl:w-80">
         <div className="border-b border-border/40 p-4">
@@ -5469,7 +5786,7 @@ export default function WorkflowsPage() {
                         accept=".txt,.md,.doc,.docx,.pdf,image/*"
                         className="hidden"
                         onChange={(event) => {
-                          void addReviewedOutputFiles(Array.from(event.target.files || []), currentStep.id);
+                          openReviewedOutputUploadPrompt(Array.from(event.target.files || []), currentStep.id);
                           event.target.value = '';
                         }}
                       />
@@ -5585,7 +5902,7 @@ export default function WorkflowsPage() {
                           size="sm"
                           className="w-full gap-2"
                           disabled={savedCurrentStepOutputIsCurrent}
-                          onClick={saveCurrentStepOutput}
+                          onClick={openCurrentStepOutputSavePrompt}
                         >
                           <Save className="h-3.5 w-3.5" />
                           {savedCurrentStepOutputIsCurrent
