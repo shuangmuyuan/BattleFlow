@@ -8,9 +8,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { AnimatedThemeToggler } from '@/registry/magicui/animated-theme-toggler';
 import { KineticText } from '@/registry/magicui/kinetic-text';
 
 const APP_NAME = 'BattleFlow';
+const DEFAULT_REGISTER_ORGANIZATION_NAME = 'Default Organization';
 
 type AuthMode = 'login' | 'register';
 
@@ -78,13 +80,13 @@ function authErrorMessage(error: unknown, fallback: string): string {
       return '认证失败，请稍后重试';
     case 'Email and password are required':
     case 'Account and password are required':
-      return '请输入邮箱或用户名和密码';
+      return '请输入邮箱和密码';
     case 'Invalid email or password':
-      return '邮箱或用户名、密码不正确';
+      return '邮箱或密码不正确';
     case 'Password must be at least 8 characters':
       return '密码至少需要 8 个字符';
     case 'Organization name is required':
-      return '请输入组织名称';
+      return '无法创建默认组织，请稍后重试';
     case 'Unable to create account':
       return '无法创建账号，请确认邮箱是否已注册';
     case 'Registration failed':
@@ -100,7 +102,6 @@ export default function LoginPage() {
   const [nextPath, setNextPath] = useState('/dashboard');
   const [email, setEmail] = useState('');
   const [displayName, setDisplayName] = useState('');
-  const [organizationName, setOrganizationName] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -140,11 +141,6 @@ export default function LoginPage() {
       return;
     }
 
-    if (!organizationName.trim()) {
-      setError('请输入组织名称');
-      return;
-    }
-
     setIsSubmitting(true);
 
     try {
@@ -152,7 +148,7 @@ export default function LoginPage() {
         email,
         password,
         displayName,
-        organizationName,
+        organizationName: DEFAULT_REGISTER_ORGANIZATION_NAME,
         next: nextPath,
       });
       router.replace(normalizePostLoginPath(data.redirectTo || '/dashboard'));
@@ -166,6 +162,9 @@ export default function LoginPage() {
 
   return (
     <main className="min-h-dvh overflow-y-auto bg-background px-4 py-4 md:px-6 [@media_(min-height:760px)]:flex [@media_(min-height:760px)]:items-center [@media_(min-height:760px)]:justify-center [@media_(min-height:760px)]:py-8">
+      <div className="fixed right-4 top-4 z-10 md:right-6 md:top-6">
+        <AnimatedThemeToggler variant="square" />
+      </div>
       <div className="mx-auto flex w-full max-w-md flex-col gap-4 [@media_(min-height:760px)]:gap-6">
         <div className="flex flex-col items-center gap-3 text-center [@media_(min-height:760px)]:gap-4">
           <div
@@ -209,12 +208,12 @@ export default function LoginPage() {
               <TabsContent value="login" className="mt-3 [@media_(min-height:760px)]:mt-4">
                 <form onSubmit={handleLogin} className="space-y-3 [@media_(min-height:760px)]:space-y-4">
                   <div className="space-y-1.5 [@media_(min-height:760px)]:space-y-2">
-                    <Label htmlFor="login-email" className="text-card-foreground">邮箱或用户名</Label>
+                    <Label htmlFor="login-email" className="text-card-foreground">邮箱</Label>
                     <Input
                       id="login-email"
                       type="text"
                       autoComplete="username"
-                      placeholder="you@example.com / superadmin"
+                      placeholder="name@work-email.com"
                       value={email}
                       onChange={(event) => setEmail(event.target.value)}
                       required
@@ -262,7 +261,7 @@ export default function LoginPage() {
                       id="register-email"
                       type="email"
                       autoComplete="email"
-                      placeholder="you@example.com"
+                      placeholder="name@work-email.com"
                       value={email}
                       onChange={(event) => setEmail(event.target.value)}
                       required
@@ -278,19 +277,6 @@ export default function LoginPage() {
                       placeholder="你的名字"
                       value={displayName}
                       onChange={(event) => setDisplayName(event.target.value)}
-                      className="border-border bg-secondary text-card-foreground placeholder:text-muted-foreground"
-                    />
-                  </div>
-                  <div className="space-y-1.5 [@media_(min-height:760px)]:space-y-2">
-                    <Label htmlFor="organization-name" className="text-card-foreground">组织名称</Label>
-                    <Input
-                      id="organization-name"
-                      type="text"
-                      autoComplete="organization"
-                      placeholder="新组织名称"
-                      value={organizationName}
-                      onChange={(event) => setOrganizationName(event.target.value)}
-                      required
                       className="border-border bg-secondary text-card-foreground placeholder:text-muted-foreground"
                     />
                   </div>

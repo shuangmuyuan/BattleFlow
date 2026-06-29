@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import {
-  Building2,
   Bell,
   CheckCheck,
   ChevronLeft,
@@ -42,13 +41,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 
 interface OrganizationSummary {
   id: string;
@@ -278,7 +270,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [authState, setAuthState] = useState<DashboardAuthState | null>(null);
   const [authError, setAuthError] = useState('');
   const [authChecked, setAuthChecked] = useState(false);
-  const [isSwitchingOrganization, setIsSwitchingOrganization] = useState(false);
   const [showLogoutDialog, setShowLogoutDialog] = useState(false);
   const [onlineCount, setOnlineCount] = useState(1);
   const [notifications, setNotifications] = useState<DashboardNotification[]>([]);
@@ -407,36 +398,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     && authState.user.displayName.trim() !== authState.user.email,
   );
 
-  async function handleOrganizationChange(organizationId: string) {
-    setIsSwitchingOrganization(true);
-    setAuthError('');
-
-    try {
-      const response = await fetch('/api/auth/organizations/active', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ organizationId }),
-      });
-      const data = await response.json() as { activeOrganizationId?: string; error?: string };
-
-      if (!response.ok || !data.activeOrganizationId) {
-        throw new Error(data.error || 'Unable to switch organization');
-      }
-
-      setAuthState((current) => current ? {
-        ...current,
-        activeOrganizationId: data.activeOrganizationId ?? organizationId,
-      } : current);
-      router.refresh();
-    } catch (error) {
-      setAuthError(error instanceof Error ? error.message : 'Unable to switch organization');
-    } finally {
-      setIsSwitchingOrganization(false);
-    }
-  }
-
   async function handleLogout() {
     try {
       await fetch('/api/auth/logout', { method: 'POST' });
@@ -544,32 +505,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </Button>
         </div>
 
-        <div className={`shrink-0 border-b border-border px-2 py-3 ${collapsed ? 'hidden' : ''}`}>
-          {authState.organizations.length > 1 ? (
-            <Select
-              value={activeOrganization.id}
-              onValueChange={handleOrganizationChange}
-              disabled={isSwitchingOrganization}
-            >
-              <SelectTrigger className="h-9 w-full border-border bg-secondary text-left">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {authState.organizations.map((organization) => (
-                  <SelectItem key={organization.id} value={organization.id}>
-                    {organization.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : (
-            <div className="flex min-w-0 items-center gap-2 rounded-md bg-secondary px-3 py-2">
-              <Building2 className="size-4 shrink-0 text-brand" />
-              <span className="truncate text-sm text-foreground">{activeOrganization.name}</span>
-            </div>
-          )}
-        </div>
-
         <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 py-4">
           {visibleNavItems.map((item) => {
             const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href));
@@ -617,10 +552,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                     <p className="truncate text-xs text-muted-foreground">{authState.user.email}</p>
                   )}
                 </div>
-              </DropdownMenuItem>
-              <DropdownMenuItem className="text-muted-foreground">
-                <Building2 className="mr-2 h-4 w-4" />
-                {activeOrganization.name}
               </DropdownMenuItem>
               <DropdownMenuSeparator className="bg-border" />
               <DropdownMenuItem

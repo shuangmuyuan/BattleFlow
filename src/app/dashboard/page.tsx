@@ -119,8 +119,8 @@ export default function DashboardPage() {
         </Card>
         <Card className={appCardClassName}>
           <CardContent className="flex h-20 items-center gap-3 p-3">
-            <div className="rounded-lg bg-blue-500/10 p-2">
-              <Play className="h-5 w-5 text-blue-500" />
+            <div className="rounded-lg bg-brand/10 p-2">
+              <Play className="h-5 w-5 text-brand" />
             </div>
             <div>
               <p className="text-2xl font-bold">{stats.totalWorkflows}</p>
@@ -130,8 +130,8 @@ export default function DashboardPage() {
         </Card>
         <Card className={appCardClassName}>
           <CardContent className="flex h-20 items-center gap-3 p-3">
-            <div className="rounded-lg bg-amber-500/10 p-2">
-              <TrendingUp className="h-5 w-5 text-amber-500" />
+            <div className="rounded-lg bg-warning/10 p-2">
+              <TrendingUp className="h-5 w-5 text-warning" />
             </div>
             <div>
               <p className="text-2xl font-bold">{stats.activeWorkflows}</p>
@@ -141,8 +141,8 @@ export default function DashboardPage() {
         </Card>
         <Card className={appCardClassName}>
           <CardContent className="flex h-20 items-center gap-3 p-3">
-            <div className="rounded-lg bg-emerald-500/10 p-2">
-              <BookOpen className="h-5 w-5 text-emerald-500" />
+            <div className="rounded-lg bg-success/10 p-2">
+              <BookOpen className="h-5 w-5 text-success" />
             </div>
             <div>
               <p className="text-2xl font-bold">{stats.totalKnowledgeBases}</p>
@@ -152,8 +152,8 @@ export default function DashboardPage() {
         </Card>
         <Card className={appCardClassName}>
           <CardContent className="flex h-20 items-center gap-3 p-3">
-            <div className="rounded-lg bg-purple-500/10 p-2">
-              <FileText className="h-5 w-5 text-purple-500" />
+            <div className="rounded-lg bg-muted p-2">
+              <FileText className="h-5 w-5 text-muted-foreground" />
             </div>
             <div>
               <p className="text-2xl font-bold">{stats.completedPrds}</p>
@@ -185,8 +185,8 @@ export default function DashboardPage() {
           <Card className={`${appCardClassName} cursor-pointer group`}>
             <CardContent className="flex h-20 min-w-0 items-center justify-between gap-3 p-4">
               <div className="flex min-w-0 items-center gap-3">
-                <div className="rounded-lg bg-blue-500/10 p-2.5">
-                  <FileCode2 className="h-5 w-5 text-blue-500" />
+                <div className="rounded-lg bg-brand/10 p-2.5">
+                  <FileCode2 className="h-5 w-5 text-brand" />
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-semibold">管理 Skills</p>
@@ -201,8 +201,8 @@ export default function DashboardPage() {
           <Card className={`${appCardClassName} cursor-pointer group`}>
             <CardContent className="flex h-20 min-w-0 items-center justify-between gap-3 p-4">
               <div className="flex min-w-0 items-center gap-3">
-                <div className="rounded-lg bg-emerald-500/10 p-2.5">
-                  <BookOpen className="h-5 w-5 text-emerald-500" />
+                <div className="rounded-lg bg-success/10 p-2.5">
+                  <BookOpen className="h-5 w-5 text-success" />
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-semibold">知识库</p>
@@ -239,9 +239,9 @@ export default function DashboardPage() {
                 <div key={wf.id} className="flex min-w-0 items-center justify-between gap-3 rounded-lg p-2.5 transition-colors hover:bg-muted/50">
                   <div className="flex min-w-0 items-center gap-3">
                     {wf.status === 'completed' ? (
-                      <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                      <CheckCircle2 className="h-4 w-4 text-success" />
                     ) : wf.status === 'in_progress' ? (
-                      <Clock className="h-4 w-4 text-blue-500" />
+                      <Clock className="h-4 w-4 text-warning" />
                     ) : (
                       <Play className="h-4 w-4 text-muted-foreground" />
                     )}

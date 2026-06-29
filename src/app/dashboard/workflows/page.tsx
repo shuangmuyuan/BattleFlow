@@ -1693,14 +1693,14 @@ export default function WorkflowsPage() {
   const getStepIcon = (status: string) => {
     switch (status) {
       case 'completed':
-        return <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500" />;
+        return <CheckCircle2 className="h-5 w-5 shrink-0 text-success" />;
       case 'self_checking':
       case 'agent_validating':
         return <Loader2 className="h-5 w-5 shrink-0 animate-spin text-primary" />;
       case 'validation_failed':
         return <CircleStop className="h-5 w-5 shrink-0 text-destructive" />;
       case 'in_progress':
-        return <Clock className="h-5 w-5 shrink-0 animate-pulse text-blue-500" />;
+        return <Clock className="h-5 w-5 shrink-0 animate-pulse text-warning" />;
       default:
         return <Circle className="h-5 w-5 shrink-0 text-muted-foreground" />;
     }
@@ -3373,7 +3373,7 @@ export default function WorkflowsPage() {
                               <p className="mt-0.5 text-muted-foreground">进行中</p>
                             </div>
                             <div className="min-w-0 px-2 py-1.5">
-                              <p className="font-semibold text-emerald-500">{completedCount}</p>
+                              <p className="font-semibold text-success">{completedCount}</p>
                               <p className="mt-0.5 text-muted-foreground">已完成</p>
                             </div>
                           </div>
@@ -3404,7 +3404,7 @@ export default function WorkflowsPage() {
                 <Card className={`gap-0 py-0 ${appCardClassName}`}>
                   <CardContent className="p-3">
                     <p className="text-xs text-muted-foreground">已完成</p>
-                    <p className="mt-1 text-xl font-semibold text-emerald-500">{completedWorkflowCount}</p>
+                    <p className="mt-1 text-xl font-semibold text-success">{completedWorkflowCount}</p>
                   </CardContent>
                 </Card>
                 <Card className={`gap-0 py-0 ${appCardClassName}`}>
@@ -5145,7 +5145,7 @@ export default function WorkflowsPage() {
             /* Show completed step output */
             <div className="min-w-0 max-w-full space-y-4 overflow-hidden">
               <div className="flex items-center gap-2 mb-4">
-                <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                <CheckCircle2 className="h-5 w-5 text-success" />
                 <h3 className="font-semibold">本步骤已完成</h3>
               </div>
               <div className="min-w-0 max-w-full overflow-hidden rounded-lg border border-border/40 bg-muted/50 p-4">
@@ -5191,7 +5191,7 @@ export default function WorkflowsPage() {
                   <ul className="space-y-1">
                     {currentSkill.checklist.map((item, idx) => (
                       <li key={idx} className="text-sm text-muted-foreground flex items-start gap-2">
-                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 mt-0.5 shrink-0" />
+                        <CheckCircle2 className="h-3.5 w-3.5 text-success mt-0.5 shrink-0" />
                         {item}
                       </li>
                     ))}
