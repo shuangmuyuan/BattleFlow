@@ -1,9 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import {
   Building2,
+  Bell,
+  CheckCheck,
   ChevronLeft,
   ChevronRight,
   Database,
@@ -18,6 +20,11 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AnimatedThemeToggler } from '@/registry/magicui/animated-theme-toggler';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -71,6 +78,24 @@ interface DashboardAuthState {
   organizations: OrganizationSummary[];
 }
 
+interface OnlinePresenceResponse {
+  onlineCount?: unknown;
+}
+
+interface DashboardNotification {
+  id: string;
+  type: string;
+  title: string;
+  body: string | null;
+  readAt: string | null;
+  createdAt: string;
+}
+
+interface NotificationsResponse {
+  notifications?: DashboardNotification[];
+  unreadCount?: unknown;
+}
+
 const navItems = [
   { href: '/dashboard', label: '工作台', icon: LayoutDashboard },
   { href: '/dashboard/skills', label: 'Skill 仓库', icon: FileCode2 },
@@ -96,6 +121,158 @@ function loginPathFor(pathname: string): string {
   return `/login?next=${encodeURIComponent(pathname || '/dashboard')}`;
 }
 
+function normalizeOnlineCount(value: unknown): number {
+  const count = typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10);
+  return Number.isFinite(count) ? Math.max(1, count) : 1;
+}
+
+function normalizeUnreadCount(value: unknown): number {
+  const count = typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10);
+  return Number.isFinite(count) ? Math.max(0, count) : 0;
+}
+
+function formatNotificationTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+function OnlinePresenceIndicator({ count }: { count: number }) {
+  const onlineCount = normalizeOnlineCount(count);
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={`当前在线 ${onlineCount} 人`}
+          className="group inline-flex h-8 shrink-0 items-center gap-2 rounded-full border border-border/60 bg-secondary/70 px-3 text-sm font-medium text-muted-foreground shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-secondary hover:text-foreground hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:h-9"
+        >
+          <span className="relative flex size-2.5" aria-hidden="true">
+            <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-40" />
+            <span className="relative inline-flex size-2.5 rounded-full bg-emerald-500 ring-2 ring-emerald-500/20" />
+          </span>
+          <span className="tabular-nums">{onlineCount}</span>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent
+        side="bottom"
+        align="end"
+        sideOffset={8}
+        className="rounded-xl px-3 py-2 text-sm font-medium shadow-lg"
+      >
+        <span className="inline-flex items-center gap-2 whitespace-nowrap">
+          <span className="size-2.5 rounded-full bg-emerald-500" aria-hidden="true" />
+          当前在线 {onlineCount} 人
+        </span>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function NotificationMenu({
+  notifications,
+  unreadCount,
+  onMarkAllRead,
+  onMarkRead,
+}: {
+  notifications: DashboardNotification[];
+  unreadCount: number;
+  onMarkAllRead: () => void;
+  onMarkRead: (id: string) => void;
+}) {
+  const unreadLabel = unreadCount > 99 ? '99+' : String(unreadCount);
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={unreadCount > 0 ? `通知，${unreadCount} 条未读` : '通知'}
+          className="relative size-8 text-muted-foreground hover:bg-secondary hover:text-foreground md:size-9"
+        >
+          <Bell className="size-4" />
+          {unreadCount > 0 && (
+            <span className="absolute -right-1 -top-1 flex min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-semibold leading-4 text-destructive-foreground">
+              {unreadLabel}
+            </span>
+          )}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" sideOffset={8} className="w-80 border-border bg-card p-0 shadow-xl md:w-96">
+        <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+          <span className="text-sm font-semibold text-card-foreground">通知</span>
+          {unreadCount > 0 && (
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-brand transition-colors hover:bg-brand/10"
+              onClick={(event) => {
+                event.preventDefault();
+                onMarkAllRead();
+              }}
+            >
+              <CheckCheck className="size-3.5" />
+              全部已读
+            </button>
+          )}
+        </div>
+        {notifications.length > 0 ? (
+          <div className="max-h-96 overflow-y-auto p-2">
+            {notifications.map((notification) => {
+              const isUnread = !notification.readAt;
+              return (
+                <button
+                  key={notification.id}
+                  type="button"
+                  className="flex w-full gap-3 rounded-md px-3 py-3 text-left transition-colors hover:bg-secondary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    if (isUnread) {
+                      onMarkRead(notification.id);
+                    }
+                  }}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`mt-1.5 size-2 shrink-0 rounded-full ${
+                      isUnread ? 'bg-brand ring-4 ring-brand/10' : 'bg-muted-foreground/30'
+                    }`}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className={`block truncate text-sm ${isUnread ? 'font-semibold text-card-foreground' : 'text-muted-foreground'}`}>
+                      {notification.title}
+                    </span>
+                    {notification.body && (
+                      <span className="mt-1 line-clamp-2 block text-xs leading-5 text-muted-foreground">
+                        {notification.body}
+                      </span>
+                    )}
+                    <span className="mt-2 block text-xs text-muted-foreground/80">
+                      {formatNotificationTime(notification.createdAt)}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="px-4 py-10 text-center text-sm text-muted-foreground">
+            暂无通知
+          </div>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [authState, setAuthState] = useState<DashboardAuthState | null>(null);
@@ -103,8 +280,23 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [authChecked, setAuthChecked] = useState(false);
   const [isSwitchingOrganization, setIsSwitchingOrganization] = useState(false);
   const [showLogoutDialog, setShowLogoutDialog] = useState(false);
+  const [onlineCount, setOnlineCount] = useState(1);
+  const [notifications, setNotifications] = useState<DashboardNotification[]>([]);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   const router = useRouter();
   const pathname = usePathname();
+
+  const loadNotifications = useCallback(async () => {
+    const response = await fetch('/api/notifications', { cache: 'no-store' });
+    const data = await response.json() as NotificationsResponse;
+
+    if (!response.ok) {
+      throw new Error('Unable to load notifications');
+    }
+
+    setNotifications(Array.isArray(data.notifications) ? data.notifications : []);
+    setUnreadNotificationCount(normalizeUnreadCount(data.unreadCount));
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -145,6 +337,62 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       cancelled = true;
     };
   }, [pathname, router]);
+
+  useEffect(() => {
+    if (!authState) return undefined;
+
+    let cancelled = false;
+
+    async function loadOnlinePresence() {
+      try {
+        const response = await fetch('/api/dashboard/online', { cache: 'no-store' });
+        const data = await response.json() as OnlinePresenceResponse;
+
+        if (!cancelled && response.ok) {
+          setOnlineCount(normalizeOnlineCount(data.onlineCount));
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Unable to load online presence:', error);
+          setOnlineCount(1);
+        }
+      }
+    }
+
+    void loadOnlinePresence();
+    const intervalId = window.setInterval(loadOnlinePresence, 60_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [authState]);
+
+  useEffect(() => {
+    if (!authState) return undefined;
+
+    let cancelled = false;
+
+    async function refreshNotifications() {
+      try {
+        if (!cancelled) {
+          await loadNotifications();
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Unable to load notifications:', error);
+        }
+      }
+    }
+
+    void refreshNotifications();
+    const intervalId = window.setInterval(refreshNotifications, 60_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [authState, loadNotifications]);
 
   const visibleNavItems = useMemo(() => (
     navItems.filter((item) => !item.requiresAdmin || authState?.isSuperAdmin)
@@ -197,6 +445,56 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       setAuthState(null);
       router.replace('/login');
       router.refresh();
+    }
+  }
+
+  async function handleMarkAllNotificationsRead() {
+    try {
+      const response = await fetch('/api/notifications', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'mark_all_read' }),
+      });
+      const data = await response.json() as NotificationsResponse;
+
+      if (!response.ok) {
+        throw new Error('Unable to mark notifications as read');
+      }
+
+      setNotifications(Array.isArray(data.notifications) ? data.notifications : []);
+      setUnreadNotificationCount(normalizeUnreadCount(data.unreadCount));
+    } catch (error) {
+      console.error('Unable to mark notifications as read:', error);
+    }
+  }
+
+  async function handleMarkNotificationRead(notificationId: string) {
+    setNotifications((current) => current.map((notification) => (
+      notification.id === notificationId && !notification.readAt
+        ? { ...notification, readAt: new Date().toISOString() }
+        : notification
+    )));
+    setUnreadNotificationCount((current) => Math.max(0, current - 1));
+
+    try {
+      const response = await fetch('/api/notifications', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'mark_read', ids: [notificationId] }),
+      });
+      const data = await response.json() as NotificationsResponse;
+
+      if (!response.ok) {
+        throw new Error('Unable to mark notification as read');
+      }
+
+      setNotifications(Array.isArray(data.notifications) ? data.notifications : []);
+      setUnreadNotificationCount(normalizeUnreadCount(data.unreadCount));
+    } catch (error) {
+      console.error('Unable to mark notification as read:', error);
+      void loadNotifications().catch((refreshError) => {
+        console.error('Unable to refresh notifications:', refreshError);
+      });
     }
   }
 
@@ -346,6 +644,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <span className="truncate text-sm text-muted-foreground">{dashboardTitle(pathname)}</span>
           </div>
           <div className="flex min-w-0 items-center gap-2">
+            <NotificationMenu
+              notifications={notifications}
+              unreadCount={unreadNotificationCount}
+              onMarkAllRead={handleMarkAllNotificationsRead}
+              onMarkRead={handleMarkNotificationRead}
+            />
+            <OnlinePresenceIndicator count={onlineCount} />
             <AnimatedThemeToggler variant="square" className="size-8 md:size-9" />
             <Button
               variant="ghost"

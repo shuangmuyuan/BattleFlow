@@ -381,13 +381,27 @@ function AssistantThinkingIndicator() {
     <div
       role="status"
       aria-live="polite"
-      className={cn(
-        'group w-fit rounded-full border border-border/60 bg-muted/45 text-sm shadow-sm transition-colors',
-      )}
+      className="w-fit text-sm font-medium text-muted-foreground"
     >
-      <AnimatedShinyText className="items-center justify-center px-4 py-1.5 font-medium">
+      <AnimatedShinyText className="items-center justify-center">
         正在思考
       </AnimatedShinyText>
+    </div>
+  );
+}
+
+function AssistantProcessingTimer({ seconds }: { seconds: number }) {
+  return (
+    <div className="w-fit text-sm font-medium text-muted-foreground" aria-live="polite">
+      已处理 {Math.max(0, seconds)}s
+    </div>
+  );
+}
+
+function AssistantStoppedMessage({ content }: { content: string }) {
+  return (
+    <div className="w-full border-b border-border/60 pb-4 pt-1" aria-live="polite">
+      <p className="text-lg font-semibold text-muted-foreground sm:text-xl">{content}</p>
     </div>
   );
 }
@@ -539,7 +553,8 @@ function resolveWorkflowTemplateSkills(template: WorkflowTemplate, skillOptions:
 
 const chatErrorFallbackContent = '抱歉，对话出现了问题，请重试。';
 const chatErrorFallbackPrefix = '抱歉，对话出现了问题';
-const chatCancelledContent = '已终止本次生成。';
+const chatCancelledLegacyContent = '已终止本次生成。';
+const chatCancelledContentPattern = /^你在\s+\d+s\s+后停止了$/;
 const claudeRuntimeSkillMisfireMarkers = [
   '/<skill-name>',
   'system-reminder',
@@ -564,13 +579,29 @@ function getLastAssistantMessage(messages: ChatMessage[]) {
   return [...messages].reverse().find((message) => message.role === 'assistant');
 }
 
+function getChatCancelledContent(seconds: number) {
+  const displaySeconds = Math.max(1, Math.round(seconds));
+  return `你在 ${displaySeconds}s 后停止了`;
+}
+
+function getChatCancelledDisplayContent(content: string) {
+  const text = content.trim();
+  if (chatCancelledContentPattern.test(text)) return text;
+  if (text === chatCancelledLegacyContent) return '你已停止生成';
+  return null;
+}
+
+function isChatCancelledContent(content: string) {
+  return getChatCancelledDisplayContent(content) !== null;
+}
+
 function getLastConfirmableAssistantMessage(messages: ChatMessage[]) {
   const lastAssistantMessage = getLastAssistantMessage(messages);
   const content = lastAssistantMessage?.content.trim() || '';
   if (
     !content
     || content.startsWith(chatErrorFallbackPrefix)
-    || content.startsWith(chatCancelledContent)
+    || isChatCancelledContent(content)
   ) return undefined;
   return lastAssistantMessage;
 }
@@ -602,7 +633,7 @@ function extractAssistantQuickReplyQuestions(content: string): AssistantQuickRep
   if (
     !text
     || text.startsWith(chatErrorFallbackPrefix)
-    || text.startsWith(chatCancelledContent)
+    || isChatCancelledContent(text)
   ) {
     return [];
   }
@@ -1259,6 +1290,8 @@ export default function WorkflowsPage() {
   const [chatInput, setChatInput] = useState('');
   const [chatInputByStepId, setChatInputByStepId] = useState<Record<string, string>>({});
   const [streamingByStepId, setStreamingByStepId] = useState<Record<string, boolean>>({});
+  const [processingStartedAtByStepId, setProcessingStartedAtByStepId] = useState<Record<string, number>>({});
+  const [processingElapsedSecondsByStepId, setProcessingElapsedSecondsByStepId] = useState<Record<string, number>>({});
   const [expandedAssistantDocumentIds, setExpandedAssistantDocumentIds] = useState<Record<string, boolean>>({});
   const [chatPersistenceByStepId, setChatPersistenceByStepId] = useState<Record<string, ChatPersistenceStatus>>({});
   const [confirmingStepId, setConfirmingStepId] = useState<string | null>(null);
@@ -1317,6 +1350,37 @@ export default function WorkflowsPage() {
   useEffect(() => {
     activeWorkflowRef.current = activeWorkflow;
   }, [activeWorkflow]);
+
+  useEffect(() => {
+    const activeEntries = Object.entries(processingStartedAtByStepId)
+      .filter(([stepId]) => streamingByStepId[stepId]);
+    if (activeEntries.length === 0) return undefined;
+
+    const updateElapsedSeconds = () => {
+      const now = Date.now();
+      setProcessingElapsedSecondsByStepId((prev) => {
+        let changed = false;
+        const next = { ...prev };
+
+        activeEntries.forEach(([stepId, startedAt]) => {
+          const elapsedSeconds = Math.max(0, Math.floor((now - startedAt) / 1000));
+          if (next[stepId] !== elapsedSeconds) {
+            next[stepId] = elapsedSeconds;
+            changed = true;
+          }
+        });
+
+        return changed ? next : prev;
+      });
+    };
+
+    updateElapsedSeconds();
+    const intervalId = window.setInterval(updateElapsedSeconds, 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [processingStartedAtByStepId, streamingByStepId]);
 
   useEffect(() => {
     if (!draggingWorkflowStepId) return undefined;
@@ -2219,6 +2283,9 @@ export default function WorkflowsPage() {
     const controller = new AbortController();
     activeChatRequestByStepIdRef.current[currentStep.id] = controller;
     let assistantContent = '';
+    const requestStartedAt = Date.now();
+    setProcessingStartedAtByStepId((prev) => ({ ...prev, [currentStep.id]: requestStartedAt }));
+    setProcessingElapsedSecondsByStepId((prev) => ({ ...prev, [currentStep.id]: 0 }));
     setStreamingByStepId((prev) => ({ ...prev, [currentStep.id]: true }));
 
     try {
@@ -2313,9 +2380,10 @@ export default function WorkflowsPage() {
       setStepChatPersistenceStatus(currentStep.id, savedWorkflow ? 'saved' : 'failed');
     } catch (error) {
       if (isAbortError(error)) {
+        const elapsedSeconds = (Date.now() - requestStartedAt) / 1000;
         const cancelledMessages: ChatMessage[] = [
           ...visibleMessages,
-          { role: 'assistant', content: chatCancelledContent },
+          { role: 'assistant', content: getChatCancelledContent(elapsedSeconds) },
         ];
         updateVisibleChatMessagesForStep(currentStep.id, cancelledMessages);
         const workflowWithCancelledMessages = saveStepChatMessages(
@@ -2351,6 +2419,18 @@ export default function WorkflowsPage() {
       }
       setStreamingByStepId((prev) => {
         if (!prev[currentStep.id]) return prev;
+        const next = { ...prev };
+        delete next[currentStep.id];
+        return next;
+      });
+      setProcessingStartedAtByStepId((prev) => {
+        if (!(currentStep.id in prev)) return prev;
+        const next = { ...prev };
+        delete next[currentStep.id];
+        return next;
+      });
+      setProcessingElapsedSecondsByStepId((prev) => {
+        if (!(currentStep.id in prev)) return prev;
         const next = { ...prev };
         delete next[currentStep.id];
         return next;
@@ -2896,6 +2976,18 @@ export default function WorkflowsPage() {
     });
   };
 
+  const handleRemoveSelectedSkill = (skillId: string) => {
+    setSelectedSkills((prev) => prev.filter((skill) => skill.id !== skillId));
+    setSelectedSkillModes((prev) => {
+      if (!(skillId in prev)) return prev;
+
+      const next = { ...prev };
+      delete next[skillId];
+      return next;
+    });
+    resetSelectedSkillDrag();
+  };
+
   const applyWorkflowTemplate = (template: WorkflowTemplate) => {
     const { matchedSkills, missingSteps, modes } = resolveWorkflowTemplateSkills(template, workflowSkillOptions);
 
@@ -3187,12 +3279,6 @@ export default function WorkflowsPage() {
         {!openedWorkspace ? (
           <div className="min-h-0 flex-1 overflow-auto px-4 py-3 md:px-5 md:py-4">
             <div className="flex w-full flex-col gap-3">
-              <div className="flex justify-end border-b border-border/40 pb-2">
-                <StatusBadge tone="neutral" className="w-fit text-xs">
-                  共 {workspaces.length} 个空间
-                </StatusBadge>
-              </div>
-
               {workspaces.length === 0 ? (
                 <ProductEmptyState
                   icon={<Plus />}
@@ -3269,11 +3355,12 @@ export default function WorkflowsPage() {
                                 </p>
                               )}
                             </div>
-                            <div className="flex shrink-0 items-center gap-1.5">
-                              <StatusBadge tone="neutral" className="text-xs">
-                                {count} 个流程
-                              </StatusBadge>
-                            </div>
+                            <time
+                              className="shrink-0 text-xs text-muted-foreground"
+                              dateTime={latestUpdatedAt}
+                            >
+                              {formatSnapshotTime(latestUpdatedAt)}
+                            </time>
                           </div>
 
                           <div className="grid grid-cols-3 overflow-hidden rounded-lg border border-border/50 bg-muted/20 text-center text-xs">
@@ -3290,10 +3377,6 @@ export default function WorkflowsPage() {
                               <p className="mt-0.5 text-muted-foreground">已完成</p>
                             </div>
                           </div>
-
-                          <p className="mt-auto truncate text-xs text-muted-foreground">
-                            最近更新：{formatSnapshotTime(latestUpdatedAt)}
-                          </p>
                         </BentoCard>
                       );
                     })}
@@ -3305,12 +3388,6 @@ export default function WorkflowsPage() {
         ) : (
           <div className="min-h-0 flex-1 overflow-auto px-4 py-3 md:px-5 md:py-4">
             <div className="flex w-full flex-col gap-3">
-              <div className="flex justify-end border-b border-border/40 pb-2">
-                <StatusBadge tone="brand" className="w-fit text-xs">
-                  {workspaceWorkflows.length} 个工作流
-                </StatusBadge>
-              </div>
-
               <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                 <Card className={`gap-0 py-0 ${appCardClassName}`}>
                   <CardContent className="p-3">
@@ -3541,24 +3618,39 @@ export default function WorkflowsPage() {
                             </Badge>
                             <span className="truncate text-sm font-medium">{skill.name}</span>
                           </div>
-                          <div className="flex items-center rounded-md border border-border/50 p-0.5">
+                          <div className="flex shrink-0 items-center gap-2">
+                            <div className="flex items-center rounded-md border border-border/50 p-0.5">
+                              <Button
+                                type="button"
+                                variant={(selectedSkillModes[skill.id] || 'serial') === 'serial' ? 'default' : 'ghost'}
+                                size="sm"
+                                className="h-7 px-2 text-xs"
+                                onClick={() => setSelectedSkillModes((prev) => ({ ...prev, [skill.id]: 'serial' }))}
+                              >
+                                串行
+                              </Button>
+                              <Button
+                                type="button"
+                                variant={(selectedSkillModes[skill.id] || 'serial') === 'parallel' ? 'default' : 'ghost'}
+                                size="sm"
+                                className="h-7 px-2 text-xs"
+                                onClick={() => setSelectedSkillModes((prev) => ({ ...prev, [skill.id]: 'parallel' }))}
+                              >
+                                并行
+                              </Button>
+                            </div>
                             <Button
                               type="button"
-                              variant={(selectedSkillModes[skill.id] || 'serial') === 'serial' ? 'default' : 'ghost'}
-                              size="sm"
-                              className="h-7 px-2 text-xs"
-                              onClick={() => setSelectedSkillModes((prev) => ({ ...prev, [skill.id]: 'serial' }))}
+                              variant="ghost"
+                              size="icon"
+                              aria-label={`移除 ${skill.name}`}
+                              className="size-8 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                              onClick={() => handleRemoveSelectedSkill(skill.id)}
+                              onMouseDown={(event) => event.stopPropagation()}
+                              onPointerDown={(event) => event.stopPropagation()}
+                              onDragStart={(event) => event.preventDefault()}
                             >
-                              串行
-                            </Button>
-                            <Button
-                              type="button"
-                              variant={(selectedSkillModes[skill.id] || 'serial') === 'parallel' ? 'default' : 'ghost'}
-                              size="sm"
-                              className="h-7 px-2 text-xs"
-                              onClick={() => setSelectedSkillModes((prev) => ({ ...prev, [skill.id]: 'parallel' }))}
-                            >
-                              并行
+                              <Trash2 className="size-4" />
                             </Button>
                           </div>
                         </div>
@@ -3588,15 +3680,12 @@ export default function WorkflowsPage() {
           <DialogContent>
             <DialogHeader>
               <DialogTitle>{editingWorkspaceId ? '编辑工作空间' : '新建工作空间'}</DialogTitle>
-              <DialogDescription>
-                {editingWorkspaceId ? '更新空间名称和说明，不影响空间内已有工作流。' : '工作流必须创建在某个工作空间内，便于按项目归档。'}
-              </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 mt-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium">空间名称</label>
                 <Input
-                  placeholder="如：搜索体验优化专项"
+                  placeholder=""
                   value={newWorkspaceName}
                   onChange={(event) => setNewWorkspaceName(event.target.value)}
                 />
@@ -3604,7 +3693,7 @@ export default function WorkflowsPage() {
               <div className="space-y-2">
                 <label className="text-sm font-medium">空间说明</label>
                 <Input
-                  placeholder="简要说明空间对应的项目范围"
+                  placeholder=""
                   value={newWorkspaceDesc}
                   onChange={(event) => setNewWorkspaceDesc(event.target.value)}
                 />
@@ -3873,6 +3962,9 @@ export default function WorkflowsPage() {
   const visibleWorkflowSteps = getVisibleSteps(activeWorkflow);
   const currentStep = visibleWorkflowSteps[activeStepIndex] || visibleWorkflowSteps[0];
   const isStreaming = currentStep ? Boolean(streamingByStepId[currentStep.id]) : false;
+  const currentProcessingElapsedSeconds = currentStep
+    ? processingElapsedSecondsByStepId[currentStep.id] || 0
+    : 0;
   const currentStepDemoHandoff = currentStep ? getStepDemoHandoff(activeWorkflow, currentStep.id) : undefined;
   const currentStepDemoLoading = currentStep ? Boolean(demoHandoffLoadingByStepId[currentStep.id]) : false;
   const currentStepHasVerifiedOutput = Boolean(
@@ -5135,22 +5227,37 @@ export default function WorkflowsPage() {
           ) : (
             <div className="w-full min-w-0 max-w-full space-y-4 overflow-x-hidden">
               {chatMessages.map((msg, idx) => {
-                const renderDocumentCard = msg.role === 'assistant' && isAssistantDocumentLike(msg.content);
+                const stoppedMessageContent = msg.role === 'assistant'
+                  ? getChatCancelledDisplayContent(msg.content)
+                  : null;
+                const renderDocumentCard = msg.role === 'assistant'
+                  && !stoppedMessageContent
+                  && isAssistantDocumentLike(msg.content);
                 const renderThinkingIndicator = isStreaming
                   && idx === lastAssistantMessageIndex
                   && msg.role === 'assistant'
                   && !msg.content.trim();
-                const quickReplyQuestions = msg.role === 'assistant' && idx === lastAssistantMessageIndex && !isStreaming
+                const renderProcessingTimer = isStreaming
+                  && idx === lastAssistantMessageIndex
+                  && msg.role === 'assistant';
+                const quickReplyQuestions = msg.role === 'assistant' && idx === lastAssistantMessageIndex && !isStreaming && !stoppedMessageContent
                   ? extractAssistantQuickReplyQuestions(msg.content)
                   : [];
 
                 return (
                   <div
                     key={idx}
-                    className={`flex w-full min-w-0 max-w-full ${msg.role === 'user' ? 'justify-end pl-6 sm:pl-10' : 'justify-start pr-6 sm:pr-10'}`}
+                    className={cn(
+                      'flex w-full min-w-0 max-w-full',
+                      msg.role === 'user' ? 'justify-end pl-6 sm:pl-10' : 'justify-start',
+                      msg.role !== 'user' && !stoppedMessageContent ? 'pr-6 sm:pr-10' : '',
+                    )}
                   >
                     {renderDocumentCard ? (
                       <div className="flex min-w-0 max-w-full flex-col gap-2 items-start md:max-w-[80%] xl:max-w-2xl">
+                        {renderProcessingTimer && (
+                          <AssistantProcessingTimer seconds={currentProcessingElapsedSeconds} />
+                        )}
                         {renderAssistantDocumentCard(msg.content, idx)}
                         {quickReplyQuestions.length > 0 && (
                           <AssistantQuickReplyPanel
@@ -5163,23 +5270,41 @@ export default function WorkflowsPage() {
                         )}
                       </div>
                     ) : (
-                      <div className={`flex min-w-0 max-w-full flex-col gap-2 ${msg.role === 'user' ? 'items-end md:max-w-[80%] xl:max-w-2xl' : 'items-start md:max-w-[80%] xl:max-w-2xl'}`}>
-                        {renderThinkingIndicator ? (
-                          <AssistantThinkingIndicator />
+                      <div
+                        className={cn(
+                          'flex min-w-0 max-w-full flex-col gap-2',
+                          msg.role === 'user'
+                            ? 'items-end md:max-w-[80%] xl:max-w-2xl'
+                            : stoppedMessageContent
+                              ? 'w-full items-stretch'
+                              : 'items-start md:max-w-[80%] xl:max-w-2xl',
+                        )}
+                      >
+                        {stoppedMessageContent ? (
+                          <AssistantStoppedMessage content={stoppedMessageContent} />
                         ) : (
-                          <div
-                            className={`w-fit min-w-0 max-w-full overflow-hidden break-words rounded-lg p-3 text-sm [overflow-wrap:anywhere] ${
-                              msg.role === 'user'
-                                ? 'bg-primary text-primary-foreground'
-                                : 'bg-muted/50 border border-border/40'
-                            }`}
-                          >
-                            {msg.role === 'assistant' ? (
-                              <CompactMarkdown content={msg.content} />
-                            ) : (
-                              <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.content}</div>
+                          <>
+                            {renderProcessingTimer && (
+                              <AssistantProcessingTimer seconds={currentProcessingElapsedSeconds} />
                             )}
-                          </div>
+                            {renderThinkingIndicator ? (
+                              <AssistantThinkingIndicator />
+                            ) : (
+                              <div
+                                className={`w-fit min-w-0 max-w-full overflow-hidden break-words rounded-lg p-3 text-sm [overflow-wrap:anywhere] ${
+                                  msg.role === 'user'
+                                    ? 'bg-primary text-primary-foreground'
+                                    : 'bg-muted/50 border border-border/40'
+                                }`}
+                              >
+                                {msg.role === 'assistant' ? (
+                                  <CompactMarkdown content={msg.content} />
+                                ) : (
+                                  <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.content}</div>
+                                )}
+                              </div>
+                            )}
+                          </>
                         )}
                         {quickReplyQuestions.length > 0 && (
                           <AssistantQuickReplyPanel
@@ -5197,7 +5322,10 @@ export default function WorkflowsPage() {
               })}
               {isStreaming && !hasStreamingAssistantPlaceholder && (
                 <div className="flex justify-start">
-                  <AssistantThinkingIndicator />
+                  <div className="flex flex-col items-start gap-2">
+                    <AssistantProcessingTimer seconds={currentProcessingElapsedSeconds} />
+                    <AssistantThinkingIndicator />
+                  </div>
                 </div>
               )}
               <div ref={chatEndRef} />

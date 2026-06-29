@@ -17,8 +17,9 @@
     "db:knowledge:init": "node scripts/apply-postgres-migration.mjs scripts/database/001_knowledge_store.sql",
     "db:accounts:init": "node scripts/apply-postgres-migration.mjs scripts/database/002_account_org_permissions.sql",
     "db:sso:init": "node scripts/apply-postgres-migration.mjs scripts/database/002_sso_users.sql",
+    "db:notifications:init": "node scripts/apply-postgres-migration.mjs scripts/database/004_notifications.sql",
     "db:resources:migrate": "node scripts/migrate-resource-metadata.mjs",
-    "db:postgres:init": "pnpm db:knowledge:init && pnpm db:accounts:init && pnpm db:sso:init",
+    "db:postgres:init": "pnpm db:knowledge:init && pnpm db:accounts:init && pnpm db:sso:init && pnpm db:notifications:init",
     "validate": "pnpm run --parallel '/^(ts-check|lint:build|check:overlays|check:responsive)$/'"
   },
   "dependencies": {

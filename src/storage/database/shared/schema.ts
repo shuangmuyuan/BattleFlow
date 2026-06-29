@@ -78,6 +78,23 @@ export const battleflowUsers = pgTable("battleflow_users", {
   index("battleflow_users_department_idx").on(table.department),
 ]);
 
+export const appNotifications = pgTable("app_notifications", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()::text`),
+  recipient_user_id: varchar("recipient_user_id", { length: 36 }).references(() => users.id, { onDelete: "cascade" }),
+  recipient_battleflow_user_id: varchar("recipient_battleflow_user_id", { length: 36 }).references(() => battleflowUsers.id, { onDelete: "cascade" }),
+  actor_user_id: varchar("actor_user_id", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
+  notification_type: varchar("notification_type", { length: 80 }).notNull(),
+  title: varchar("title", { length: 160 }).notNull(),
+  body: text("body"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default(sql`'{}'::jsonb`).notNull(),
+  read_at: timestamp("read_at", { withTimezone: true }),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("app_notifications_user_idx").on(table.recipient_user_id, table.created_at),
+  index("app_notifications_battleflow_user_idx").on(table.recipient_battleflow_user_id, table.created_at),
+  index("app_notifications_type_idx").on(table.notification_type),
+]);
+
 // ============================================
 // Organizations & Members
 // ============================================

@@ -28,6 +28,19 @@ interface DashboardStats {
   completedPrds: number;
 }
 
+interface DashboardStatsResponse {
+  skillCount?: number;
+  workflowCount?: number;
+  activeWorkflowCount?: number;
+  knowledgeBaseCount?: number;
+  completedPrdCount?: number;
+  recentWorkflows?: Array<{ id: string; name: string; status: string; updated_at?: string }>;
+  recentSkills?: Array<{ id: string; name: string; scope?: string; version?: string }>;
+}
+
+const RECENT_LIST_LIMIT = 5;
+const recentListViewportClassName = 'flex max-h-[19.5rem] min-h-0 flex-col gap-2 overflow-y-auto pr-2 [scrollbar-gutter:stable]';
+
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats>({
     totalSkills: 0,
@@ -50,19 +63,24 @@ export default function DashboardPage() {
           fetch('/api/dashboard/stats', { cache: 'no-store' }),
           fetch('/api/skills', { cache: 'no-store' }),
         ]);
-        const statsData = await statsRes.json();
+        const statsData = await statsRes.json() as DashboardStatsResponse;
         const skillsData = await skillsRes.json();
         const workflows = Array.isArray(statsData.recentWorkflows) ? statsData.recentWorkflows : [];
-        const skills = Array.isArray(skillsData.skills) ? skillsData.skills : [];
+        const skills = Array.isArray(statsData.recentSkills)
+          ? statsData.recentSkills
+          : Array.isArray(skillsData.skills)
+            ? skillsData.skills
+            : [];
         if (!ignore) {
           setRecentWorkflows(workflows);
-          setRecentSkills(skills.slice(0, 4));
+          setRecentSkills(skills.slice(0, RECENT_LIST_LIMIT));
           setStats({
-            totalSkills: statsData.skillCount || skills.length || 0,
-            totalWorkflows: statsData.workflowCount || workflows.length || 0,
-            activeWorkflows: workflows.filter((workflow: { status?: string }) => workflow.status === 'in_progress').length,
-            totalKnowledgeBases: statsData.knowledgeBaseCount || 0,
-            completedPrds: workflows.filter((workflow: { status?: string }) => workflow.status === 'completed').length,
+            totalSkills: statsData.skillCount ?? skills.length,
+            totalWorkflows: statsData.workflowCount ?? workflows.length,
+            activeWorkflows: statsData.activeWorkflowCount
+              ?? workflows.filter((workflow) => workflow.status === 'in_progress').length,
+            totalKnowledgeBases: statsData.knowledgeBaseCount ?? 0,
+            completedPrds: statsData.completedPrdCount ?? 0,
           });
         }
       } finally {
@@ -76,7 +94,8 @@ export default function DashboardPage() {
     };
   }, []);
 
-  const visibleRecentWorkflows = recentWorkflows.slice(0, 3);
+  const visibleRecentWorkflows = recentWorkflows.slice(0, RECENT_LIST_LIMIT);
+  const visibleRecentSkills = recentSkills.slice(0, RECENT_LIST_LIMIT);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto p-3 md:p-4">
@@ -207,8 +226,8 @@ export default function DashboardPage() {
               </Button>
             </div>
           </CardHeader>
-          <CardContent className="min-h-0 overflow-hidden px-4 pb-4 pt-0">
-            <div className="flex min-h-0 flex-col gap-2 overflow-hidden">
+          <CardContent className="min-h-0 flex-1 overflow-hidden px-4 pb-4 pt-0">
+            <div className={recentListViewportClassName}>
               {visibleRecentWorkflows.length === 0 && !loading ? (
                 <ProductEmptyState
                   icon={<Play />}
@@ -251,8 +270,8 @@ export default function DashboardPage() {
               </Button>
             </div>
           </CardHeader>
-          <CardContent className="min-h-0 overflow-hidden px-4 pb-4 pt-0">
-            <div className="flex min-h-0 flex-col gap-2 overflow-hidden">
+          <CardContent className="min-h-0 flex-1 overflow-hidden px-4 pb-4 pt-0">
+            <div className={recentListViewportClassName}>
               {recentSkills.length === 0 && !loading ? (
                 <ProductEmptyState
                   icon={<FileCode2 />}
@@ -260,7 +279,7 @@ export default function DashboardPage() {
                   description="导入或发布 Skill 后，常用能力会显示在这里。"
                   className="min-h-32 border-0 bg-muted/30"
                 />
-              ) : recentSkills.map((skill) => (
+              ) : visibleRecentSkills.map((skill) => (
                 <div key={skill.id} className="flex min-w-0 items-center justify-between gap-3 rounded-lg p-2.5 transition-colors hover:bg-muted/50">
                   <div className="flex min-w-0 items-center gap-3">
                     <FileCode2 className="h-4 w-4 text-muted-foreground" />

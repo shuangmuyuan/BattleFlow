@@ -1,4 +1,5 @@
 import type { PoolClient, QueryResultRow } from 'pg';
+import { createNotification } from '../notifications';
 import { writeAuditEvent } from '../organization-management';
 import { getPostgresPool, queryPostgres } from '../../storage/database/postgres-client';
 import { AuthError, type AuthUser } from './types';
@@ -307,12 +308,9 @@ export async function updatePlatformUserAdmin(input: {
   const client = await getPostgresPool().connect();
   try {
     await client.query('BEGIN');
-    const result = await client.query<PlatformUserRow>(
+    const currentResult = await client.query<PlatformUserRow>(
       `
-        UPDATE battleflow_users
-        SET is_admin = $2, updated_at = now()
-        WHERE id = $1
-        RETURNING
+        SELECT
           id,
           sso_id,
           username,
@@ -326,12 +324,57 @@ export async function updatePlatformUserAdmin(input: {
           is_admin,
           created_at,
           updated_at
+        FROM battleflow_users
+        WHERE id = $1
+        FOR UPDATE
       `,
-      [targetUserId, input.isAdmin],
+      [targetUserId],
     );
-    const user = result.rows[0];
-    if (!user) {
+    const currentUser = currentResult.rows[0];
+    if (!currentUser) {
       throw new SuperAdminManagementError('Target user not found', 404);
+    }
+
+    let user = currentUser;
+    if (currentUser.is_admin !== input.isAdmin) {
+      const result = await client.query<PlatformUserRow>(
+        `
+          UPDATE battleflow_users
+          SET is_admin = $2, updated_at = now()
+          WHERE id = $1
+          RETURNING
+            id,
+            sso_id,
+            username,
+            display_name,
+            email,
+            department,
+            department_id,
+            title,
+            mobile,
+            is_active,
+            is_admin,
+            created_at,
+            updated_at
+        `,
+        [targetUserId, input.isAdmin],
+      );
+      user = result.rows[0] ?? currentUser;
+
+      await createNotification({
+        recipient: { kind: 'battleflow', userId: targetUserId },
+        actorUserId: input.actorUserId,
+        type: input.isAdmin ? 'platform_admin.granted' : 'platform_admin.revoked',
+        title: input.isAdmin ? '你已被设置为管理员' : '你的管理员权限已被取消',
+        body: input.isAdmin
+          ? '你现在可以进入管理页面并配置平台用户权限。'
+          : '你将不再拥有平台管理页面的管理员权限。',
+        metadata: {
+          targetEmail: user.email,
+          targetUsername: user.username,
+          targetSsoId: user.sso_id,
+        },
+      }, client);
     }
 
     await writePlatformAudit({
@@ -342,6 +385,7 @@ export async function updatePlatformUserAdmin(input: {
         targetEmail: user.email,
         targetUsername: user.username,
         targetSsoId: user.sso_id,
+        changed: currentUser.is_admin !== input.isAdmin,
       },
     }, client);
 
@@ -353,6 +397,24 @@ export async function updatePlatformUserAdmin(input: {
   } finally {
     client.release();
   }
+}
+
+async function fetchPlatformAdminState(
+  client: PoolClient,
+  userId: string,
+): Promise<{ enabled: boolean; revoked_at: Date | string | null } | null> {
+  const result = await client.query<{ enabled: boolean; revoked_at: Date | string | null }>(
+    `
+      SELECT enabled, revoked_at
+      FROM platform_admins
+      WHERE user_id = $1
+        AND role = 'super_admin'
+      LIMIT 1
+      FOR UPDATE
+    `,
+    [userId],
+  );
+  return result.rows[0] ?? null;
 }
 
 export async function grantSuperAdmin(input: {
@@ -384,6 +446,9 @@ export async function grantSuperAdmin(input: {
       throw new SuperAdminManagementError('Target user not found');
     }
 
+    const currentAdmin = await fetchPlatformAdminState(client, user.id);
+    const alreadyEnabled = Boolean(currentAdmin?.enabled && !currentAdmin.revoked_at);
+
     await client.query(
       `
         INSERT INTO platform_admins (user_id, role, enabled, granted_by, granted_at, revoked_by, revoked_at)
@@ -400,11 +465,28 @@ export async function grantSuperAdmin(input: {
       [user.id, input.actorUserId],
     );
 
+    if (!alreadyEnabled) {
+      await createNotification({
+        recipient: { kind: 'account', userId: user.id },
+        actorUserId: input.actorUserId,
+        type: 'platform_super_admin.granted',
+        title: '你已被授予超级管理员权限',
+        body: '你现在拥有平台最高管理权限，可以进入管理页面配置用户和平台权限。',
+        metadata: {
+          targetEmail: user.email,
+        },
+      }, client);
+    }
+
     await writePlatformAudit({
       actorUserId: input.actorUserId,
       action: 'platform.super_admin.grant',
       targetUserId: user.id,
-      metadata: { targetEmailProvided: Boolean(targetEmail), targetUserIdProvided: Boolean(targetUserId) },
+      metadata: {
+        targetEmailProvided: Boolean(targetEmail),
+        targetUserIdProvided: Boolean(targetUserId),
+        changed: !alreadyEnabled,
+      },
     }, client);
 
     await client.query('COMMIT');
@@ -455,10 +537,26 @@ export async function revokeSuperAdmin(input: {
       [input.targetUserId, input.actorUserId],
     );
 
+    if (targetRow.enabled) {
+      await createNotification({
+        recipient: { kind: 'account', userId: input.targetUserId },
+        actorUserId: input.actorUserId,
+        type: 'platform_super_admin.revoked',
+        title: '你的超级管理员权限已被撤销',
+        body: '你将不再拥有平台最高管理权限。',
+        metadata: {
+          targetUserId: input.targetUserId,
+        },
+      }, client);
+    }
+
     await writePlatformAudit({
       actorUserId: input.actorUserId,
       action: 'platform.super_admin.revoke',
       targetUserId: input.targetUserId,
+      metadata: {
+        changed: targetRow.enabled,
+      },
     }, client);
 
     await client.query('COMMIT');
