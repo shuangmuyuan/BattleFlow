@@ -54,6 +54,17 @@ interface SearchResult {
   source: string;
 }
 
+function formatKnowledgeUpdatedAt(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '未知时间';
+
+  const pad = (part: number) => String(part).padStart(2, '0');
+  return [
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+    `${pad(date.getHours())}:${pad(date.getMinutes())}`,
+  ].join(' ');
+}
+
 export default function KnowledgePage() {
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -307,66 +318,79 @@ export default function KnowledgePage() {
                 )}
               />
             ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {knowledgeBases.map((kb) => (
-                <Card key={kb.id} className={appCardClassName}>
-                  <CardHeader className="pb-3">
-                    <div className="flex min-w-0 items-start justify-between gap-3">
-                      <div className="flex min-w-0 items-center gap-2">
-                        {kb.source_type === 'builtin' ? (
-                          <Database className="h-4 w-4 text-brand" />
-                        ) : (
-                          <ExternalLink className="h-4 w-4 text-muted-foreground" />
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {knowledgeBases.map((kb) => {
+                  const updatedAtLabel = formatKnowledgeUpdatedAt(kb.updated_at);
+
+                  return (
+                    <Card key={kb.id} className={`${appCardClassName} gap-4 py-5`}>
+                      <CardHeader className="px-5 pb-2">
+                        <div className="flex min-w-0 items-start justify-between gap-3">
+                          <div className="flex min-w-0 items-center gap-2">
+                            {kb.source_type === 'builtin' ? (
+                              <Database className="h-4 w-4 text-brand" />
+                            ) : (
+                              <ExternalLink className="h-4 w-4 text-muted-foreground" />
+                            )}
+                            <CardTitle className="truncate text-base">{kb.name}</CardTitle>
+                          </div>
+                          <StatusBadge className="shrink-0" tone={kb.source_type === 'builtin' ? 'brand' : 'neutral'}>
+                            {kb.source_type === 'builtin' ? '内置' : '外部'}
+                          </StatusBadge>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <Badge variant="outline" className="gap-1.5">
+                            {kb.visibility === 'public' ? <Users className="h-3 w-3" /> : <LockKeyhole className="h-3 w-3" />}
+                            {kb.visibility === 'public' ? '公共层' : '私有层'}
+                          </Badge>
+                        </div>
+                        {kb.description?.trim() ? (
+                          <p className="line-clamp-2 text-sm leading-5 text-muted-foreground">{kb.description}</p>
+                        ) : null}
+                      </CardHeader>
+                      <CardContent className="px-5">
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
+                          <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap">
+                            <BookOpen className="h-3.5 w-3.5" />
+                            {kb.document_count} 篇文档
+                          </span>
+                          <time
+                            className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap"
+                            dateTime={kb.updated_at}
+                            title={kb.updated_at}
+                          >
+                            <Clock className="h-3.5 w-3.5 shrink-0" />
+                            <span className="truncate">更新于 {updatedAtLabel}</span>
+                          </time>
+                        </div>
+                        <div className="mt-4 grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="min-w-0 gap-1.5"
+                            onClick={() => {
+                              setSelectedKb(kb);
+                              setUploadDialogOpen(true);
+                            }}
+                          >
+                            <FileUp className="h-3 w-3" />
+                            上传文件
+                          </Button>
+                          <Button variant="outline" size="sm" className="gap-1">
+                            <Search className="h-3 w-3" />
+                            检索
+                          </Button>
+                        </div>
+                        {kb.source_type === 'external' && kb.connection_config && (
+                          <p className="text-xs text-muted-foreground mt-2 truncate">
+                            连接: {kb.connection_config.url}
+                          </p>
                         )}
-                        <CardTitle className="truncate text-base">{kb.name}</CardTitle>
-                      </div>
-                      <StatusBadge className="shrink-0" tone={kb.source_type === 'builtin' ? 'brand' : 'neutral'}>
-                        {kb.source_type === 'builtin' ? '内置' : '外部'}
-                      </StatusBadge>
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <Badge variant="outline" className="gap-1.5">
-                        {kb.visibility === 'public' ? <Users className="h-3 w-3" /> : <LockKeyhole className="h-3 w-3" />}
-                        {kb.visibility === 'public' ? '公共层' : '私有层'}
-                      </Badge>
-                    </div>
-                    <p className="text-sm text-muted-foreground">{kb.description}</p>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="flex items-center justify-between text-xs text-muted-foreground">
-                      <span>{kb.document_count} 篇文档</span>
-                      <span className="flex items-center gap-1">
-                        <Clock className="h-3 w-3" />
-                        {kb.updated_at}
-                      </span>
-                    </div>
-                    <div className="flex gap-2 mt-3">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="flex-1 gap-1"
-                        onClick={() => {
-                          setSelectedKb(kb);
-                          setUploadDialogOpen(true);
-                        }}
-                      >
-                        <FileUp className="h-3 w-3" />
-                        上传文件
-                      </Button>
-                      <Button variant="outline" size="sm" className="gap-1">
-                        <Search className="h-3 w-3" />
-                        检索
-                      </Button>
-                    </div>
-                    {kb.source_type === 'external' && kb.connection_config && (
-                      <p className="text-xs text-muted-foreground mt-2 truncate">
-                        连接: {kb.connection_config.url}
-                      </p>
-                    )}
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
             )}
           </TabsContent>
 
