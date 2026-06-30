@@ -87,6 +87,7 @@ import {
   GripVertical,
   ExternalLink,
   Square,
+  PanelRight,
 } from 'lucide-react';
 
 interface Skill {
@@ -1328,6 +1329,7 @@ export default function WorkflowsPage() {
   const [supplementalContextOpen, setSupplementalContextOpen] = useState(false);
   const [supplementalContextTab, setSupplementalContextTab] = useState<'knowledge' | 'materials'>('knowledge');
   const [rightPanelTab, setRightPanelTab] = useState<'outputs' | 'review' | 'archive' | 'context' | 'demo'>('outputs');
+  const [rightPanelVisible, setRightPanelVisible] = useState(true);
   const [expandedOutputIds, setExpandedOutputIds] = useState<Record<string, boolean>>({});
   const [archivedReviewStepIds, setArchivedReviewStepIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -5340,7 +5342,6 @@ export default function WorkflowsPage() {
               {isStreaming && !hasStreamingAssistantPlaceholder && (
                 <div className="flex justify-start">
                   <div className="flex flex-col items-start gap-2">
-                    <AssistantProcessingTimer seconds={currentProcessingElapsedSeconds} />
                     <AssistantThinkingIndicator />
                   </div>
                 </div>
@@ -5813,28 +5814,50 @@ export default function WorkflowsPage() {
       </div>
 
       {/* Right: Context Panel */}
-      <div className="flex max-h-[32rem] min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-border/40 lg:h-full lg:max-h-none lg:w-80 lg:border-l lg:border-t-0 xl:w-80">
-        <Tabs
-          value={rightPanelTab}
-          onValueChange={(value) => setRightPanelTab(value as typeof rightPanelTab)}
-          className="min-h-0 flex-1 gap-0 overflow-hidden"
-        >
-          <div className="shrink-0 border-b border-border/40 p-4">
-            <h3 className="text-sm font-semibold">上下文面板</h3>
-            <p className="mt-1 truncate text-xs text-muted-foreground">
-              {currentStep?.name || '未选择步骤'}
-            </p>
-            <TabsList className="mt-3 grid h-auto w-full grid-cols-5 gap-1">
-              <TabsTrigger value="outputs" className="text-xs">产出</TabsTrigger>
-              <TabsTrigger value="review" className="text-xs">审核</TabsTrigger>
-              <TabsTrigger value="archive" className="text-xs">沉淀</TabsTrigger>
-              <TabsTrigger value="context" className="text-xs">上下文</TabsTrigger>
-              <TabsTrigger value="demo" className="text-xs">Demo</TabsTrigger>
-            </TabsList>
-          </div>
+      <div
+        className={cn(
+          'flex min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-border/40 lg:h-full lg:max-h-none lg:border-l lg:border-t-0',
+          rightPanelVisible ? 'max-h-[32rem] lg:w-80 xl:w-80' : 'max-h-14 lg:w-12 xl:w-12',
+        )}
+      >
+        {rightPanelVisible ? (
+          <Tabs
+            value={rightPanelTab}
+            onValueChange={(value) => setRightPanelTab(value as typeof rightPanelTab)}
+            className="min-h-0 flex-1 gap-0 overflow-hidden"
+          >
+            <div className="shrink-0 border-b border-border/40 p-4">
+              <div className="flex min-w-0 items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="text-sm font-semibold">上下文面板</h3>
+                  <p className="mt-1 truncate text-xs text-muted-foreground">
+                    {currentStep?.name || '未选择步骤'}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="size-8 shrink-0 rounded-lg"
+                  onClick={() => setRightPanelVisible(false)}
+                  aria-label="隐藏上下文面板"
+                  aria-pressed={rightPanelVisible}
+                  title="隐藏上下文面板"
+                >
+                  <PanelRight className="h-4 w-4" />
+                </Button>
+              </div>
+              <TabsList className="mt-3 grid h-auto w-full grid-cols-5 gap-1">
+                <TabsTrigger value="outputs" className="text-xs">产出</TabsTrigger>
+                <TabsTrigger value="review" className="text-xs">审核</TabsTrigger>
+                <TabsTrigger value="archive" className="text-xs">沉淀</TabsTrigger>
+                <TabsTrigger value="context" className="text-xs">上下文</TabsTrigger>
+                <TabsTrigger value="demo" className="text-xs">Demo</TabsTrigger>
+              </TabsList>
+            </div>
 
-          <TabsContent value="outputs" className="min-h-0 flex-1 overflow-hidden">
-            <div className="flex h-full min-w-0 flex-col gap-4 overflow-y-auto p-4">
+            <TabsContent value="outputs" className="min-h-0 flex-1 overflow-hidden">
+              <div className="flex h-full min-w-0 flex-col gap-4 overflow-y-auto p-4">
                 <div className="min-w-0">
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <h4 className="min-w-0 truncate text-xs font-medium text-muted-foreground">当前步骤产出</h4>
@@ -5906,8 +5929,8 @@ export default function WorkflowsPage() {
                     </p>
                   )}
                 </div>
-            </div>
-          </TabsContent>
+              </div>
+            </TabsContent>
 
           <TabsContent value="review" className="min-h-0 flex-1 overflow-hidden">
             <div className="flex h-full min-w-0 flex-col gap-3 overflow-y-auto p-4">
@@ -6068,7 +6091,23 @@ export default function WorkflowsPage() {
           <TabsContent value="demo" className="min-h-0 flex-1 overflow-hidden">
             {demoGenerationPanel}
           </TabsContent>
-        </Tabs>
+          </Tabs>
+        ) : (
+          <div className="flex shrink-0 justify-end p-2 lg:h-full lg:items-start lg:justify-center">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="size-8 shrink-0 rounded-lg"
+              onClick={() => setRightPanelVisible(true)}
+              aria-label="显示上下文面板"
+              aria-pressed={rightPanelVisible}
+              title="显示上下文面板"
+            >
+              <PanelRight className="h-4 w-4" />
+            </Button>
+          </div>
+        )}
       </div>
 
     </div>
