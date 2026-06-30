@@ -66,12 +66,10 @@ import {
   Clock,
   ArrowRight,
   MessageSquare,
-  Save,
   Sparkles,
   Loader2,
   BookOpen,
   Database,
-  ClipboardCheck,
   Paperclip,
   Image as ImageIcon,
   X,
@@ -140,6 +138,9 @@ const skillScopePriority: Record<string, number> = {
   team: 2,
   personal: 1,
 };
+
+const WORKFLOW_OUTPUT_VALIDATION_ENABLED = false;
+const WORKFLOW_AGENT_VALIDATION_TOGGLE_VISIBLE = false;
 
 function getWorkflowSkillFamilyId(skill: Skill) {
   return skill.review?.source_skill_id || skill.id;
@@ -368,14 +369,6 @@ type DeleteTarget =
 function getWorkspaceDescriptionText(description?: string) {
   const value = description?.trim();
   return value && value !== '未填写目录说明' ? value : '';
-}
-
-interface AssistantQuickReplyQuestion {
-  id: string;
-  label: string;
-  prompt: string;
-  options: string[];
-  multi: boolean;
 }
 
 function AssistantThinkingIndicator() {
@@ -610,203 +603,6 @@ function getLastConfirmableAssistantMessage(messages: ChatMessage[]) {
 
 function hasConfirmableAssistantMessage(messages: ChatMessage[]) {
   return Boolean(getLastConfirmableAssistantMessage(messages));
-}
-
-function cleanQuickReplyOption(rawOption: string) {
-  return rawOption
-    .replace(/^[\s>*•\-+]+/, '')
-    .replace(/^\d+[.)、]\s*/, '')
-    .replace(/^[☐□■▪▫✅☑️✔️⚠️]+\s*/, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function getDefaultQuickReplyOptions(question: AssistantQuickReplyQuestion) {
-  if (question.options.length === 0) {
-    return ['无补充，按当前建议继续'];
-  }
-
-  const defaults = question.options.filter((option) => /默认|优先|使用|✅|✔|可补充/.test(option));
-  return defaults.length > 0 ? defaults : [question.options[0]];
-}
-
-function extractAssistantQuickReplyQuestions(content: string): AssistantQuickReplyQuestion[] {
-  const text = content.trim();
-  if (
-    !text
-    || text.startsWith(chatErrorFallbackPrefix)
-    || isChatCancelledContent(text)
-  ) {
-    return [];
-  }
-
-  const lines = text.split('\n');
-  const questions: AssistantQuickReplyQuestion[] = [];
-  let current: AssistantQuickReplyQuestion | null = null;
-
-  const commitCurrent = () => {
-    if (!current) return;
-    const promptLooksActionable = /确认|是否|有没有|有无|同意|需要|偏好|限制/.test(current.prompt);
-    if (current.options.length > 0 || promptLooksActionable) {
-      questions.push(current);
-    }
-    current = null;
-  };
-
-  lines.forEach((line, index) => {
-    const normalized = line
-      .replace(/\*\*/g, '')
-      .replace(/^#{1,6}\s*/, '')
-      .trim();
-    const questionMatch = normalized.match(/^(问题|确认)\s*(\d+)?\s*[：:]\s*(.+)$/);
-    const confirmMatch = !questionMatch
-      ? normalized.match(/^(确认以上[^，。,.]*)(?:[，。,.]|$)/)
-      : null;
-
-    if (questionMatch || confirmMatch) {
-      commitCurrent();
-      const label = questionMatch
-        ? `${questionMatch[1]}${questionMatch[2] ? ` ${questionMatch[2]}` : ''}`
-        : '确认';
-      const prompt = (questionMatch ? questionMatch[3] : confirmMatch?.[1] || '').trim();
-      current = {
-        id: `${label}-${index}`,
-        label,
-        prompt,
-        options: [],
-        multi: /以下|类型|来源|材料|选项|哪些|偏好|限制|可选|多个|列表/.test(prompt),
-      };
-      return;
-    }
-
-    const optionMatch = normalized.match(/^[-*•]\s+(.+)$/)
-      || normalized.match(/^[☐□■▪▫✅☑️✔️⚠️]\s*(.+)$/);
-    if (current && optionMatch) {
-      const option = cleanQuickReplyOption(optionMatch[1]);
-      if (option && option.length <= 120) {
-        current.options.push(option);
-      }
-    }
-  });
-
-  commitCurrent();
-
-  if (questions.length === 0 && /确认以上|可以进入|继续|开始/.test(text.slice(-240))) {
-    return [{
-      id: 'confirm-continue',
-      label: '确认',
-      prompt: '确认以上内容并继续',
-      options: ['确认，按当前建议继续'],
-      multi: false,
-    }];
-  }
-
-  return questions.slice(-3);
-}
-
-function buildQuickReplyText(
-  questions: AssistantQuickReplyQuestion[],
-  selections: Record<string, string[]>,
-) {
-  if (questions.length === 0) return '';
-
-  return questions.map((question) => {
-    const selectedOptions = selections[question.id]?.length
-      ? selections[question.id]
-      : getDefaultQuickReplyOptions(question);
-    return `${question.label}：${selectedOptions.join('、')}`;
-  }).join('\n');
-}
-
-function AssistantQuickReplyPanel({
-  questions,
-  disabled,
-  onSubmit,
-}: {
-  questions: AssistantQuickReplyQuestion[];
-  disabled: boolean;
-  onSubmit: (reply: string) => void;
-}) {
-  const [selections, setSelections] = useState<Record<string, string[]>>({});
-
-  const toggleOption = (question: AssistantQuickReplyQuestion, option: string) => {
-    setSelections((prev) => {
-      const currentOptions = prev[question.id] || [];
-      const selected = currentOptions.includes(option);
-      return {
-        ...prev,
-        [question.id]: question.multi
-          ? selected
-            ? currentOptions.filter((item) => item !== option)
-            : [...currentOptions, option]
-          : selected
-            ? []
-            : [option],
-      };
-    });
-  };
-
-  const replyText = buildQuickReplyText(questions, selections);
-
-  return (
-    <div className="w-full min-w-0 rounded-lg border border-primary/25 bg-primary/5 p-3 text-sm shadow-sm">
-      <div className="flex min-w-0 items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-xs font-semibold text-primary">快速确认</p>
-          </div>
-        <Button
-          type="button"
-          size="sm"
-          className="h-8 shrink-0 gap-1.5 text-xs"
-          disabled={disabled || !replyText}
-          onClick={() => onSubmit(replyText)}
-        >
-          <ArrowRight className="h-3.5 w-3.5" />
-          发送选择
-        </Button>
-      </div>
-
-      <div className="mt-3 flex flex-col gap-3">
-        {questions.map((question) => {
-          const selectedOptions = selections[question.id] || [];
-          const displayOptions = question.options.length > 0
-            ? question.options
-            : getDefaultQuickReplyOptions(question);
-          const effectiveSelectedOptions = selectedOptions.length > 0
-            ? selectedOptions
-            : getDefaultQuickReplyOptions(question);
-
-          return (
-            <div key={question.id} className="rounded-md border border-border/45 bg-background/70 p-2.5">
-              <div className="flex flex-wrap items-start gap-2">
-                <Badge variant="secondary" className="shrink-0 text-[10px]">{question.label}</Badge>
-                <p className="min-w-0 flex-1 text-xs font-medium leading-5">{question.prompt}</p>
-              </div>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {displayOptions.map((option) => {
-                  const selected = effectiveSelectedOptions.includes(option);
-                  return (
-                    <Button
-                      key={option}
-                      type="button"
-                      variant={selected ? 'default' : 'outline'}
-                      size="sm"
-                      className="h-auto min-h-7 max-w-full justify-start whitespace-normal px-2 py-1 text-left text-xs"
-                      disabled={disabled}
-                      onClick={() => toggleOption(question, option)}
-                    >
-                      {selected && <CheckCircle2 className="mr-1 h-3.5 w-3.5 shrink-0" />}
-                      <span className="min-w-0 break-words">{option}</span>
-                    </Button>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
 }
 
 function getStepDemoHandoff(workflow?: Workflow | null, stepId?: string) {
@@ -1120,7 +916,7 @@ interface ReviewedOutputFile {
   created_at?: string;
 }
 
-type ReviewedOutputSavePromptKind = 'upload' | 'step_output';
+type ReviewedOutputSavePromptKind = 'upload';
 
 interface ReviewedOutputSavePrompt {
   kind: ReviewedOutputSavePromptKind;
@@ -1321,17 +1117,15 @@ export default function WorkflowsPage() {
   const [knowledgeLoading, setKnowledgeLoading] = useState(false);
   const [knowledgeNotice, setKnowledgeNotice] = useState('');
   const [selectedKnowledgeBaseIds, setSelectedKnowledgeBaseIds] = useState<string[]>([]);
-  const [selectedReviewMaterialIds, setSelectedReviewMaterialIds] = useState<string[]>([]);
   const [uploadedContextFiles, setUploadedContextFiles] = useState<UploadedContextFile[]>([]);
   const [reviewedOutputFiles, setReviewedOutputFiles] = useState<ReviewedOutputFile[]>([]);
   const [reviewComments, setReviewComments] = useState<Record<string, string>>({});
   const [reviewedOutputSavePrompt, setReviewedOutputSavePrompt] = useState<ReviewedOutputSavePrompt | null>(null);
   const [supplementalContextOpen, setSupplementalContextOpen] = useState(false);
   const [supplementalContextTab, setSupplementalContextTab] = useState<'knowledge' | 'materials'>('knowledge');
-  const [rightPanelTab, setRightPanelTab] = useState<'outputs' | 'review' | 'archive' | 'context' | 'demo'>('outputs');
+  const [rightPanelTab, setRightPanelTab] = useState<'outputs' | 'review' | 'context' | 'demo'>('outputs');
   const [rightPanelVisible, setRightPanelVisible] = useState(true);
   const [expandedOutputIds, setExpandedOutputIds] = useState<Record<string, boolean>>({});
-  const [archivedReviewStepIds, setArchivedReviewStepIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
   const workflowSkillOptions = useMemo(() => dedupeWorkflowSkillOptions(skills), [skills]);
@@ -1434,9 +1228,7 @@ export default function WorkflowsPage() {
     setUploadedContextFiles(workflow.contextFiles || []);
     setReviewedOutputFiles(workflow.reviewedOutputFiles || []);
     setReviewComments(workflow.reviewComments || {});
-    setArchivedReviewStepIds(workflow.archivedReviewStepIds || []);
     setSelectedKnowledgeBaseIds(selection.knowledgeBaseIds);
-    setSelectedReviewMaterialIds(selection.reviewMaterialIds);
   };
 
   const switchActiveStep = (workflow: Workflow, stepIndex: number) => {
@@ -2028,25 +1820,6 @@ export default function WorkflowsPage() {
     return skills.find((skill) => skill.id === step.skill_id);
   }, [skills]);
 
-  const buildSavedStepOutputFile = (
-    workflow: Workflow,
-    step: WorkflowStep,
-    createdAt: string,
-  ): ReviewedOutputFile => {
-    const content = buildStepOutputMarkdown(workflow, step);
-    return {
-      id: getSavedStepOutputFileId(step.id),
-      stepId: step.id,
-      name: `${workflow.name}-${step.name}-产出.md`.replace(/[\\/:*?"<>|]/g, '-'),
-      type: 'text/markdown',
-      size: new TextEncoder().encode(content).length,
-      contentKind: 'text',
-      content,
-      note: '由当前步骤产出保存，可作为后续步骤的补充上下文材料引用。',
-      created_at: createdAt,
-    };
-  };
-
   const downloadReviewedOutputFile = (file: ReviewedOutputFile) => {
     const content = file.content || file.note || file.name;
     const blob = new Blob([content], { type: `${file.type || 'text/plain'};charset=utf-8` });
@@ -2140,15 +1913,8 @@ export default function WorkflowsPage() {
     const selection = getContextSelection(workflow, step.id);
     const isCurrentStepSnapshot = activeStepIdRef.current === step.id;
     const knowledgeBaseIds = isCurrentStepSnapshot ? selectedKnowledgeBaseIds : selection.knowledgeBaseIds;
-    const reviewMaterialIds = isCurrentStepSnapshot ? selectedReviewMaterialIds : selection.reviewMaterialIds;
-    const selectedReviewIds = new Set(reviewMaterialIds);
     const disabledAutoIds = new Set(selection.disabledAutoInjectedStepIds || []);
     const priorSteps = getPriorWorkflowSteps(workflow, step);
-    const autoInjectedStepIds = new Set(
-      priorSteps
-        .filter((item) => item.output && !disabledAutoIds.has(item.id))
-        .map((item) => item.id),
-    );
 
     const selectedKnowledgeBases = knowledgeBases
       .filter((kb) => knowledgeBaseIds.includes(kb.id))
@@ -2162,17 +1928,8 @@ export default function WorkflowsPage() {
         const markdown = buildStepOutputMarkdown(workflow, item);
         return `默认注入：${item.name} Markdown 产物\n${markdown.slice(0, 1200)}${markdown.length > 1200 ? '\n...（已截断）' : ''}`;
       });
-    const selectedStepMaterials = getVisibleSteps(workflow)
-      .filter((item) => selectedReviewIds.has(item.id) && !autoInjectedStepIds.has(item.id) && item.output)
-      .map((item) => {
-        const markdown = buildStepOutputMarkdown(workflow, item);
-        return `${item.name}产物\n${markdown.slice(0, 1200)}${markdown.length > 1200 ? '\n...（已截断）' : ''}`;
-      });
-    const selectedUploadedMaterials = (workflow.reviewedOutputFiles || [])
-      .filter((file) => selectedReviewIds.has(file.id))
-      .map((file) => summarizeWorkflowFile(file, 800));
     const currentStepReviewedFiles = (workflow.reviewedOutputFiles || [])
-      .filter((file) => file.stepId === step.id && !selectedReviewIds.has(file.id))
+      .filter((file) => file.stepId === step.id)
       .map((file) => summarizeWorkflowFile(file, 800));
     const reviewComment = workflow.reviewComments?.[step.id]?.trim() || reviewComments[step.id]?.trim() || '';
 
@@ -2184,7 +1941,7 @@ export default function WorkflowsPage() {
       stepIndex: step.step_index,
       output,
       contextFiles: [...selectedKnowledgeBases, ...stepContextFiles],
-      reviewedMaterials: [...autoInjectedStepMaterials, ...selectedStepMaterials, ...selectedUploadedMaterials, ...currentStepReviewedFiles],
+      reviewedMaterials: [...autoInjectedStepMaterials, ...currentStepReviewedFiles],
       reviewComment: reviewComment || undefined,
       created_at: createdAt,
     };
@@ -2234,37 +1991,12 @@ export default function WorkflowsPage() {
         output,
       });
     }
-    const autoInjectedStepOutputIds = new Set(autoInjectedStepOutputs.map((step) => step.id));
-    const selectedReviewMaterials = getVisibleSteps(workflow)
-      .filter((step) => (
-        selectedReviewMaterialIds.includes(step.id)
-        && !autoInjectedStepOutputIds.has(step.id)
-        && step.output
-      ))
-      .map((step) => ({
-        name: step.name,
-        source: '工作流已评审产物',
-        summary: buildStepOutputPromptContext(workflow, step, 1200),
-      }));
-    const selectedUploadedReviewMaterials = reviewedOutputFiles
-      .filter((file) => selectedReviewMaterialIds.includes(file.id))
-      .map((file) => ({
-        name: file.name,
-        source: '本地上传审核产物',
-        summary: summarizeWorkflowFile(file, 1200),
-      }));
     const contextSummary = [
       autoInjectedStepOutputs.length > 0
         ? `默认注入的前序步骤 Markdown 产物：${autoInjectedStepOutputs.map((step) => step.name).join('、')}。`
         : '',
       selectedKnowledgeBases.length > 0
         ? `选中的知识库：${selectedKnowledgeBases.map((kb) => `${kb.name}（${kb.description || '无描述'}）`).join('；')}。发送时将按本轮问题检索相关片段。`
-        : '',
-      selectedReviewMaterials.length > 0
-        ? `选中的已评审材料：${selectedReviewMaterials.map((material) => `${material.name}：${material.summary}`).join('；')}`
-        : '',
-      selectedUploadedReviewMaterials.length > 0
-        ? `选中的本地审核材料：${selectedUploadedReviewMaterials.map((material) => `${material.name}：${material.summary}`).join('；')}`
         : '',
       currentStepContextFiles.length > 0
         ? `用户上传/粘贴的文件：\n${currentStepContextFiles.map((file) => summarizeWorkflowFile(file, 1200)).join('\n\n')}`
@@ -2328,7 +2060,7 @@ export default function WorkflowsPage() {
           knowledge_base_ids: currentStepKnowledgeBaseIds,
           selected_knowledge_bases: selectedKnowledgeBases,
           knowledge_query: userMessage,
-          selected_review_materials: [...selectedReviewMaterials, ...selectedUploadedReviewMaterials],
+          selected_review_materials: [],
           uploaded_files: currentStepContextFiles.map(({ previewUrl, ...file }) => file),
         }),
         signal: controller.signal,
@@ -2453,9 +2185,7 @@ export default function WorkflowsPage() {
     getEffectiveSkillForStep,
     knowledgeBases,
     selectedKnowledgeBaseIds,
-    selectedReviewMaterialIds,
     uploadedContextFiles,
-    reviewedOutputFiles,
   ]);
 
   const handleStopStreaming = useCallback(() => {
@@ -2493,9 +2223,11 @@ export default function WorkflowsPage() {
 
     try {
       const stepOutputDocument = normalizeSkillOutputDocument(activeWorkflow, currentStep, lastAssistantMsg.content);
-      const agentValidationEnabled = Boolean(activeWorkflow.agentValidationEnabled);
+      const agentValidationEnabled = WORKFLOW_OUTPUT_VALIDATION_ENABLED && Boolean(activeWorkflow.agentValidationEnabled);
       setErrorMessage('');
-      startValidationStage(currentStep.id, { agentValidationEnabled });
+      if (WORKFLOW_OUTPUT_VALIDATION_ENABLED) {
+        startValidationStage(currentStep.id, { agentValidationEnabled });
+      }
       const response = await fetch('/api/workflows/validation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2519,13 +2251,20 @@ export default function WorkflowsPage() {
       if (data.passed) {
         setRightPanelTab('outputs');
         const visibleSteps = getVisibleSteps(savedWorkflow);
-        const nextInProgressIndex = visibleSteps.findIndex((step) => isActiveWorkflowStepStatus(step.status));
         const completedStepIndex = visibleSteps.findIndex((step) => step.id === currentStep.id);
+        const nextInProgressIndex = visibleSteps.findIndex((step, index) => (
+          index > completedStepIndex && isActiveWorkflowStepStatus(step.status)
+        ));
+        const firstInProgressIndex = visibleSteps.findIndex((step) => isActiveWorkflowStepStatus(step.status));
         const nextActiveStepIndex = nextInProgressIndex >= 0
           ? nextInProgressIndex
+          : firstInProgressIndex >= 0
+            ? firstInProgressIndex
           : Math.max(completedStepIndex, 0);
         setErrorMessage('');
-        toast.success('验证通过', { description: '候选产物已沉淀为步骤输出。' });
+        toast.success(data.validationSkipped ? '已确认产物' : '验证通过', {
+          description: '候选产物已保存为步骤输出。',
+        });
         switchActiveStep(savedWorkflow, nextActiveStepIndex);
         return;
       }
@@ -4003,8 +3742,8 @@ export default function WorkflowsPage() {
     }
     if (currentStepDemoLoading) return '正在提交当前节点产物';
     if (!currentStep) return '未选择节点';
-    if (currentStep.status !== 'completed') return '节点通过验证后可生成 Demo';
-    if (currentStep.validationStatus && currentStep.validationStatus !== 'passed') return '验证通过后可生成 Demo';
+    if (currentStep.status !== 'completed') return WORKFLOW_OUTPUT_VALIDATION_ENABLED ? '节点通过验证后可生成 Demo' : '确认节点产物后可生成 Demo';
+    if (currentStep.validationStatus && currentStep.validationStatus !== 'passed') return WORKFLOW_OUTPUT_VALIDATION_ENABLED ? '验证通过后可生成 Demo' : '确认节点产物后可生成 Demo';
     if (!currentStep.output?.trim()) return '当前节点暂无产物';
     return '当前节点产物可生成 Demo';
   })();
@@ -4063,24 +3802,11 @@ export default function WorkflowsPage() {
   const unavailableKnowledgeBaseCount = selectedKnowledgeBaseIds.filter((id) => (
     !knowledgeBases.some((kb) => kb.id === id)
   )).length;
-  const selectedReviewMaterialOptions = reviewMaterials.filter((material) => (
-    selectedReviewMaterialIds.includes(material.id) && !autoInjectedPreviousStepIds.has(material.id)
-  ));
-  const additionalReviewMaterials = reviewMaterials.filter((material) => (
-    !previousSteps.some((step) => step.id === material.id)
-  ));
   const selectedContextCount = (
     autoInjectedPreviousSteps.length
     + selectedKnowledgeBaseOptions.length
-    + selectedReviewMaterialOptions.length
     + currentContextFiles.length
   );
-  const savedCurrentStepOutput = currentStep
-    ? currentReviewedOutputFiles.find((file) => file.id === getSavedStepOutputFileId(currentStep.id))
-    : undefined;
-  const currentStepOutputMarkdown = currentStep?.output
-    ? buildStepOutputMarkdown(activeWorkflow, currentStep)
-    : '';
   const currentValidationAttempts = currentStep
     ? (activeWorkflow.validationAttempts || [])
       .filter((attempt) => attempt.stepId === currentStep.id)
@@ -4090,16 +3816,16 @@ export default function WorkflowsPage() {
     ? currentValidationAttempts.find((attempt) => attempt.id === currentStep.validationAttemptId) || currentValidationAttempts[0]
     : currentValidationAttempts[0];
   const currentGateBlocked = Boolean(
-    currentStep?.status === 'validation_failed'
-      || currentValidationAttempt?.status === 'failed'
-      || currentValidationAttempt?.status === 'error',
+    WORKFLOW_OUTPUT_VALIDATION_ENABLED
+      && (
+        currentStep?.status === 'validation_failed'
+        || currentValidationAttempt?.status === 'failed'
+        || currentValidationAttempt?.status === 'error'
+      ),
   );
-  const savedCurrentStepOutputIsCurrent = Boolean(
-    savedCurrentStepOutput?.content && savedCurrentStepOutput.content === currentStepOutputMarkdown,
-  );
-  const reviewedOutputPromptSavableFileCount = reviewedOutputSavePrompt?.kind === 'upload'
+  const reviewedOutputPromptSavableFileCount = reviewedOutputSavePrompt
     ? reviewedOutputSavePrompt.files.filter(isReadableTextFile).length
-    : (reviewedOutputSavePrompt?.kind === 'step_output' ? 1 : 0);
+    : 0;
   const reviewedOutputPromptStep = reviewedOutputSavePrompt
     ? visibleWorkflowSteps.find((step) => step.id === reviewedOutputSavePrompt.stepId)
     : undefined;
@@ -4122,9 +3848,6 @@ export default function WorkflowsPage() {
       .filter((step) => step.step_index === maxVisibleStepIndex && step.output)
       .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
     : [];
-  const currentReviewComment = currentStep ? reviewComments[currentStep.id]?.trim() || '' : '';
-  const canArchiveReviewedOutput = currentReviewedOutputFiles.length > 0 || currentReviewComment.length > 0;
-  const isReviewedOutputArchived = currentStep ? archivedReviewStepIds.includes(currentStep.id) : false;
   const currentStepChatPersistenceStatus = currentStep
     ? chatPersistenceByStepId[currentStep.id] || 'idle'
     : 'idle';
@@ -4142,6 +3865,7 @@ export default function WorkflowsPage() {
       && currentStepChatPersistenceStatus === 'saved',
   );
   const currentStepConfirmLabel = (() => {
+    if (!WORKFLOW_OUTPUT_VALIDATION_ENABLED) return '确认继续';
     if (currentStepValidationStage === 'self_checking' || currentStepEffectiveStatus === 'self_checking') return 'Skill 自检中';
     if (currentStepValidationStage === 'agent_validating' || currentStepEffectiveStatus === 'agent_validating') return 'Agent 校验中';
     if (currentStep?.status === 'validation_failed') return '重新验证';
@@ -4219,7 +3943,6 @@ export default function WorkflowsPage() {
       ),
       updated_at: updatedAt,
     }));
-    setSelectedReviewMaterialIds((prev) => prev.filter((id) => id !== fileId));
   };
   const updateReviewComment = (stepId: string, comment: string) => {
     const updatedAt = new Date().toISOString();
@@ -4233,17 +3956,6 @@ export default function WorkflowsPage() {
       updated_at: updatedAt,
     }));
   };
-  const archiveReviewedOutput = (stepId: string) => {
-    const updatedAt = new Date().toISOString();
-    setArchivedReviewStepIds((prev) => (prev.includes(stepId) ? prev : [...prev, stepId]));
-    updateActiveWorkflow((workflow) => ({
-      ...workflow,
-      archivedReviewStepIds: (workflow.archivedReviewStepIds || []).includes(stepId)
-        ? workflow.archivedReviewStepIds || []
-        : [...(workflow.archivedReviewStepIds || []), stepId],
-      updated_at: updatedAt,
-    }));
-  };
   const openReviewedOutputUploadPrompt = (files: File[], stepId: string) => {
     if (files.length === 0) return;
     setReviewedOutputSavePrompt({
@@ -4254,31 +3966,6 @@ export default function WorkflowsPage() {
       knowledgeBaseId: '',
       isSubmitting: false,
     });
-  };
-  const openCurrentStepOutputSavePrompt = () => {
-    if (!currentStep?.output) return;
-    setReviewedOutputSavePrompt({
-      kind: 'step_output',
-      stepId: currentStep.id,
-      files: [],
-      saveToKnowledge: null,
-      knowledgeBaseId: '',
-      isSubmitting: false,
-    });
-  };
-  const persistSavedStepOutputFile = (outputFile: ReviewedOutputFile, updatedAt: string) => {
-    setReviewedOutputFiles((prev) => [
-      outputFile,
-      ...prev.filter((file) => file.id !== outputFile.id),
-    ]);
-    updateActiveWorkflow((workflow) => ({
-      ...workflow,
-      reviewedOutputFiles: [
-        outputFile,
-        ...(workflow.reviewedOutputFiles || []).filter((file) => file.id !== outputFile.id),
-      ],
-      updated_at: updatedAt,
-    }));
   };
   const handleReviewedOutputPromptOpenChange = (open: boolean) => {
     if (open || reviewedOutputSavePrompt?.isSubmitting) return;
@@ -4306,16 +3993,7 @@ export default function WorkflowsPage() {
 
     try {
       const createdAt = new Date().toISOString();
-      let filesToPersist: ReviewedOutputFile[];
-      let persistStepOutputFile: ReviewedOutputFile | null = null;
-
-      if (reviewedOutputSavePrompt.kind === 'upload') {
-        filesToPersist = await buildReviewedOutputFiles(reviewedOutputSavePrompt.files, targetStep.id, createdAt);
-      } else {
-        const outputFile = buildSavedStepOutputFile(activeWorkflow, targetStep, createdAt);
-        filesToPersist = [outputFile];
-        persistStepOutputFile = outputFile;
-      }
+      const filesToPersist = await buildReviewedOutputFiles(reviewedOutputSavePrompt.files, targetStep.id, createdAt);
 
       const savableFiles = getKnowledgeSavableReviewedOutputFiles(filesToPersist);
       if (reviewedOutputSavePrompt.saveToKnowledge) {
@@ -4333,11 +4011,7 @@ export default function WorkflowsPage() {
         });
       }
 
-      if (persistStepOutputFile) {
-        persistSavedStepOutputFile(persistStepOutputFile, createdAt);
-      } else {
-        persistReviewedOutputFiles(filesToPersist, createdAt);
-      }
+      persistReviewedOutputFiles(filesToPersist, createdAt);
 
       if (!reviewedOutputSavePrompt.saveToKnowledge) {
         toast.success('已保存审核产物', { description: '本次未写入知识库。' });
@@ -4441,7 +4115,7 @@ export default function WorkflowsPage() {
             <div className="min-w-0">
               <p className="text-sm font-medium">补充上下文</p>
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                本轮注入 {selectedContextCount} 个来源，包含自动产物 {autoInjectedPreviousSteps.length}、知识库 {selectedKnowledgeBaseOptions.length}、手动材料 {selectedReviewMaterialOptions.length}、文件 {currentContextFiles.length}。
+                本轮注入 {selectedContextCount} 个来源，包含自动产物 {autoInjectedPreviousSteps.length}、知识库 {selectedKnowledgeBaseOptions.length}、文件 {currentContextFiles.length}。
               </p>
             </div>
           </div>
@@ -4476,26 +4150,6 @@ export default function WorkflowsPage() {
                       );
                     }}
                     aria-label={`移除知识库 ${kb.name}`}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </Badge>
-              ))}
-              {selectedReviewMaterialOptions.map((material) => (
-                <Badge key={`selected-material-${material.id}`} variant="secondary" className="max-w-full gap-1.5">
-                  <ClipboardCheck className="h-3 w-3 shrink-0" />
-                  <span className="truncate">{material.name}</span>
-                  <button
-                    type="button"
-                    className="ml-1 text-muted-foreground hover:text-foreground"
-                    onClick={() => {
-                      const nextIds = selectedReviewMaterialIds.filter((id) => id !== material.id);
-                      updateCurrentContextSelection(
-                        { reviewMaterialIds: nextIds },
-                        () => setSelectedReviewMaterialIds(nextIds),
-                      );
-                    }}
-                    aria-label={`移除材料 ${material.name}`}
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -4667,58 +4321,6 @@ export default function WorkflowsPage() {
               </CardContent>
             </Card>
 
-            <Card className="border-border/60 bg-card/75 shadow-none">
-              <CardContent className="flex flex-col gap-3 p-3">
-                <div className="min-w-0">
-                  <p className="text-xs font-medium">额外审核材料</p>
-                  <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
-                    这里用于选择非默认链路的产物或本地审核材料。
-                  </p>
-                </div>
-                {additionalReviewMaterials.length > 0 ? (
-                  <div className="flex flex-col gap-2">
-                    {additionalReviewMaterials.map((material) => {
-                      const selected = selectedReviewMaterialIds.includes(material.id);
-                      return (
-                        <div
-                          key={material.id}
-                          className={`flex items-start justify-between gap-3 rounded-lg border p-3 ${
-                            selected ? 'border-primary/50 bg-primary/10' : 'border-border/50 bg-background/60'
-                          }`}
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate text-xs font-medium">{material.name}</p>
-                            <p className="mt-1 text-[11px] text-muted-foreground">{material.source}</p>
-                            <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{material.summary}</p>
-                          </div>
-                          <Button
-                            type="button"
-                            variant={selected ? 'default' : 'outline'}
-                            size="sm"
-                            className="h-8 shrink-0 text-xs"
-                            onClick={() => {
-                              const nextIds = selected
-                                ? selectedReviewMaterialIds.filter((id) => id !== material.id)
-                                : [...selectedReviewMaterialIds, material.id];
-                              updateCurrentContextSelection(
-                                { reviewMaterialIds: nextIds },
-                                () => setSelectedReviewMaterialIds(nextIds),
-                              );
-                            }}
-                          >
-                            {selected ? '已选' : '选择'}
-                          </Button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
-                    暂无额外审核材料。步骤产物会默认通过上方链路注入下一步骤，无需手动保存。
-                  </div>
-                )}
-              </CardContent>
-            </Card>
           </div>
         </TabsContent>
       </Tabs>
@@ -4776,15 +4378,9 @@ export default function WorkflowsPage() {
           {reviewedOutputSavePrompt && (
             <>
               <DialogHeader>
-                <DialogTitle>
-                  {reviewedOutputSavePrompt.kind === 'upload' ? '上传审核产物' : '保存步骤产出'}
-                </DialogTitle>
+                <DialogTitle>上传审核产物</DialogTitle>
                 <DialogDescription>
-                  {reviewedOutputPromptStep?.name || '当前步骤'} · {
-                    reviewedOutputSavePrompt.kind === 'upload'
-                      ? `${reviewedOutputSavePrompt.files.length} 个文件`
-                      : 'Markdown 产出'
-                  }
+                  {reviewedOutputPromptStep?.name || '当前步骤'} · {reviewedOutputSavePrompt.files.length} 个文件
                 </DialogDescription>
               </DialogHeader>
 
@@ -4818,24 +4414,22 @@ export default function WorkflowsPage() {
                   </Button>
                 </div>
 
-                {reviewedOutputSavePrompt.kind === 'upload' && (
-                  <div className="rounded-lg border border-border/50 bg-background/60 p-3">
-                    <p className="text-xs font-medium">待上传文件</p>
-                    <div className="mt-2 flex flex-col gap-1.5">
-                      {reviewedOutputSavePrompt.files.slice(0, 4).map((file) => (
-                        <div key={`${file.name}-${file.size}-${file.lastModified}`} className="flex items-center justify-between gap-2 text-xs">
-                          <span className="min-w-0 truncate">{file.name}</span>
-                          <span className="shrink-0 text-muted-foreground">{formatFileSize(file.size)}</span>
-                        </div>
-                      ))}
-                      {reviewedOutputSavePrompt.files.length > 4 && (
-                        <p className="text-xs text-muted-foreground">
-                          另有 {reviewedOutputSavePrompt.files.length - 4} 个文件
-                        </p>
-                      )}
-                    </div>
+                <div className="rounded-lg border border-border/50 bg-background/60 p-3">
+                  <p className="text-xs font-medium">待上传文件</p>
+                  <div className="mt-2 flex flex-col gap-1.5">
+                    {reviewedOutputSavePrompt.files.slice(0, 4).map((file) => (
+                      <div key={`${file.name}-${file.size}-${file.lastModified}`} className="flex items-center justify-between gap-2 text-xs">
+                        <span className="min-w-0 truncate">{file.name}</span>
+                        <span className="shrink-0 text-muted-foreground">{formatFileSize(file.size)}</span>
+                      </div>
+                    ))}
+                    {reviewedOutputSavePrompt.files.length > 4 && (
+                      <p className="text-xs text-muted-foreground">
+                        另有 {reviewedOutputSavePrompt.files.length - 4} 个文件
+                      </p>
+                    )}
                   </div>
-                )}
+                </div>
 
                 {reviewedOutputSavePrompt.saveToKnowledge && (
                   <div className="space-y-2">
@@ -4900,9 +4494,9 @@ export default function WorkflowsPage() {
                       保存中
                     </>
                   ) : reviewedOutputSavePrompt.saveToKnowledge ? (
-                    reviewedOutputSavePrompt.kind === 'upload' ? '上传并保存' : '保存并入库'
+                    '上传并保存'
                   ) : (
-                    reviewedOutputSavePrompt.kind === 'upload' ? '仅上传' : '仅保存'
+                    '仅上传'
                   )}
                 </Button>
               </div>
@@ -4923,18 +4517,20 @@ export default function WorkflowsPage() {
             ← 返回列表
           </Button>
           <h2 className="mt-2 truncate font-semibold">{activeWorkflow.name}</h2>
-          <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <ShieldCheck className="h-4 w-4 shrink-0 text-primary" />
-              <span className="truncate text-xs font-medium">独立 Agent 复核</span>
+          {WORKFLOW_AGENT_VALIDATION_TOGGLE_VISIBLE && (
+            <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <ShieldCheck className="h-4 w-4 shrink-0 text-primary" />
+                <span className="truncate text-xs font-medium">独立 Agent 复核</span>
+              </div>
+              <Switch
+                checked={Boolean(activeWorkflow.agentValidationEnabled)}
+                disabled={Boolean(confirmingStepId)}
+                aria-label="开启独立 Agent 复核"
+                onCheckedChange={handleAgentValidationEnabledChange}
+              />
             </div>
-            <Switch
-              checked={Boolean(activeWorkflow.agentValidationEnabled)}
-              disabled={Boolean(confirmingStepId)}
-              aria-label="开启独立 Agent 复核"
-              onCheckedChange={handleAgentValidationEnabledChange}
-            />
-          </div>
+          )}
         </div>
 
         <ScrollArea className="min-h-0 flex-1">
@@ -5095,37 +4691,6 @@ export default function WorkflowsPage() {
           )}
         </div>
 
-        {/* Previous Steps Context */}
-        {previousSteps.length > 0 && (
-          <div className="border-b border-border/30 bg-muted/30 px-4 py-2">
-            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <BookOpen className="h-3.5 w-3.5" />
-              <span>默认注入前序 Markdown 产物:</span>
-              {autoInjectedPreviousSteps.length > 0 ? autoInjectedPreviousSteps.map((s) => (
-                <Badge key={s.id} variant="outline" className="gap-1.5 text-xs">
-                  <FileText className="h-3 w-3" />
-                  {s.name}
-                  <button
-                    type="button"
-                    className="ml-1 text-muted-foreground hover:text-foreground"
-                    onClick={() => setAutoInjectedStepEnabled(s.id, false)}
-                    aria-label={`取消注入 ${s.name}`}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </Badge>
-              )) : (
-                <Badge variant="secondary" className="text-xs">已全部取消</Badge>
-              )}
-              {disabledAutoInjectedPreviousSteps.length > 0 && (
-                <Badge variant="outline" className="text-xs text-muted-foreground">
-                  已取消 {disabledAutoInjectedPreviousSteps.length} 个
-                </Badge>
-              )}
-            </div>
-          </div>
-        )}
-
         {currentGateBlocked && (
           <div className="border-b border-destructive/20 bg-destructive/5 px-4 py-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -5259,10 +4824,6 @@ export default function WorkflowsPage() {
                 const renderProcessingTimer = isStreaming
                   && idx === lastAssistantMessageIndex
                   && msg.role === 'assistant';
-                const quickReplyQuestions = msg.role === 'assistant' && idx === lastAssistantMessageIndex && !isStreaming && !stoppedMessageContent
-                  ? extractAssistantQuickReplyQuestions(msg.content)
-                  : [];
-
                 return (
                   <div
                     key={idx}
@@ -5278,15 +4839,6 @@ export default function WorkflowsPage() {
                           <AssistantProcessingTimer seconds={currentProcessingElapsedSeconds} />
                         )}
                         {renderAssistantDocumentCard(msg.content, idx)}
-                        {quickReplyQuestions.length > 0 && (
-                          <AssistantQuickReplyPanel
-                            questions={quickReplyQuestions}
-                            disabled={isStreaming}
-                            onSubmit={(reply) => {
-                              void handleSendMessage(reply);
-                            }}
-                          />
-                        )}
                       </div>
                     ) : (
                       <div
@@ -5325,15 +4877,6 @@ export default function WorkflowsPage() {
                             )}
                           </>
                         )}
-                        {quickReplyQuestions.length > 0 && (
-                          <AssistantQuickReplyPanel
-                            questions={quickReplyQuestions}
-                            disabled={isStreaming}
-                            onSubmit={(reply) => {
-                              void handleSendMessage(reply);
-                            }}
-                          />
-                        )}
                       </div>
                     )}
                   </div>
@@ -5360,7 +4903,7 @@ export default function WorkflowsPage() {
                 <div className="min-w-0">
                   <p className="text-sm font-medium">补充上下文</p>
                   <p className="truncate text-xs text-muted-foreground">
-                    本轮注入 {selectedContextCount} 个来源 · 自动产物 {autoInjectedPreviousSteps.length} · 知识库 {selectedKnowledgeBaseOptions.length} · 手动材料 {selectedReviewMaterialOptions.length} · 文件 {currentContextFiles.length}
+                    本轮注入 {selectedContextCount} 个来源 · 自动产物 {autoInjectedPreviousSteps.length} · 知识库 {selectedKnowledgeBaseOptions.length} · 文件 {currentContextFiles.length}
                   </p>
                 </div>
               </div>
@@ -5428,26 +4971,6 @@ export default function WorkflowsPage() {
                             );
                           }}
                           aria-label={`移除知识库 ${kb.name}`}
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </Badge>
-                    ))}
-                    {selectedReviewMaterialOptions.map((material) => (
-                      <Badge key={`selected-material-${material.id}`} variant="secondary" className="gap-1.5">
-                        <ClipboardCheck className="h-3 w-3" />
-                        {material.name}
-                        <button
-                          type="button"
-                          className="ml-1 text-muted-foreground hover:text-foreground"
-                          onClick={() => {
-                            const nextIds = selectedReviewMaterialIds.filter((id) => id !== material.id);
-                            updateCurrentContextSelection(
-                              { reviewMaterialIds: nextIds },
-                              () => setSelectedReviewMaterialIds(nextIds),
-                            );
-                          }}
-                          aria-label={`移除材料 ${material.name}`}
                         >
                           <X className="h-3 w-3" />
                         </button>
@@ -5610,54 +5133,6 @@ export default function WorkflowsPage() {
                         )}
                       </div>
 
-                      <div className="rounded-lg border border-border/50 bg-background/60 p-3">
-                        <p className="text-xs font-medium">额外审核材料</p>
-                        <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
-                          这里用于选择非默认链路的产物或本地审核材料。
-                        </p>
-                        {additionalReviewMaterials.length > 0 ? (
-                          <div className="mt-3 flex flex-col gap-2">
-                            {additionalReviewMaterials.map((material) => {
-                              const selected = selectedReviewMaterialIds.includes(material.id);
-                              return (
-                                <div
-                                  key={material.id}
-                                  className={`flex items-start justify-between gap-3 rounded-lg border p-3 ${
-                                    selected ? 'border-primary/50 bg-primary/10' : 'border-border/50 bg-background/60'
-                                  }`}
-                                >
-                                  <div className="min-w-0">
-                                    <p className="truncate text-xs font-medium">{material.name}</p>
-                                    <p className="mt-1 text-[11px] text-muted-foreground">{material.source}</p>
-                                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{material.summary}</p>
-                                  </div>
-                                  <Button
-                                    type="button"
-                                    variant={selected ? 'default' : 'outline'}
-                                    size="sm"
-                                    className="h-8 shrink-0 text-xs"
-                                    onClick={() => {
-                                      const nextIds = selected
-                                        ? selectedReviewMaterialIds.filter((id) => id !== material.id)
-                                        : [...selectedReviewMaterialIds, material.id];
-                                      updateCurrentContextSelection(
-                                        { reviewMaterialIds: nextIds },
-                                        () => setSelectedReviewMaterialIds(nextIds),
-                                      );
-                                    }}
-                                  >
-                                    {selected ? '已选' : '选择'}
-                                  </Button>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <div className="mt-3 rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
-                            暂无额外审核材料。步骤产物会默认通过上方链路注入下一步骤，无需手动保存。
-                          </div>
-                        )}
-                      </div>
                     </div>
                   </TabsContent>
 
@@ -5847,17 +5322,16 @@ export default function WorkflowsPage() {
                   <PanelRight className="h-4 w-4" />
                 </Button>
               </div>
-              <TabsList className="mt-3 grid h-auto w-full grid-cols-5 gap-1">
+              <TabsList className="mt-3 grid h-auto w-full grid-cols-4 gap-1">
                 <TabsTrigger value="outputs" className="text-xs">产出</TabsTrigger>
                 <TabsTrigger value="review" className="text-xs">审核</TabsTrigger>
-                <TabsTrigger value="archive" className="text-xs">沉淀</TabsTrigger>
                 <TabsTrigger value="context" className="text-xs">上下文</TabsTrigger>
                 <TabsTrigger value="demo" className="text-xs">Demo</TabsTrigger>
               </TabsList>
             </div>
 
-            <TabsContent value="outputs" className="min-h-0 flex-1 overflow-hidden">
-              <div className="flex h-full min-w-0 flex-col gap-4 overflow-y-auto p-4">
+          <TabsContent value="outputs" className="min-h-0 flex-1 overflow-hidden">
+            <div className="flex h-full min-w-0 flex-col gap-4 overflow-y-auto p-4">
                 <div className="min-w-0">
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <h4 className="min-w-0 truncate text-xs font-medium text-muted-foreground">当前步骤产出</h4>
@@ -5929,8 +5403,8 @@ export default function WorkflowsPage() {
                     </p>
                   )}
                 </div>
-              </div>
-            </TabsContent>
+            </div>
+          </TabsContent>
 
           <TabsContent value="review" className="min-h-0 flex-1 overflow-hidden">
             <div className="flex h-full min-w-0 flex-col gap-3 overflow-y-auto p-4">
@@ -6017,74 +5491,6 @@ export default function WorkflowsPage() {
             </div>
           </TabsContent>
 
-          <TabsContent value="archive" className="min-h-0 flex-1 overflow-hidden">
-            <div className="flex h-full min-w-0 flex-col gap-3 overflow-y-auto p-4">
-                <Card className={appCardClassName}>
-                  <CardContent className="flex flex-col gap-3 p-3">
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium">归档为工作流知识材料</p>
-                      <p className="mt-1 break-words text-[11px] leading-5 text-muted-foreground">
-                        {isReviewedOutputArchived
-                          ? '已归档，可在后续上下文中选择引用。'
-                          : '将已审核产物和评论沉淀为当前工作流可复用材料。'}
-                      </p>
-                    </div>
-                    <Button
-                      variant={isReviewedOutputArchived ? 'secondary' : 'outline'}
-                      size="sm"
-                      className="h-8 w-full gap-1.5 text-xs"
-                      disabled={!canArchiveReviewedOutput || isReviewedOutputArchived}
-                      onClick={() => currentStep && archiveReviewedOutput(currentStep.id)}
-                    >
-                      <Save className="h-3.5 w-3.5" />
-                      {isReviewedOutputArchived ? '已归档' : '归档审核材料'}
-                    </Button>
-                  </CardContent>
-                </Card>
-
-                {currentStep?.output && (
-                  <Card className={appCardClassName}>
-                    <CardContent className="flex flex-col gap-3 p-3">
-                      <div className="min-w-0">
-                        <p className="text-xs font-medium">保存步骤产出</p>
-                        <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
-                          {savedCurrentStepOutput
-                            ? `已保存为 ${savedCurrentStepOutput.name}，可在后续步骤的补充上下文中选择引用。`
-                            : '将当前步骤产出保存为工作流内材料，后续步骤可作为评审材料引用。'}
-                        </p>
-                      </div>
-                      <div className="flex flex-col gap-2">
-                        {savedCurrentStepOutput && (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            className="w-full gap-2"
-                            onClick={() => downloadReviewedOutputFile(savedCurrentStepOutput)}
-                          >
-                            <Download className="h-3.5 w-3.5" />
-                            下载已保存产物
-                          </Button>
-                        )}
-                        <Button
-                          variant={savedCurrentStepOutputIsCurrent ? 'secondary' : 'outline'}
-                          size="sm"
-                          className="w-full gap-2"
-                          disabled={savedCurrentStepOutputIsCurrent}
-                          onClick={openCurrentStepOutputSavePrompt}
-                        >
-                          <Save className="h-3.5 w-3.5" />
-                          {savedCurrentStepOutputIsCurrent
-                            ? '已保存当前版本'
-                            : savedCurrentStepOutput
-                              ? '更新产出物'
-                              : '保存产出物'}
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
-                )}
-            </div>
-          </TabsContent>
           <TabsContent value="context" className="min-h-0 flex-1 overflow-hidden">
             {supplementalContextPanel}
           </TabsContent>

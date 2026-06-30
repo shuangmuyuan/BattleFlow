@@ -30,6 +30,7 @@ export const revalidate = 0;
 type ValidationAction = 'start_step_validation' | 'retry_step_validation' | 'clear_failed_validation';
 
 const MAX_CANDIDATE_OUTPUT_CHARS = 250_000;
+const WORKFLOW_OUTPUT_VALIDATION_ENABLED = false;
 
 interface ValidationRequestBody {
   action: ValidationAction;
@@ -116,6 +117,101 @@ function parseValidationRequest(value: unknown): ValidationRequestBody | string 
 
 function createId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+}
+
+function sortWorkflowStepsForExecution(steps: WorkflowStepRecord[]) {
+  return steps
+    .map((step, originalIndex) => ({ step, originalIndex }))
+    .sort((a, b) => {
+      if (a.step.step_index !== b.step.step_index) {
+        return a.step.step_index - b.step.step_index;
+      }
+      return a.originalIndex - b.originalIndex;
+    })
+    .map(({ step }) => step);
+}
+
+function isValidationGateStatus(status: WorkflowStepRecord['status']) {
+  return status === 'self_checking' || status === 'agent_validating' || status === 'validation_failed';
+}
+
+function deriveWorkflowStatusFromSteps(steps: WorkflowStepRecord[]): WorkflowRecord['status'] {
+  const activeSteps = steps.filter((step) => !step.isRemoved);
+  if (activeSteps.length === 0) return 'draft';
+  if (activeSteps.every((step) => step.status === 'completed')) return 'completed';
+  return 'in_progress';
+}
+
+function normalizeWorkflowExecutionPlan(workflow: WorkflowRecord, updatedAt: string): WorkflowRecord {
+  const visibleSteps = sortWorkflowStepsForExecution(workflow.steps.filter((step) => !step.isRemoved));
+  const removedSteps = workflow.steps.filter((step) => step.isRemoved);
+  const groups: Array<{ runMode: WorkflowStepRecord['runMode']; steps: WorkflowStepRecord[] }> = [];
+  let parallelGroupCounter = 0;
+
+  visibleSteps.forEach((step) => {
+    const runMode = step.runMode === 'parallel' ? 'parallel' : 'serial';
+    const previousGroup = groups[groups.length - 1];
+
+    if (runMode === 'parallel' && previousGroup?.runMode === 'parallel') {
+      previousGroup.steps.push(step);
+      return;
+    }
+
+    groups.push({ runMode, steps: [step] });
+  });
+
+  const firstIncompleteGroupIndex = groups.findIndex((group) => (
+    group.steps.some((step) => step.status !== 'completed')
+  ));
+  let nextStepIndex = 0;
+
+  const normalizedVisibleSteps = groups.flatMap((group, groupIndex) => {
+    const stepIndex = nextStepIndex;
+    nextStepIndex += 1;
+
+    if (group.runMode === 'parallel') {
+      parallelGroupCounter += 1;
+    }
+
+    const parallelGroupId = group.runMode === 'parallel'
+      ? `parallel-${workflow.id}-${parallelGroupCounter}`
+      : undefined;
+    const parallelGroupName = group.runMode === 'parallel'
+      ? `并行任务组 ${parallelGroupCounter}`
+      : undefined;
+
+    return group.steps.map((step) => {
+      const isActiveIncompleteGroup = groupIndex === firstIncompleteGroupIndex;
+      const status: WorkflowStepRecord['status'] = step.status === 'completed'
+        ? 'completed'
+        : isActiveIncompleteGroup
+          ? isValidationGateStatus(step.status) ? step.status : 'in_progress'
+          : 'pending';
+
+      return {
+        ...step,
+        step_index: stepIndex,
+        runMode: group.runMode,
+        parallelGroupId,
+        parallelGroupName,
+        status,
+        updated_at: step.updated_at,
+      };
+    }).map((step) => (
+      group.runMode === 'serial'
+        ? { ...step, parallelGroupId: undefined, parallelGroupName: undefined }
+        : step
+    ));
+  });
+
+  const steps = [...normalizedVisibleSteps, ...removedSteps];
+
+  return {
+    ...workflow,
+    status: deriveWorkflowStatusFromSteps(steps),
+    steps,
+    updated_at: updatedAt,
+  };
 }
 
 function normalizeCandidateOutput(workflow: WorkflowRecord, step: WorkflowStepRecord, output: string) {
@@ -252,6 +348,37 @@ async function runValidation(
   candidateOutput: string,
   options: { agentValidationEnabled: boolean },
 ) {
+  if (!WORKFLOW_OUTPUT_VALIDATION_ENABLED) {
+    const completedAt = new Date().toISOString();
+    const normalizedOutput = normalizeCandidateOutput(workflow, step, candidateOutput);
+    const completedWorkflow = updateStep(workflow, step.id, {
+      status: 'completed',
+      output: normalizedOutput,
+      completed_at: completedAt,
+      candidateOutput: undefined,
+      candidateArtifactHash: undefined,
+      candidateSnapshotId: undefined,
+      validationAttemptId: undefined,
+      validationStatus: 'passed',
+      validationSummary: undefined,
+    }, completedAt);
+    const finalWorkflow = await persistValidationState(
+      normalizeWorkflowExecutionPlan(completedWorkflow, completedAt),
+    );
+    const finalStep = finalWorkflow.steps.find((item) => item.id === step.id);
+
+    return {
+      response: jsonOk({
+        workflow: finalWorkflow,
+        step: finalStep,
+        attempts: getValidationAttempts(finalWorkflow, step.id),
+        status: 'passed',
+        passed: true,
+        validationSkipped: true,
+      }),
+    };
+  }
+
   const skillContext = await resolveSkillForValidation(workflow, step);
   if (!skillContext?.skill) {
     return { response: jsonError('Skill not found for workflow step', 404) };
@@ -317,13 +444,18 @@ async function runValidation(
       status: gateResult.attemptStatus,
       updated_at: selfCheckedAt,
     };
-    const finalWorkflow = await persistValidationState(upsertAttempt(updateStep(startedWorkflow, step.id, {
+    const finalState = upsertAttempt(updateStep(startedWorkflow, step.id, {
       status: gateResult.stepStatus,
       output: gateResult.shouldPromoteCandidate ? normalizedOutput : step.output,
       completed_at: gateResult.shouldPromoteCandidate ? selfCheckedAt : step.completed_at,
       validationStatus: gateResult.validationStatus,
       validationSummary: gateResult.summary || (gateResult.shouldPromoteCandidate ? '验证通过' : '验证未通过'),
-    }, selfCheckedAt), finalAttempt, selfCheckedAt));
+    }, selfCheckedAt), finalAttempt, selfCheckedAt);
+    const finalWorkflow = await persistValidationState(
+      gateResult.shouldPromoteCandidate
+        ? normalizeWorkflowExecutionPlan(finalState, selfCheckedAt)
+        : finalState,
+    );
     const finalStep = finalWorkflow.steps.find((item) => item.id === step.id);
 
     return {
@@ -365,13 +497,18 @@ async function runValidation(
     status: gateResult.attemptStatus,
     updated_at: completedAt,
   };
-  const finalWorkflow = await persistValidationState(upsertAttempt(updateStep(selfCheckedWorkflow, step.id, {
+  const finalState = upsertAttempt(updateStep(selfCheckedWorkflow, step.id, {
     status: gateResult.stepStatus,
     output: gateResult.shouldPromoteCandidate ? normalizedOutput : step.output,
     completed_at: gateResult.shouldPromoteCandidate ? completedAt : step.completed_at,
     validationStatus: gateResult.validationStatus,
     validationSummary: gateResult.summary || (gateResult.shouldPromoteCandidate ? '验证通过' : '验证未通过'),
-  }, completedAt), finalAttempt, completedAt));
+  }, completedAt), finalAttempt, completedAt);
+  const finalWorkflow = await persistValidationState(
+    gateResult.shouldPromoteCandidate
+      ? normalizeWorkflowExecutionPlan(finalState, completedAt)
+      : finalState,
+  );
   const finalStep = finalWorkflow.steps.find((item) => item.id === step.id);
 
   return {

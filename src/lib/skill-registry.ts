@@ -180,6 +180,7 @@ const seedRoot = path.join(cwd, 'skills', 'official');
 const tempRoot = path.join(registryRoot, 'tmp');
 
 const SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
+const SKILL_PACKAGE_SPEC_VALIDATION_ENABLED = false;
 const SKILL_FILE_NAMES = ['skill.md', 'SKILL.md'];
 const META_FILE_NAMES = ['meta.json'];
 const CHANGELOG_FILE_NAMES = ['CHANGELOG.md', 'changelog.md'];
@@ -532,6 +533,8 @@ export function validateSkillPackageSpec(input: SkillPackageSpecValidationInput)
 }
 
 export function assertSkillPackageSpec(input: SkillPackageSpecValidationInput) {
+  if (!SKILL_PACKAGE_SPEC_VALIDATION_ENABLED) return;
+
   const issues = validateSkillPackageSpec(input);
   if (issues.length === 0) return;
 

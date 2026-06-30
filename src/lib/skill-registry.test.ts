@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   assertSkillPackageSpec,
   renderStandardSkillTemplateMarkdown,
-  SkillImportValidationError,
   validateSkillPackageSpec,
 } from './skill-registry';
 
@@ -63,7 +62,7 @@ describe('skill package specification validation', () => {
     ]));
   });
 
-  it('throws SkillImportValidationError when package validation fails', () => {
+  it('skips import blocking while package specification enforcement is disabled', () => {
     expect(() => assertSkillPackageSpec({
       packagePath: '/tmp/bad-skill',
       skillMd: '',
@@ -72,6 +71,6 @@ describe('skill package specification validation', () => {
       checklist: [],
       validationContract: {},
       contentMd: '',
-    })).toThrow(SkillImportValidationError);
+    })).not.toThrow();
   });
 });
