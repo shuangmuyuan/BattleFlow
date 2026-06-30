@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, type ChangeEvent } from 'react';
+import { useState, useEffect, useCallback, useRef, type ChangeEvent } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -23,6 +23,7 @@ import {
   Clock,
   LockKeyhole,
   Users,
+  X,
 } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
@@ -54,6 +55,11 @@ interface SearchResult {
   source: string;
 }
 
+interface KnowledgeSearchScope {
+  id: string;
+  name: string;
+}
+
 function formatKnowledgeUpdatedAt(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '未知时间';
@@ -68,6 +74,7 @@ function formatKnowledgeUpdatedAt(value: string) {
 export default function KnowledgePage() {
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchScope, setSearchScope] = useState<KnowledgeSearchScope | null>(null);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -85,6 +92,7 @@ export default function KnowledgePage() {
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
   const [serviceNotice, setServiceNotice] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const applyServiceNotice = useCallback((data: { serviceUnavailable?: boolean; error?: string }) => {
     if (!data.serviceUnavailable) return false;
@@ -125,14 +133,27 @@ export default function KnowledgePage() {
     };
   }, [applyServiceNotice]);
 
-  const handleSearch = useCallback(async () => {
-    if (!searchQuery.trim()) return;
+  const focusSearchInput = useCallback(() => {
+    window.setTimeout(() => searchInputRef.current?.focus(), 0);
+  }, []);
+
+  const runSearch = useCallback(async (queryValue: string, scope: KnowledgeSearchScope | null) => {
+    const trimmedQuery = queryValue.trim();
+    if (!trimmedQuery) return;
 
     setIsSearching(true);
     try {
       setErrorMessage('');
       setServiceNotice('');
-      const res = await fetch(`/api/knowledge?query=${encodeURIComponent(searchQuery)}&topK=5`);
+      const params = new URLSearchParams({
+        query: trimmedQuery,
+        topK: '5',
+      });
+      if (scope) {
+        params.set('knowledgeBaseId', scope.id);
+      }
+
+      const res = await fetch(`/api/knowledge?${params.toString()}`);
       const data = await res.json();
       if (applyServiceNotice(data)) {
         setSearchResults([]);
@@ -147,7 +168,45 @@ export default function KnowledgePage() {
     } finally {
       setIsSearching(false);
     }
-  }, [applyServiceNotice, searchQuery]);
+  }, [applyServiceNotice]);
+
+  const handleSearch = useCallback(() => {
+    void runSearch(searchQuery, searchScope);
+  }, [runSearch, searchQuery, searchScope]);
+
+  const handleGlobalSearchOpen = useCallback(() => {
+    setSearchScope(null);
+    setSearchResults([]);
+    setActiveTab('search');
+    focusSearchInput();
+    if (searchQuery.trim()) {
+      void runSearch(searchQuery, null);
+    }
+  }, [focusSearchInput, runSearch, searchQuery]);
+
+  const handleClearSearchScope = useCallback(() => {
+    setSearchScope(null);
+    focusSearchInput();
+    if (searchQuery.trim()) {
+      void runSearch(searchQuery, null);
+      return;
+    }
+    setSearchResults([]);
+  }, [focusSearchInput, runSearch, searchQuery]);
+
+  const handleKnowledgeBaseSearch = useCallback((knowledgeBase: KnowledgeBase) => {
+    const nextScope = { id: knowledgeBase.id, name: knowledgeBase.name };
+    setSearchScope(nextScope);
+    setSearchResults([]);
+    setErrorMessage('');
+    setServiceNotice('');
+    setActiveTab('search');
+    focusSearchInput();
+
+    if (searchQuery.trim()) {
+      void runSearch(searchQuery, nextScope);
+    }
+  }, [focusSearchInput, runSearch, searchQuery]);
 
   const handleCreateKb = async () => {
     if (!newKbName) return;
@@ -267,14 +326,14 @@ export default function KnowledgePage() {
         title="知识库"
         action={(
           <>
-          <Button variant="outline" className="gap-2" onClick={() => setActiveTab('search')}>
-            <Search className="h-4 w-4" />
-            语义检索
-          </Button>
-          <Button className="gap-2" onClick={() => setCreateDialogOpen(true)}>
-            <Plus className="h-4 w-4" />
-            新建知识库
-          </Button>
+            <Button variant="outline" className="gap-2" onClick={handleGlobalSearchOpen}>
+              <Search className="h-4 w-4" />
+              语义检索
+            </Button>
+            <Button className="gap-2" onClick={() => setCreateDialogOpen(true)}>
+              <Plus className="h-4 w-4" />
+              新建知识库
+            </Button>
           </>
         )}
       />
@@ -376,7 +435,13 @@ export default function KnowledgePage() {
                             <FileUp className="h-3 w-3" />
                             上传文件
                           </Button>
-                          <Button variant="outline" size="sm" className="gap-1">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="gap-1"
+                            onClick={() => handleKnowledgeBaseSearch(kb)}
+                            aria-label={`检索 ${kb.name}`}
+                          >
                             <Search className="h-3 w-3" />
                             检索
                           </Button>
@@ -396,10 +461,31 @@ export default function KnowledgePage() {
 
           <TabsContent value="search">
             <div className="mx-auto flex max-w-2xl flex-col gap-6">
+              {searchScope && (
+                <div className="flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
+                  <span className="shrink-0">检索范围</span>
+                  <Badge variant="outline" className="min-w-0 gap-1.5 border-brand/40 text-brand">
+                    <Database className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{searchScope.name}</span>
+                  </Badge>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 shrink-0"
+                    onClick={handleClearSearchScope}
+                    aria-label="清除检索范围"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              )}
+
               <div className="flex flex-col gap-2 sm:flex-row">
                 <div className="relative min-w-0 flex-1">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
+                    ref={searchInputRef}
                     placeholder="输入关键词或自然语言描述来检索知识库..."
                     className="pl-10"
                     value={searchQuery}
@@ -407,14 +493,16 @@ export default function KnowledgePage() {
                     onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
                   />
                 </div>
-                <Button className="sm:w-auto" onClick={handleSearch} disabled={isSearching}>
+                <Button className="sm:w-auto" onClick={handleSearch} disabled={isSearching || !searchQuery.trim()}>
                   {isSearching ? '检索中...' : '检索'}
                 </Button>
               </div>
 
               {searchResults.length > 0 && (
                 <div className="space-y-4">
-                  <p className="text-sm text-muted-foreground">找到 {searchResults.length} 条相关内容</p>
+                  <p className="text-sm text-muted-foreground">
+                    找到 {searchResults.length} 条相关内容{searchScope ? `（${searchScope.name}）` : ''}
+                  </p>
                   {searchResults.map((result, idx) => (
                     <Card key={idx} className="border-border/60">
                       <CardContent className="p-4">
@@ -432,8 +520,10 @@ export default function KnowledgePage() {
               {searchResults.length === 0 && searchQuery && !isSearching && !errorMessage && (
                 <ProductEmptyState
                   icon={<BookOpen />}
-                  title="未找到匹配内容"
-                  description="当前知识库没有返回相关片段，可以换一个关键词或补充知识材料。"
+                  title={searchScope ? '当前范围未找到匹配内容' : '未找到匹配内容'}
+                  description={searchScope
+                    ? `「${searchScope.name}」没有返回相关片段，可以换一个关键词或先上传知识材料。`
+                    : '当前知识库没有返回相关片段，可以换一个关键词或补充知识材料。'}
                   className="min-h-60"
                 />
               )}
@@ -441,8 +531,10 @@ export default function KnowledgePage() {
               {searchResults.length === 0 && !searchQuery && !isSearching && (
                 <ProductEmptyState
                   icon={<Search />}
-                  title="输入问题开始检索"
-                  description="支持关键词或自然语言描述，例如“最近一次竞品分析里的用户痛点”。"
+                  title={searchScope ? `检索「${searchScope.name}」` : '输入问题开始检索'}
+                  description={searchScope
+                    ? '输入关键词或自然语言问题，只在当前知识库中查找相关片段。'
+                    : '支持关键词或自然语言描述，例如“最近一次竞品分析里的用户痛点”。'}
                   className="min-h-60"
                 />
               )}

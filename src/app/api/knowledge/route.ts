@@ -46,6 +46,14 @@ function readTopK(value: string | null): number {
   return Number.isFinite(parsed) ? parsed : 5;
 }
 
+function readKnowledgeBaseId(searchParams: URLSearchParams): string | null {
+  const value = searchParams.get('knowledgeBaseId') ?? searchParams.get('knowledge_base_id');
+  if (!value) return null;
+
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
 function isKnowledgeServiceConfigError(error: unknown) {
   return error instanceof KnowledgeDatabaseConfigError || (
     error instanceof Error && error.message.includes('BATTLEFLOW_DATABASE_URL')
@@ -154,10 +162,19 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ results: [], serviceUnavailable: false }, { status: 200 });
     }
 
+    const requestedKnowledgeBaseId = readKnowledgeBaseId(searchParams);
+    const searchableKnowledgeBaseIds = requestedKnowledgeBaseId
+      ? allowedKnowledgeBaseIds.filter((id) => id === requestedKnowledgeBaseId)
+      : allowedKnowledgeBaseIds;
+
+    if (searchableKnowledgeBaseIds.length === 0) {
+      return NextResponse.json({ results: [], serviceUnavailable: false }, { status: 200 });
+    }
+
     const results = await searchKnowledgeDocuments({
       query,
       topK: readTopK(searchParams.get('topK')),
-      knowledgeBaseIds: allowedKnowledgeBaseIds,
+      knowledgeBaseIds: searchableKnowledgeBaseIds,
     });
 
     return NextResponse.json({
