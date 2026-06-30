@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   FileCode2,
   Play,
@@ -38,8 +39,8 @@ interface DashboardStatsResponse {
   recentSkills?: Array<{ id: string; name: string; scope?: string; version?: string }>;
 }
 
-const RECENT_LIST_LIMIT = 5;
-const recentListViewportClassName = 'flex max-h-[19.5rem] min-h-0 flex-col gap-2 overflow-y-auto pr-2 [scrollbar-gutter:stable]';
+const recentListViewportClassName = 'h-full max-h-[21rem] min-h-0 rounded-md';
+const recentListContentClassName = 'flex min-h-full flex-col gap-2 pr-3';
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats>({
@@ -73,7 +74,7 @@ export default function DashboardPage() {
             : [];
         if (!ignore) {
           setRecentWorkflows(workflows);
-          setRecentSkills(skills.slice(0, RECENT_LIST_LIMIT));
+          setRecentSkills(skills);
           setStats({
             totalSkills: statsData.skillCount ?? skills.length,
             totalWorkflows: statsData.workflowCount ?? workflows.length,
@@ -93,9 +94,6 @@ export default function DashboardPage() {
       ignore = true;
     };
   }, []);
-
-  const visibleRecentWorkflows = recentWorkflows.slice(0, RECENT_LIST_LIMIT);
-  const visibleRecentSkills = recentSkills.slice(0, RECENT_LIST_LIMIT);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto p-3 md:p-4">
@@ -216,7 +214,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Recent Workflows & Skills */}
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-2">
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-2 lg:[grid-auto-rows:minmax(0,1fr)]">
         <Card className={`${appCardClassName} flex min-h-0 flex-col overflow-hidden`}>
           <CardHeader className="shrink-0 px-4 py-3">
             <div className="flex items-center justify-between">
@@ -227,37 +225,39 @@ export default function DashboardPage() {
             </div>
           </CardHeader>
           <CardContent className="min-h-0 flex-1 overflow-hidden px-4 pb-4 pt-0">
-            <div className={recentListViewportClassName}>
-              {visibleRecentWorkflows.length === 0 && !loading ? (
-                <ProductEmptyState
-                  icon={<Play />}
-                  title="暂无最近工作流"
-                  description="创建工作流后，最近更新会显示在这里。"
-                  className="min-h-32 border-0 bg-muted/30"
-                />
-              ) : visibleRecentWorkflows.map((wf) => (
-                <div key={wf.id} className="flex min-w-0 items-center justify-between gap-3 rounded-lg p-2.5 transition-colors hover:bg-muted/50">
-                  <div className="flex min-w-0 items-center gap-3">
-                    {wf.status === 'completed' ? (
-                      <CheckCircle2 className="h-4 w-4 text-success" />
-                    ) : wf.status === 'in_progress' ? (
-                      <Clock className="h-4 w-4 text-warning" />
-                    ) : (
-                      <Play className="h-4 w-4 text-muted-foreground" />
-                    )}
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">{wf.name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        更新于 {wf.updated_at ? new Date(wf.updated_at).toLocaleDateString('zh-CN') : '-'}
-                      </p>
+            <ScrollArea className={recentListViewportClassName}>
+              <div className={recentListContentClassName}>
+                {recentWorkflows.length === 0 && !loading ? (
+                  <ProductEmptyState
+                    icon={<Play />}
+                    title="暂无最近工作流"
+                    description="创建工作流后，最近更新会显示在这里。"
+                    className="min-h-32 border-0 bg-muted/30"
+                  />
+                ) : recentWorkflows.map((wf) => (
+                  <div key={wf.id} className="flex min-w-0 items-center justify-between gap-3 rounded-lg p-2.5 transition-colors hover:bg-muted/50">
+                    <div className="flex min-w-0 items-center gap-3">
+                      {wf.status === 'completed' ? (
+                        <CheckCircle2 className="h-4 w-4 text-success" />
+                      ) : wf.status === 'in_progress' ? (
+                        <Clock className="h-4 w-4 text-warning" />
+                      ) : (
+                        <Play className="h-4 w-4 text-muted-foreground" />
+                      )}
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{wf.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          更新于 {wf.updated_at ? new Date(wf.updated_at).toLocaleDateString('zh-CN') : '-'}
+                        </p>
+                      </div>
                     </div>
+                    <StatusBadge tone={wf.status === 'completed' ? 'success' : wf.status === 'in_progress' ? 'brand' : 'neutral'}>
+                      {wf.status === 'completed' ? '已完成' : wf.status === 'in_progress' ? '进行中' : '草稿'}
+                    </StatusBadge>
                   </div>
-                  <StatusBadge tone={wf.status === 'completed' ? 'success' : wf.status === 'in_progress' ? 'brand' : 'neutral'}>
-                    {wf.status === 'completed' ? '已完成' : wf.status === 'in_progress' ? '进行中' : '草稿'}
-                  </StatusBadge>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            </ScrollArea>
           </CardContent>
         </Card>
 
@@ -271,29 +271,31 @@ export default function DashboardPage() {
             </div>
           </CardHeader>
           <CardContent className="min-h-0 flex-1 overflow-hidden px-4 pb-4 pt-0">
-            <div className={recentListViewportClassName}>
-              {recentSkills.length === 0 && !loading ? (
-                <ProductEmptyState
-                  icon={<FileCode2 />}
-                  title="暂无最近 Skill"
-                  description="导入或发布 Skill 后，常用能力会显示在这里。"
-                  className="min-h-32 border-0 bg-muted/30"
-                />
-              ) : visibleRecentSkills.map((skill) => (
-                <div key={skill.id} className="flex min-w-0 items-center justify-between gap-3 rounded-lg p-2.5 transition-colors hover:bg-muted/50">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <FileCode2 className="h-4 w-4 text-muted-foreground" />
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">{skill.name}</p>
-                      <p className="text-xs text-muted-foreground">v{skill.version}</p>
+            <ScrollArea className={recentListViewportClassName}>
+              <div className={recentListContentClassName}>
+                {recentSkills.length === 0 && !loading ? (
+                  <ProductEmptyState
+                    icon={<FileCode2 />}
+                    title="暂无最近 Skill"
+                    description="导入或发布 Skill 后，常用能力会显示在这里。"
+                    className="min-h-32 border-0 bg-muted/30"
+                  />
+                ) : recentSkills.map((skill) => (
+                  <div key={skill.id} className="flex min-w-0 items-center justify-between gap-3 rounded-lg p-2.5 transition-colors hover:bg-muted/50">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <FileCode2 className="h-4 w-4 text-muted-foreground" />
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{skill.name}</p>
+                        <p className="text-xs text-muted-foreground">v{skill.version}</p>
+                      </div>
                     </div>
+                    <StatusBadge tone={skill.scope === 'official' ? 'brand' : skill.scope === 'team' ? 'success' : 'neutral'}>
+                      {skill.scope === 'official' ? '官方' : skill.scope === 'team' ? '团队' : '个人'}
+                    </StatusBadge>
                   </div>
-                  <StatusBadge tone={skill.scope === 'official' ? 'brand' : skill.scope === 'team' ? 'success' : 'neutral'}>
-                    {skill.scope === 'official' ? '官方' : skill.scope === 'team' ? '团队' : '个人'}
-                  </StatusBadge>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            </ScrollArea>
           </CardContent>
         </Card>
       </div>

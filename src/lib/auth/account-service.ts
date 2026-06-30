@@ -7,7 +7,7 @@ import { AuthConfigError, type AuthUser } from './types';
 
 const MAX_FAILED_ATTEMPTS = 8;
 const LOCK_MINUTES = 15;
-const BUILT_IN_SUPER_ADMIN_PASSWORD = 'superadmin';
+const BUILT_IN_SUPER_ADMIN_PASSWORD = 'BattleFlow@2026.uuid64';
 const DEFAULT_ORGANIZATION_ID = '00000000-0000-0000-0000-000000000001';
 const DEFAULT_ORGANIZATION_NAME = 'Default Organization';
 const DEFAULT_ORGANIZATION_SLUG = 'default';

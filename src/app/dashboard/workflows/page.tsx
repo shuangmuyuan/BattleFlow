@@ -60,6 +60,7 @@ import {
   Play,
   ArrowLeft,
   ArrowUp,
+  Boxes,
   CheckCircle2,
   Circle,
   Clock,
@@ -3294,13 +3295,14 @@ export default function WorkflowsPage() {
                 />
               ) : (
                 <div className="max-h-[calc(100dvh-260px)] min-h-0 overflow-y-auto pr-2">
-                  <BentoGrid className="auto-rows-[218px] grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                  <BentoGrid className="auto-rows-[252px] grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                     {workspaces.map((workspace) => {
                       const workspaceDescription = getWorkspaceDescriptionText(workspace.description);
                       const workspaceWorkflowList = workflows.filter((workflow) => workflow.workspaceId === workspace.id);
                       const count = workspaceWorkflowList.length;
                       const inProgressCount = workspaceWorkflowList.filter((workflow) => workflow.status === 'in_progress').length;
                       const completedCount = workspaceWorkflowList.filter((workflow) => workflow.status === 'completed').length;
+                      const inProgressPercent = count > 0 ? Math.round((inProgressCount / count) * 100) : 0;
                       const latestUpdatedAt = [workspace.updated_at, ...workspaceWorkflowList.map((workflow) => workflow.updated_at)]
                         .filter(Boolean)
                         .sort((a, b) => String(b).localeCompare(String(a)))[0];
@@ -3308,7 +3310,7 @@ export default function WorkflowsPage() {
                       return (
                         <BentoCard
                           key={workspace.id}
-                          className="col-span-1 min-h-[218px]"
+                          className="col-span-1 min-h-[252px] hover:-translate-y-1"
                           contentClassName="gap-3"
                           actions={(
                             <div className="grid grid-cols-3 gap-2 rounded-lg border border-border/60 bg-card/95 p-1.5 shadow-lg shadow-background/20 backdrop-blur">
@@ -3347,13 +3349,16 @@ export default function WorkflowsPage() {
                           )}
                         >
                           <div className="flex min-w-0 items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <h3 className="truncate text-base font-semibold">{workspace.name}</h3>
-                              {workspaceDescription && (
-                                <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
-                                  {workspaceDescription}
+                            <div className="flex min-w-0 items-start gap-2.5">
+                              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-primary/25 bg-primary/10 text-primary">
+                                <Boxes className="h-3.5 w-3.5" />
+                              </span>
+                              <div className="min-w-0">
+                                <h3 className="truncate text-base font-semibold">{workspace.name}</h3>
+                                <p className="mt-1 h-10 line-clamp-2 text-sm leading-5 text-muted-foreground">
+                                  {workspaceDescription || '-'}
                                 </p>
-                              )}
+                              </div>
                             </div>
                             <time
                               className="shrink-0 text-xs text-muted-foreground"
@@ -3375,6 +3380,18 @@ export default function WorkflowsPage() {
                             <div className="min-w-0 px-2 py-1.5">
                               <p className="font-semibold text-success">{completedCount}</p>
                               <p className="mt-0.5 text-muted-foreground">已完成</p>
+                            </div>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between text-xs text-muted-foreground">
+                              <span>{inProgressPercent}% 进行中</span>
+                            </div>
+                            <div className="h-1.5 overflow-hidden rounded-full bg-muted/45">
+                              <div
+                                className="h-full rounded-full bg-primary transition-all duration-300"
+                                style={{ width: `${inProgressPercent}%` }}
+                              />
                             </div>
                           </div>
                         </BentoCard>

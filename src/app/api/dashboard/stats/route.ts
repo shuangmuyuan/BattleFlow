@@ -24,7 +24,7 @@ interface CountRow extends QueryResultRow {
   count: string | number;
 }
 
-const RECENT_LIST_LIMIT = 5;
+const RECENT_LIST_LIMIT = 20;
 
 function emptyStats() {
   return {

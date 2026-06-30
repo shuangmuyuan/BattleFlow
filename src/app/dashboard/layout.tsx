@@ -311,6 +311,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         return;
       }
 
+      if ((pathname === '/dashboard/admin' || pathname.startsWith('/dashboard/admin/')) && !data.isSuperAdmin) {
+        router.replace('/dashboard');
+        return;
+      }
+
       if (!cancelled) {
         setAuthState(data);
         setAuthChecked(true);
