@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { streamClaudeCodeCliTurn } from '@/lib/agent-adapters/claude-code-cli';
-import type { AgentEvent } from '@/lib/agent-adapters/types';
+import type { AgentEvent, AgentInputAttachment } from '@/lib/agent-adapters/types';
 import { requireOrganizationContext, requirePermission } from '@/lib/auth/server';
 import { AuthError, ForbiddenError } from '@/lib/auth/types';
 import {
@@ -114,6 +114,8 @@ const MAX_CHAT_PROMPT_MESSAGE_CHARS = 12_000;
 const MAX_TOTAL_CHAT_PROMPT_MESSAGE_CHARS = 48_000;
 const MAX_KNOWLEDGE_CHUNKS_PER_BASE = 3;
 const MAX_KNOWLEDGE_CHUNK_PROMPT_CHARS = 1_200;
+const MAX_IMAGE_ATTACHMENT_COUNT = 6;
+const MAX_IMAGE_ATTACHMENT_BYTES = 2 * 1024 * 1024;
 
 function sse(payload: Record<string, unknown>) {
   return `data: ${JSON.stringify(payload)}\n\n`;
@@ -138,6 +140,32 @@ function getString(value: unknown, fallback = '') {
 
 function getNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function getDataUrlByteLength(value: string) {
+  const base64 = value.split(',')[1] || '';
+  return Math.floor((base64.length * 3) / 4);
+}
+
+function getImageAttachments(files: UploadedFileContext[]): AgentInputAttachment[] {
+  return files.flatMap((file): AgentInputAttachment[] => {
+    const content = typeof file.content === 'string' ? file.content : '';
+    const type = typeof file.type === 'string' ? file.type : '';
+    if (
+      file.contentKind !== 'image_data_url'
+      || !type.startsWith('image/')
+      || !content.startsWith('data:image/')
+      || getDataUrlByteLength(content) > MAX_IMAGE_ATTACHMENT_BYTES
+    ) {
+      return [];
+    }
+
+    return [{
+      name: getString(file.name, 'uploaded-image'),
+      mimeType: type,
+      dataUrl: content,
+    }];
+  }).slice(0, MAX_IMAGE_ATTACHMENT_COUNT);
 }
 
 function truncateForPrompt(value: string, maxLength: number) {
@@ -636,6 +664,7 @@ function buildSystemPrompt(body: Record<string, unknown>) {
 
   systemPrompt += '\n\n## Instructions\n- Provide structured, professional output\n- If this is a methodology-driven workflow capability, follow the methodology steps\n- Reference context from previous steps when relevant\n- Be thorough but concise\n- Use markdown formatting for better readability';
   systemPrompt += '\n- Never ask the user to choose a Claude Code or Codex runtime capability. The BattleFlow workflow step has already supplied the active method package when one is available.';
+  systemPrompt += '\n- For ordinary Q&A, reply as a conversational assistant message. Do not package the answer as a workflow deliverable or markdown file unless the user explicitly asks to generate/export a document or is confirming the step output.';
   systemPrompt += '\n- When a step is ready to be confirmed, make the durable deliverable a standalone Markdown document that can be saved as this workflow step output. Avoid making the saved deliverable depend on conversational wording such as greetings or follow-up chatter.';
 
   return systemPrompt;
@@ -729,10 +758,16 @@ function streamAgentEventsAsSse(agentStream: ReadableStream<AgentEvent>) {
   });
 }
 
-function streamClaudeCodeCli(request: NextRequest, messages: ChatMessage[], systemPrompt: string) {
+function streamClaudeCodeCli(
+  request: NextRequest,
+  messages: ChatMessage[],
+  systemPrompt: string,
+  attachments: AgentInputAttachment[],
+) {
   return streamAgentEventsAsSse(streamClaudeCodeCliTurn({
     messages,
     systemPrompt,
+    attachments,
     signal: request.signal,
   }));
 }
@@ -765,7 +800,8 @@ export async function POST(request: NextRequest) {
     }
 
     const claudeMessages = prepareMessagesForClaudeCodeCli(messages, Boolean(body.skill_definition));
-    return streamClaudeCodeCli(request, claudeMessages, systemPrompt);
+    const uploadedFiles = Array.isArray(body.uploaded_files) ? body.uploaded_files as UploadedFileContext[] : [];
+    return streamClaudeCodeCli(request, claudeMessages, systemPrompt, getImageAttachments(uploadedFiles));
   } catch (error) {
     console.error('Chat API error:', error);
     if (error instanceof AuthError) {

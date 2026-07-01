@@ -298,8 +298,8 @@ export default function KnowledgePage() {
 
     if (!file) return;
 
-    if (!/\.(md|markdown|doc|docx)$/i.test(file.name)) {
-      setUploadFileError('只支持 .md、.doc、.docx 文件');
+    if (!/\.(md|markdown|doc|docx|pdf|xlsx)$/i.test(file.name)) {
+      setUploadFileError('只支持 .md、.doc、.docx、.pdf、.xlsx 文件');
       event.target.value = '';
       return;
     }
@@ -626,13 +626,13 @@ export default function KnowledgePage() {
             >
               <FileUp className="size-6 text-brand" />
               <span className="max-w-full truncate text-sm font-medium">
-                {uploadFileName || '选择 .md / .doc / .docx 文件'}
+                {uploadFileName || '选择 .md / .doc / .docx / .pdf / .xlsx 文件'}
               </span>
             </label>
             <Input
               id="knowledge-upload-file"
               type="file"
-              accept=".md,.markdown,.doc,.docx,text/markdown,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              accept=".md,.markdown,.doc,.docx,.pdf,.xlsx,text/markdown,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               className="sr-only"
               onChange={handleUploadFileChange}
             />

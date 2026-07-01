@@ -1,11 +1,20 @@
 import path from 'node:path';
 import mammoth from 'mammoth';
+import { PDFParse } from 'pdf-parse';
+import readXlsxFile from 'read-excel-file/node';
 import WordExtractor from 'word-extractor';
 
 const DEFAULT_MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const MAX_EXTRACTED_CONTENT_CHARS = 250_000;
 
-export const SUPPORTED_KNOWLEDGE_UPLOAD_EXTENSIONS = ['.md', '.markdown', '.doc', '.docx'] as const;
+export const SUPPORTED_KNOWLEDGE_UPLOAD_EXTENSIONS = [
+  '.md',
+  '.markdown',
+  '.doc',
+  '.docx',
+  '.pdf',
+  '.xlsx',
+] as const;
 
 type SupportedKnowledgeUploadExtension = typeof SUPPORTED_KNOWLEDGE_UPLOAD_EXTENSIONS[number];
 
@@ -21,6 +30,14 @@ interface BuildKnowledgeDocumentOptions {
   maxBytes?: number;
 }
 
+interface ExtractedUploadText {
+  fileName: string;
+  extension: SupportedKnowledgeUploadExtension;
+  sourceType: string;
+  content: string;
+  metadata: Record<string, unknown>;
+}
+
 export class KnowledgeUploadValidationError extends Error {
   constructor(message: string) {
     super(message);
@@ -28,19 +45,19 @@ export class KnowledgeUploadValidationError extends Error {
   }
 }
 
-function getUploadFileName(file: File): string {
+export function getUploadFileName(file: File): string {
   return file.name.split(/[\\/]/).pop()?.trim() || 'uploaded-document';
 }
 
-function getUploadExtension(fileName: string): SupportedKnowledgeUploadExtension {
+export function getUploadExtension(fileName: string): SupportedKnowledgeUploadExtension {
   const extension = path.extname(fileName).toLowerCase();
   if (SUPPORTED_KNOWLEDGE_UPLOAD_EXTENSIONS.includes(extension as SupportedKnowledgeUploadExtension)) {
     return extension as SupportedKnowledgeUploadExtension;
   }
-  throw new KnowledgeUploadValidationError('Only .md, .doc, and .docx knowledge uploads are supported');
+  throw new KnowledgeUploadValidationError('Only .md, .doc, .docx, .pdf, and .xlsx uploads are supported');
 }
 
-function normalizeExtractedText(value: string): string {
+export function normalizeExtractedText(value: string): string {
   return value
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
@@ -66,8 +83,41 @@ async function extractDocText(buffer: Buffer): Promise<string> {
   return normalizeExtractedText(document.getBody());
 }
 
+async function extractPdfText(buffer: Buffer): Promise<string> {
+  const parser = new PDFParse({ data: buffer });
+  try {
+    const result = await parser.getText();
+    return normalizeExtractedText(result.text);
+  } finally {
+    await parser.destroy();
+  }
+}
+
+function formatSpreadsheetCell(value: unknown) {
+  if (value instanceof Date) return value.toISOString();
+  if (value === null || value === undefined) return '';
+  return String(value);
+}
+
+async function extractSpreadsheetText(buffer: Buffer): Promise<string> {
+  const sheets = await readXlsxFile(buffer);
+  const content = sheets.map((sheet) => {
+    const rows = sheet.data
+      .map((row) => row.map(formatSpreadsheetCell).join(',').trim())
+      .filter(Boolean)
+      .join('\n');
+
+    return rows ? `# Sheet: ${sheet.sheet}\n${rows}` : '';
+  }).filter(Boolean).join('\n\n');
+
+  return normalizeExtractedText(content);
+}
+
 function sourceTypeForExtension(extension: SupportedKnowledgeUploadExtension): string {
-  return extension === '.md' || extension === '.markdown' ? 'markdown' : 'word';
+  if (extension === '.md' || extension === '.markdown') return 'markdown';
+  if (extension === '.pdf') return 'pdf';
+  if (extension === '.xlsx') return 'spreadsheet';
+  return 'word';
 }
 
 function formatBytes(value: number): string {
@@ -80,6 +130,21 @@ export async function buildKnowledgeDocumentFromUploadFile(
   file: File,
   options: BuildKnowledgeDocumentOptions = {},
 ): Promise<KnowledgeUploadDocumentInput> {
+  const extracted = await extractTextFromUploadFile(file, options);
+
+  return {
+    title: extracted.fileName,
+    sourceType: extracted.sourceType,
+    source: extracted.fileName,
+    content: extracted.content,
+    metadata: extracted.metadata,
+  };
+}
+
+export async function extractTextFromUploadFile(
+  file: File,
+  options: BuildKnowledgeDocumentOptions = {},
+): Promise<ExtractedUploadText> {
   const fileName = getUploadFileName(file);
   const extension = getUploadExtension(fileName);
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_UPLOAD_BYTES;
@@ -94,6 +159,20 @@ export async function buildKnowledgeDocumentFromUploadFile(
   let content = '';
   if (extension === '.md' || extension === '.markdown') {
     content = await extractMarkdownText(file);
+  } else if (extension === '.pdf') {
+    const buffer = Buffer.from(await file.arrayBuffer());
+    try {
+      content = await extractPdfText(buffer);
+    } catch {
+      throw new KnowledgeUploadValidationError('Could not extract text from PDF document');
+    }
+  } else if (extension === '.xlsx') {
+    const buffer = Buffer.from(await file.arrayBuffer());
+    try {
+      content = await extractSpreadsheetText(buffer);
+    } catch {
+      throw new KnowledgeUploadValidationError('Could not extract text from .xlsx spreadsheet');
+    }
   } else {
     const buffer = Buffer.from(await file.arrayBuffer());
     try {
@@ -110,9 +189,9 @@ export async function buildKnowledgeDocumentFromUploadFile(
   }
 
   return {
-    title: fileName,
+    fileName,
+    extension,
     sourceType: sourceTypeForExtension(extension),
-    source: fileName,
     content,
     metadata: {
       fileName,

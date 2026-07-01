@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { AgentEvent, AgentRunResult, AgentRuntimeStatus, AgentTurnInput } from './types';
+import type { AgentEvent, AgentInputAttachment, AgentRunResult, AgentRuntimeStatus, AgentTurnInput } from './types';
 
 interface ClaudeCodeStreamEvent {
   type?: string;
@@ -42,11 +42,91 @@ function getClaudeWorkspaceDir() {
   return process.env.CLAUDE_WORKSPACE_DIR || process.cwd();
 }
 
-function buildConversationPrompt(messages: AgentTurnInput['messages']) {
-  return messages
+interface WrittenAttachment {
+  name: string;
+  path: string;
+  mimeType: string;
+}
+
+const imageExtensionByMimeType: Record<string, string> = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/jpg': '.jpg',
+  'image/webp': '.webp',
+  'image/gif': '.gif',
+};
+
+function sanitizeAttachmentFileName(value: string, index: number, mimeType: string) {
+  const extension = imageExtensionByMimeType[mimeType.toLowerCase()] || path.extname(value) || '.png';
+  const baseName = path.basename(value, path.extname(value))
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || `image-${index + 1}`;
+
+  return `${index + 1}-${baseName}${extension}`;
+}
+
+function decodeDataUrlAttachment(attachment: AgentInputAttachment) {
+  const match = attachment.dataUrl.match(/^data:([^;,]+);base64,([\s\S]+)$/);
+  if (!match) {
+    throw new Error(`Invalid image attachment data URL: ${attachment.name || 'unnamed image'}`);
+  }
+
+  const mimeType = match[1].toLowerCase();
+  if (!mimeType.startsWith('image/')) {
+    throw new Error(`Unsupported attachment MIME type: ${mimeType}`);
+  }
+
+  return {
+    mimeType,
+    buffer: Buffer.from(match[2], 'base64'),
+  };
+}
+
+async function writeAttachments(rootDir: string, attachments: AgentInputAttachment[] = []): Promise<WrittenAttachment[]> {
+  if (attachments.length === 0) return [];
+
+  const attachmentDir = path.join(rootDir, 'attachments');
+  await fs.mkdir(attachmentDir, { recursive: true });
+
+  return Promise.all(attachments.map(async (attachment, index) => {
+    const decoded = decodeDataUrlAttachment(attachment);
+    const fileName = sanitizeAttachmentFileName(attachment.name, index, decoded.mimeType);
+    const filePath = path.join(attachmentDir, fileName);
+    await fs.writeFile(filePath, decoded.buffer);
+
+    return {
+      name: attachment.name || fileName,
+      path: filePath,
+      mimeType: decoded.mimeType,
+    };
+  }));
+}
+
+function buildAttachmentPrompt(attachments: WrittenAttachment[]) {
+  if (attachments.length === 0) return '';
+
+  return [
+    'The latest user turn includes these image attachments. Read them directly before answering:',
+    ...attachments.map((attachment, index) => (
+      `${index + 1}. ${attachment.name} (${attachment.mimeType}): @${attachment.path}`
+    )),
+  ].join('\n');
+}
+
+function buildConversationPrompt(
+  messages: AgentTurnInput['messages'],
+  attachments: WrittenAttachment[] = [],
+) {
+  const conversationPrompt = messages
     .filter((message) => message.role !== 'system')
     .map((message) => `${message.role === 'assistant' ? 'Assistant' : 'User'}:\n${message.content}`)
     .join('\n\n');
+  const attachmentPrompt = buildAttachmentPrompt(attachments);
+
+  return attachmentPrompt
+    ? `${conversationPrompt}\n\n${attachmentPrompt}`
+    : conversationPrompt;
 }
 
 function buildClaudeReadOnlyArgs() {
@@ -135,7 +215,6 @@ function trimDiagnosticText(value: string, maxChars = 4000) {
 
 export async function runClaudeCodeCliPrompt(input: AgentTurnInput, timeoutMs = 120_000): Promise<AgentRunResult> {
   const command = getClaudeCommand();
-  const prompt = buildConversationPrompt(input.messages);
   let child: ReturnType<typeof spawn> | null = null;
   let promptTempDir: string | null = null;
 
@@ -150,6 +229,8 @@ export async function runClaudeCodeCliPrompt(input: AgentTurnInput, timeoutMs = 
     promptTempDir = await fs.mkdtemp(path.join(tmpdir(), 'battleflow-claude-'));
     const systemPromptPath = path.join(promptTempDir, 'system-prompt.md');
     await fs.writeFile(systemPromptPath, input.systemPrompt, 'utf8');
+    const attachments = await writeAttachments(promptTempDir, input.attachments);
+    const prompt = buildConversationPrompt(input.messages, attachments);
 
     return await new Promise<AgentRunResult>((resolve, reject) => {
       let settled = false;
@@ -325,7 +406,6 @@ export async function checkClaudeCodeCliRuntime(): Promise<AgentRuntimeStatus> {
 
 export function streamClaudeCodeCliTurn(input: AgentTurnInput) {
   const command = getClaudeCommand();
-  const prompt = buildConversationPrompt(input.messages);
   const baseArgs = buildClaudeReadOnlyArgs();
 
   let child: ReturnType<typeof spawn> | null = null;
@@ -369,6 +449,8 @@ export function streamClaudeCodeCliTurn(input: AgentTurnInput) {
         promptTempDir = await fs.mkdtemp(path.join(tmpdir(), 'battleflow-claude-'));
         const systemPromptPath = path.join(promptTempDir, 'system-prompt.md');
         await fs.writeFile(systemPromptPath, input.systemPrompt, 'utf8');
+        const attachments = await writeAttachments(promptTempDir, input.attachments);
+        const prompt = buildConversationPrompt(input.messages, attachments);
 
         child = spawn(command, [...baseArgs, '--system-prompt-file', systemPromptPath], {
           cwd: getClaudeWorkspaceDir(),

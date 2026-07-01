@@ -234,6 +234,7 @@ interface WorkflowStep {
   runMode?: 'serial' | 'parallel';
   parallelGroupId?: string;
   parallelGroupName?: string;
+  parallelGroupBreakBefore?: boolean;
   isRemoved?: boolean;
   removedAt?: string;
   status: WorkflowStepStatus;
@@ -332,9 +333,23 @@ interface Workflow {
   updated_at?: string;
 }
 
+interface ChatAttachment {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  isImage: boolean;
+  previewUrl?: string;
+  contentKind: WorkflowFileContentKind;
+  note?: string;
+  created_at?: string;
+}
+
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
+  attachments?: ChatAttachment[];
+  kind?: 'document';
 }
 
 type WorkflowStepRunMode = NonNullable<WorkflowStep['runMode']>;
@@ -365,6 +380,124 @@ type ChatPersistenceStatus = 'idle' | 'streaming' | 'saving' | 'saved' | 'failed
 type DeleteTarget =
   | { type: 'workspace'; id: string; name: string; workflowCount: number }
   | { type: 'workflow'; id: string; name: string; workspaceId: string };
+
+type WorkflowRouteKey = 'workspaceId' | 'workflowId' | 'stepId';
+
+interface WorkflowRouteState {
+  workspaceId: string;
+  workflowId: string;
+  stepId: string;
+}
+
+const emptyWorkflowRouteState: WorkflowRouteState = {
+  workspaceId: '',
+  workflowId: '',
+  stepId: '',
+};
+
+const workflowRouteParamKeys: WorkflowRouteKey[] = ['workspaceId', 'workflowId', 'stepId'];
+const workflowRouteStorageKey = 'battleflow.workflow.last-route';
+const workflowChatDraftStorageKey = 'battleflow.workflow.chat-drafts';
+
+function readWorkflowRouteState(search: string): WorkflowRouteState {
+  const params = new URLSearchParams(search);
+  return {
+    workspaceId: params.get('workspaceId') || '',
+    workflowId: params.get('workflowId') || '',
+    stepId: params.get('stepId') || '',
+  };
+}
+
+function buildWorkflowRouteSearch(search: string, state: WorkflowRouteState) {
+  const params = new URLSearchParams(search);
+  workflowRouteParamKeys.forEach((key) => {
+    const value = state[key].trim();
+    if (value) {
+      params.set(key, value);
+    } else {
+      params.delete(key);
+    }
+  });
+
+  const nextSearch = params.toString();
+  return nextSearch ? `?${nextSearch}` : '';
+}
+
+function isEmptyWorkflowRouteState(state: WorkflowRouteState) {
+  return !state.workspaceId && !state.workflowId && !state.stepId;
+}
+
+function readStoredWorkflowRouteState(): WorkflowRouteState | null {
+  try {
+    const raw = window.localStorage.getItem(workflowRouteStorageKey);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw) as Partial<WorkflowRouteState>;
+    const state: WorkflowRouteState = {
+      workspaceId: typeof parsed.workspaceId === 'string' ? parsed.workspaceId : '',
+      workflowId: typeof parsed.workflowId === 'string' ? parsed.workflowId : '',
+      stepId: typeof parsed.stepId === 'string' ? parsed.stepId : '',
+    };
+
+    return isEmptyWorkflowRouteState(state) ? null : state;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredWorkflowRouteState(state: WorkflowRouteState) {
+  try {
+    if (isEmptyWorkflowRouteState(state)) {
+      window.localStorage.removeItem(workflowRouteStorageKey);
+      return;
+    }
+
+    window.localStorage.setItem(workflowRouteStorageKey, JSON.stringify(state));
+  } catch {
+    // Ignore unavailable storage.
+  }
+}
+
+function readStoredChatDrafts(): Record<string, string> {
+  try {
+    const raw = window.localStorage.getItem(workflowChatDraftStorageKey);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .filter((entry): entry is [string, string] => (
+          typeof entry[0] === 'string' && typeof entry[1] === 'string'
+        )),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function readStoredChatDraft(stepId: string) {
+  return readStoredChatDrafts()[stepId] || '';
+}
+
+function writeStoredChatDraft(stepId: string, value: string) {
+  try {
+    const drafts = readStoredChatDrafts();
+    if (value.trim()) {
+      drafts[stepId] = value;
+    } else {
+      delete drafts[stepId];
+    }
+
+    if (Object.keys(drafts).length === 0) {
+      window.localStorage.removeItem(workflowChatDraftStorageKey);
+      return;
+    }
+
+    window.localStorage.setItem(workflowChatDraftStorageKey, JSON.stringify(drafts));
+  } catch {
+    // Ignore unavailable storage.
+  }
+}
 
 function getWorkspaceDescriptionText(description?: string) {
   const value = description?.trim();
@@ -566,8 +699,50 @@ function isClaudeRuntimeSkillMisfireMessage(message: ChatMessage) {
   return claudeRuntimeSkillMisfireMarkers.some((marker) => message.content.includes(marker));
 }
 
+function sanitizeChatAttachments(attachments?: ChatAttachment[]) {
+  if (!Array.isArray(attachments)) return [];
+
+  return attachments.flatMap((attachment): ChatAttachment[] => {
+    if (!attachment || typeof attachment !== 'object') return [];
+    const name = typeof attachment.name === 'string' && attachment.name.trim()
+      ? attachment.name.trim()
+      : '未命名附件';
+    const type = typeof attachment.type === 'string' && attachment.type.trim()
+      ? attachment.type.trim()
+      : 'unknown';
+
+    return [{
+      id: typeof attachment.id === 'string' && attachment.id.trim()
+        ? attachment.id
+        : `chat-attachment-${name}`,
+      name,
+      type,
+      size: typeof attachment.size === 'number' && Number.isFinite(attachment.size) ? attachment.size : 0,
+      isImage: Boolean(attachment.isImage),
+      previewUrl: typeof attachment.previewUrl === 'string' ? attachment.previewUrl : undefined,
+      contentKind: attachment.contentKind === 'text' || attachment.contentKind === 'image_data_url'
+        ? attachment.contentKind
+        : 'metadata',
+      note: typeof attachment.note === 'string' ? attachment.note : undefined,
+      created_at: typeof attachment.created_at === 'string' ? attachment.created_at : undefined,
+    }];
+  });
+}
+
 function sanitizeChatMessages(messages: ChatMessage[]) {
-  return messages.filter((message) => !isClaudeRuntimeSkillMisfireMessage(message));
+  return messages
+    .filter((message) => !isClaudeRuntimeSkillMisfireMessage(message))
+    .map((message) => {
+      const attachments = sanitizeChatAttachments(message.attachments);
+      const normalized: ChatMessage = { role: message.role, content: message.content };
+      if (attachments.length > 0) {
+        normalized.attachments = attachments;
+      }
+      if (message.kind === 'document') {
+        normalized.kind = 'document';
+      }
+      return normalized;
+    });
 }
 
 function getLastAssistantMessage(messages: ChatMessage[]) {
@@ -652,7 +827,7 @@ function getWorkflowExecutionGroups(steps: WorkflowStep[]): WorkflowExecutionGro
     const runMode = step.runMode === 'parallel' ? 'parallel' : 'serial';
     const previousGroup = groups[groups.length - 1];
 
-    if (runMode === 'parallel' && previousGroup?.runMode === 'parallel') {
+    if (runMode === 'parallel' && previousGroup?.runMode === 'parallel' && !step.parallelGroupBreakBefore) {
       previousGroup.steps.push(step);
       return;
     }
@@ -740,13 +915,14 @@ function normalizeWorkflowExecutionPlan(workflow: Workflow, updatedAt = new Date
       ? `并行任务组 ${parallelGroupCounter}`
       : undefined;
 
-    return group.steps.map((step) => {
+    return group.steps.map((step, stepPosition) => {
       const isActiveIncompleteGroup = groupIndex === firstIncompleteGroupIndex;
       const nextStatus = step.status === 'completed'
         ? 'completed'
         : isActiveIncompleteGroup
           ? isValidationGateStatus(step.status) ? step.status : 'in_progress'
           : 'pending';
+      const startsNewParallelGroup = group.runMode === 'parallel' && stepPosition === 0 && Boolean(step.parallelGroupBreakBefore);
 
       const nextStep: WorkflowStep = {
         ...step,
@@ -754,12 +930,14 @@ function normalizeWorkflowExecutionPlan(workflow: Workflow, updatedAt = new Date
         runMode: group.runMode,
         parallelGroupId,
         parallelGroupName,
+        parallelGroupBreakBefore: startsNewParallelGroup,
         status: nextStatus,
       };
 
       if (group.runMode === 'serial') {
         nextStep.parallelGroupId = undefined;
         nextStep.parallelGroupName = undefined;
+        nextStep.parallelGroupBreakBefore = false;
       }
 
       return nextStep;
@@ -788,6 +966,7 @@ function hasWorkflowExecutionPlanChanged(source: Workflow, normalized: Workflow)
       || (step.runMode || 'serial') !== (normalizedStep.runMode || 'serial')
       || step.parallelGroupId !== normalizedStep.parallelGroupId
       || step.parallelGroupName !== normalizedStep.parallelGroupName
+      || Boolean(step.parallelGroupBreakBefore) !== Boolean(normalizedStep.parallelGroupBreakBefore)
       || step.status !== normalizedStep.status
     );
   });
@@ -807,6 +986,7 @@ function getPriorWorkflowSteps(workflow: Workflow, step: WorkflowStep) {
 function buildSelectedWorkflowSteps(
   selectedSkills: Skill[],
   selectedSkillModes: Record<string, WorkflowStepRunMode>,
+  selectedSkillGroupBreaks: Record<string, boolean>,
 ) {
   let stepIndex = 0;
   let parallelGroupCounter = 0;
@@ -816,8 +996,9 @@ function buildSelectedWorkflowSteps(
 
   return selectedSkills.map((skill, index) => {
     const mode = selectedSkillModes[skill.id] === 'parallel' ? 'parallel' : 'serial';
+    const startsNewParallelGroup = mode === 'parallel' && previousMode === 'parallel' && Boolean(selectedSkillGroupBreaks[skill.id]);
 
-    if (mode === 'parallel' && previousMode !== 'parallel') {
+    if (mode === 'parallel' && (previousMode !== 'parallel' || startsNewParallelGroup)) {
       parallelGroupCounter += 1;
       activeParallelGroupId = `parallel-${Date.now()}-${parallelGroupCounter}`;
       activeParallelGroupName = `并行任务组 ${parallelGroupCounter}`;
@@ -830,6 +1011,7 @@ function buildSelectedWorkflowSteps(
       runMode: mode,
       parallelGroupId: mode === 'parallel' ? activeParallelGroupId : undefined,
       parallelGroupName: mode === 'parallel' ? activeParallelGroupName : undefined,
+      parallelGroupBreakBefore: startsNewParallelGroup,
     };
 
     const nextMode = index + 1 < selectedSkills.length
@@ -1034,6 +1216,10 @@ function isReadableTextFile(file: File) {
   return file.type.startsWith('text/') || /\.(txt|md|markdown)$/i.test(file.name);
 }
 
+function isServerExtractableWorkflowFile(file: File) {
+  return /\.(doc|docx|pdf|xlsx)$/i.test(file.name);
+}
+
 function readFileAsDataUrl(file: File) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -1041,6 +1227,33 @@ function readFileAsDataUrl(file: File) {
     reader.onerror = () => reject(reader.error || new Error('File read failed'));
     reader.readAsDataURL(file);
   });
+}
+
+async function extractWorkflowFileText(file: File) {
+  const formData = new FormData();
+  formData.set('action', 'extract_context_file');
+  formData.set('file', file);
+
+  const response = await fetch('/api/workflows/uploads', {
+    method: 'POST',
+    body: formData,
+  });
+  const data = await response.json().catch(() => ({})) as {
+    error?: string;
+    content?: string;
+    sourceType?: string;
+  };
+
+  if (!response.ok || !data.content?.trim()) {
+    throw new Error(data.error || '文件正文提取失败');
+  }
+
+  return {
+    contentKind: 'text' as const,
+    content: data.content,
+    note: `已从 ${data.sourceType || 'document'} 文件提取正文。`,
+    previewUrl: undefined,
+  };
 }
 
 async function buildWorkflowFilePayload(file: File) {
@@ -1056,12 +1269,16 @@ async function buildWorkflowFilePayload(file: File) {
     };
   }
 
+  if (isServerExtractableWorkflowFile(file)) {
+    return extractWorkflowFileText(file);
+  }
+
   if (file.type.startsWith('image/') && file.size <= maxPreviewImageBytes) {
     const dataUrl = await readFileAsDataUrl(file);
     return {
       contentKind: 'image_data_url' as const,
       content: dataUrl,
-      note: '图片已保存为 data URL，可用于预览；当前对话以图片元信息引用。',
+      note: '图片已保存为 data URL，本轮发送时会作为图片附件交给运行时读取。',
       previewUrl: dataUrl,
     };
   }
@@ -1113,11 +1330,13 @@ export default function WorkflowsPage() {
   const [newWorkflowDesc, setNewWorkflowDesc] = useState('');
   const [selectedSkills, setSelectedSkills] = useState<Skill[]>([]);
   const [selectedSkillModes, setSelectedSkillModes] = useState<Record<string, 'serial' | 'parallel'>>({});
+  const [selectedSkillGroupBreaks, setSelectedSkillGroupBreaks] = useState<Record<string, boolean>>({});
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBaseOption[]>([]);
   const [knowledgeLoading, setKnowledgeLoading] = useState(false);
   const [knowledgeNotice, setKnowledgeNotice] = useState('');
   const [selectedKnowledgeBaseIds, setSelectedKnowledgeBaseIds] = useState<string[]>([]);
   const [uploadedContextFiles, setUploadedContextFiles] = useState<UploadedContextFile[]>([]);
+  const [pendingChatFilesByStepId, setPendingChatFilesByStepId] = useState<Record<string, UploadedContextFile[]>>({});
   const [reviewedOutputFiles, setReviewedOutputFiles] = useState<ReviewedOutputFile[]>([]);
   const [reviewComments, setReviewComments] = useState<Record<string, string>>({});
   const [reviewedOutputSavePrompt, setReviewedOutputSavePrompt] = useState<ReviewedOutputSavePrompt | null>(null);
@@ -1126,6 +1345,7 @@ export default function WorkflowsPage() {
   const [rightPanelTab, setRightPanelTab] = useState<'outputs' | 'review' | 'context' | 'demo'>('outputs');
   const [rightPanelVisible, setRightPanelVisible] = useState(true);
   const [expandedOutputIds, setExpandedOutputIds] = useState<Record<string, boolean>>({});
+  const [workflowRouteState, setWorkflowRouteState] = useState<WorkflowRouteState>(emptyWorkflowRouteState);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
   const workflowSkillOptions = useMemo(() => dedupeWorkflowSkillOptions(skills), [skills]);
@@ -1137,8 +1357,34 @@ export default function WorkflowsPage() {
   const activeChatRequestByStepIdRef = useRef<Record<string, AbortController>>({});
   const workflowsRef = useRef<Workflow[]>([]);
   const activeWorkflowRef = useRef<Workflow | null>(null);
+  const workflowRouteStateRef = useRef<WorkflowRouteState>(emptyWorkflowRouteState);
   const validationStageTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const workflowStepDragSourceRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    workflowRouteStateRef.current = workflowRouteState;
+  }, [workflowRouteState]);
+
+  useEffect(() => {
+    const syncRouteState = () => {
+      const searchState = readWorkflowRouteState(window.location.search);
+      const storedState = isEmptyWorkflowRouteState(searchState) ? readStoredWorkflowRouteState() : null;
+      const nextState = storedState || searchState;
+
+      if (storedState) {
+        const nextSearch = buildWorkflowRouteSearch(window.location.search, storedState);
+        const nextUrl = `${window.location.pathname}${nextSearch}${window.location.hash}`;
+        window.history.replaceState(window.history.state, '', nextUrl);
+      }
+
+      workflowRouteStateRef.current = nextState;
+      setWorkflowRouteState(nextState);
+    };
+
+    syncRouteState();
+    window.addEventListener('popstate', syncRouteState);
+    return () => window.removeEventListener('popstate', syncRouteState);
+  }, []);
 
   useEffect(() => {
     workflowsRef.current = workflows;
@@ -1194,6 +1440,26 @@ export default function WorkflowsPage() {
 
   const getVisibleSteps = (workflow: Workflow) => getVisibleWorkflowSteps(workflow);
 
+  const replaceWorkflowRoute = useCallback((patch: Partial<WorkflowRouteState>) => {
+    const currentState = readWorkflowRouteState(window.location.search);
+    const nextState: WorkflowRouteState = {
+      workspaceId: patch.workspaceId ?? currentState.workspaceId,
+      workflowId: patch.workflowId ?? currentState.workflowId,
+      stepId: patch.stepId ?? currentState.stepId,
+    };
+    const nextSearch = buildWorkflowRouteSearch(window.location.search, nextState);
+    const nextUrl = `${window.location.pathname}${nextSearch}${window.location.hash}`;
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+
+    if (nextUrl !== currentUrl) {
+      window.history.replaceState(window.history.state, '', nextUrl);
+    }
+
+    writeStoredWorkflowRouteState(nextState);
+    workflowRouteStateRef.current = nextState;
+    setWorkflowRouteState(nextState);
+  }, []);
+
   const normalizeContextSelection = (selection?: Partial<WorkflowContextSelection>): WorkflowContextSelection => ({
     knowledgeBaseIds: Array.isArray(selection?.knowledgeBaseIds) ? selection.knowledgeBaseIds : [],
     reviewMaterialIds: Array.isArray(selection?.reviewMaterialIds) ? selection.reviewMaterialIds : [],
@@ -1231,21 +1497,41 @@ export default function WorkflowsPage() {
     setSelectedKnowledgeBaseIds(selection.knowledgeBaseIds);
   };
 
-  const switchActiveStep = (workflow: Workflow, stepIndex: number) => {
+  const switchActiveStep = (
+    workflow: Workflow,
+    stepIndex: number,
+    options: { syncRoute?: boolean } = {},
+  ) => {
     const visibleSteps = getVisibleSteps(workflow);
     const nextStep = visibleSteps[stepIndex] || visibleSteps[0];
     const nextIndex = Math.max(visibleSteps.findIndex((step) => step.id === nextStep?.id), 0);
 
     setActiveStepIndex(nextIndex);
-    activeStepIdRef.current = nextStep?.id || null;
+    const nextStepId = nextStep?.id;
+    activeStepIdRef.current = nextStepId || null;
     syncWorkflowSupportingState(workflow, nextIndex);
-    const nextStepMessages = getStepChatMessages(workflow, nextStep?.id);
+    const nextStepMessages = getStepChatMessages(workflow, nextStepId);
     setChatMessages(nextStepMessages);
-    setChatInput(nextStep?.id ? chatInputByStepId[nextStep.id] || '' : '');
-    if (nextStep?.id) {
-      setStepChatPersistenceStatus(nextStep.id, hasConfirmableAssistantMessage(nextStepMessages) ? 'saved' : 'idle');
+    const nextDraft = nextStepId
+      ? chatInputByStepId[nextStepId] ?? readStoredChatDraft(nextStepId)
+      : '';
+    setChatInput(nextDraft);
+    if (nextStepId && nextDraft && chatInputByStepId[nextStepId] === undefined) {
+      setChatInputByStepId((prev) => (
+        prev[nextStepId] === undefined ? { ...prev, [nextStepId]: nextDraft } : prev
+      ));
+    }
+    if (nextStepId) {
+      setStepChatPersistenceStatus(nextStepId, hasConfirmableAssistantMessage(nextStepMessages) ? 'saved' : 'idle');
     }
     setRightPanelTab('outputs');
+    if (options.syncRoute !== false && nextStepId) {
+      replaceWorkflowRoute({
+        workspaceId: workflow.workspaceId,
+        workflowId: workflow.id,
+        stepId: nextStepId,
+      });
+    }
   };
 
   const persistWorkflow = useCallback(async (workflow: Workflow) => {
@@ -1341,7 +1627,10 @@ export default function WorkflowsPage() {
     return updatedWorkflow;
   }, [persistWorkflow]);
 
-  const openWorkflow = (workflow: Workflow) => {
+  const openWorkflow = (
+    workflow: Workflow,
+    options: { syncRoute?: boolean; stepId?: string } = {},
+  ) => {
     const normalizedWorkflow = normalizeWorkflowExecutionPlan(
       workflow,
       workflow.updated_at || new Date().toISOString(),
@@ -1354,9 +1643,18 @@ export default function WorkflowsPage() {
       void persistWorkflow(normalizedWorkflow);
     }
     const visibleSteps = getVisibleSteps(normalizedWorkflow);
+    const requestedStepIndex = options.stepId
+      ? visibleSteps.findIndex((step) => step.id === options.stepId)
+      : -1;
     const firstInProgress = visibleSteps.findIndex((step) => isActiveWorkflowStepStatus(step.status));
-    const nextStepIndex = firstInProgress >= 0 ? firstInProgress : 0;
-    switchActiveStep(normalizedWorkflow, nextStepIndex);
+    const nextStepIndex = requestedStepIndex >= 0
+      ? requestedStepIndex
+      : firstInProgress >= 0
+        ? firstInProgress
+        : 0;
+    setActiveWorkspaceId(normalizedWorkflow.workspaceId);
+    setWorkspaceSpaceId(normalizedWorkflow.workspaceId);
+    switchActiveStep(normalizedWorkflow, nextStepIndex, { syncRoute: options.syncRoute });
   };
 
   const loadWorkflowState = useCallback(async () => {
@@ -1438,9 +1736,36 @@ export default function WorkflowsPage() {
     loadKnowledgeBases();
   }, [loadKnowledgeBases]);
 
+  useEffect(() => {
+    if (loading) return;
+
+    const { workspaceId, workflowId, stepId } = workflowRouteState;
+    if (!workspaceId && !workflowId) return;
+
+    if (workflowId) {
+      if (activeWorkflow?.id === workflowId) {
+        if (stepId) {
+          const requestedStepIndex = getVisibleSteps(activeWorkflow).findIndex((step) => step.id === stepId);
+          if (requestedStepIndex >= 0 && requestedStepIndex !== activeStepIndex) {
+            switchActiveStep(activeWorkflow, requestedStepIndex, { syncRoute: false });
+          }
+        }
+        return;
+      }
+
+      const routeWorkflow = workflows.find((workflow) => workflow.id === workflowId);
+      if (!routeWorkflow) return;
+      openWorkflow(routeWorkflow, { syncRoute: false, stepId });
+      return;
+    }
+
+    if (!activeWorkflow && workspaceId && workspaces.some((workspace) => workspace.id === workspaceId)) {
+      setActiveWorkspaceId(workspaceId);
+      setWorkspaceSpaceId(workspaceId);
+    }
+  }, [activeStepIndex, activeWorkflow, loading, workflowRouteState, workflows, workspaces]);
+
   useEffect(() => () => {
-    Object.values(activeChatRequestByStepIdRef.current).forEach((controller) => controller.abort());
-    activeChatRequestByStepIdRef.current = {};
     Object.values(validationStageTimersRef.current).forEach((timer) => clearTimeout(timer));
     validationStageTimersRef.current = {};
   }, []);
@@ -1508,26 +1833,42 @@ export default function WorkflowsPage() {
     if (!currentStepForFiles) return;
 
     const createdAt = new Date().toISOString();
-    const nextFiles = await Promise.all(files.map(async (file) => {
-      const payload = await buildWorkflowFilePayload(file);
-      return {
-        id: `file-${Date.now()}-${file.name}-${Math.random().toString(16).slice(2)}`,
-        stepId: currentStepForFiles.id,
-        name: file.name || '粘贴图片',
-        type: file.type || 'unknown',
-        size: file.size,
-        isImage: file.type.startsWith('image/'),
-        created_at: createdAt,
-        ...payload,
-      };
-    }));
+    let nextFiles: UploadedContextFile[];
 
-    setUploadedContextFiles((prev) => [...prev, ...nextFiles]);
-    updateActiveWorkflow((workflow) => ({
-      ...workflow,
-      contextFiles: [...(workflow.contextFiles || []), ...nextFiles],
-      updated_at: createdAt,
+    try {
+      nextFiles = await Promise.all(files.map(async (file) => {
+        const payload = await buildWorkflowFilePayload(file);
+        return {
+          id: `file-${Date.now()}-${file.name}-${Math.random().toString(16).slice(2)}`,
+          stepId: currentStepForFiles.id,
+          name: file.name || '粘贴图片',
+          type: file.type || 'unknown',
+          size: file.size,
+          isImage: file.type.startsWith('image/'),
+          created_at: createdAt,
+          ...payload,
+        };
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '文件读取失败';
+      toast.error('文件读取失败', { description: message });
+      return;
+    }
+
+    const persistentContextFiles = nextFiles.filter((file) => !file.isImage);
+
+    setPendingChatFilesByStepId((prev) => ({
+      ...prev,
+      [currentStepForFiles.id]: [...(prev[currentStepForFiles.id] || []), ...nextFiles],
     }));
+    if (persistentContextFiles.length > 0) {
+      setUploadedContextFiles((prev) => [...prev, ...persistentContextFiles]);
+      updateActiveWorkflow((workflow) => ({
+        ...workflow,
+        contextFiles: [...(workflow.contextFiles || []), ...persistentContextFiles],
+        updated_at: createdAt,
+      }));
+    }
   }, [activeStepIndex, activeWorkflow, updateActiveWorkflow]);
 
   const buildReviewedOutputFiles = useCallback(async (
@@ -1562,6 +1903,7 @@ export default function WorkflowsPage() {
   const handlePasteContextFiles = useCallback((event: ClipboardEvent<HTMLElement>) => {
     const files = Array.from(event.clipboardData.files);
     if (files.length > 0) {
+      event.preventDefault();
       void addUploadedContextFiles(files);
     }
   }, [addUploadedContextFiles]);
@@ -1579,6 +1921,18 @@ export default function WorkflowsPage() {
     }
     return file.note ? `${metadata}\n${file.note}` : metadata;
   };
+
+  const toChatAttachment = (file: UploadedContextFile): ChatAttachment => ({
+    id: file.id,
+    name: file.name,
+    type: file.type,
+    size: file.size,
+    isImage: file.isImage,
+    previewUrl: file.previewUrl,
+    contentKind: file.contentKind,
+    note: file.note,
+    created_at: file.created_at,
+  });
 
   const extractMarkdownFence = (content: string) => {
     const fenced = content.match(/```(?:markdown|md)\s*\n([\s\S]*?)```/i);
@@ -1691,16 +2045,42 @@ export default function WorkflowsPage() {
     return (firstLine || fallback).slice(0, 64);
   };
 
-  const isAssistantDocumentLike = (content: string) => {
-    const value = content.trim();
-    if (value.length < 900) return false;
-    const sample = value.length > maxDocumentTypeScanChars ? value.slice(0, maxDocumentTypeScanChars) : value;
+  const hasExplicitAssistantDocumentMarker = (content: string) => {
+    const raw = (extractMarkdownFence(content) || content).trim();
+    if (!raw) return false;
+    const sample = raw.length > maxDocumentTypeScanChars ? raw.slice(0, maxDocumentTypeScanChars) : raw;
+    const markerMatch = sample.match(
+      /(?:^|\n)#{1,3}\s*(?:Skill\s*输出文档|输出文档|最终产出|产出物|Deliverable|Output)\s*\n/i,
+    );
+
+    return markerMatch?.index !== undefined && markerMatch.index <= 320;
+  };
+
+  const hasExplicitDocumentGenerationRequest = (content: string) => {
+    const sample = content.trim().slice(0, 2000);
     return (
-      /^#{1,3}\s+\S/m.test(sample)
-      || /\n\|[^|\n]+\|[^|\n]+\|\n\|[\s:|-]+\|/.test(sample)
-      || /(输出文档|最终产出|分析报告|需求说明书|规格说明书|Markdown 文档)/.test(sample)
+      /(?:生成|创建|输出|整理|导出|保存|产出|形成|返回).{0,16}(?:文档|文件|附件|Markdown|md|报告|产物)/i.test(sample)
+      || /(?:文档|文件|附件|Markdown|md|报告|产物).{0,16}(?:生成|创建|输出|整理|导出|保存|返回)/i.test(sample)
+      || /(?:以|用).{0,8}(?:附件|文件|Markdown|md).{0,8}(?:形式|格式).{0,8}(?:返回|输出|给我)/i.test(sample)
     );
   };
+
+  const shouldStoreAssistantReplyAsDocument = (userMessage: string, assistantContent: string) => {
+    const documentContent = (extractMarkdownFence(assistantContent) || assistantContent).trim();
+    if (!documentContent) return false;
+    if (!hasExplicitDocumentGenerationRequest(userMessage)) return false;
+
+    return (
+      documentContent.length >= 240
+      || Boolean(extractMarkdownFence(assistantContent))
+      || hasExplicitAssistantDocumentMarker(assistantContent)
+    );
+  };
+
+  const shouldRenderAssistantDocumentCard = (message: ChatMessage) => (
+    message.role === 'assistant'
+    && message.kind === 'document'
+  );
 
   const renderAssistantDocumentCard = (content: string, messageIndex: number) => {
     const documentContent = activeWorkflow && currentStep
@@ -1724,7 +2104,7 @@ export default function WorkflowsPage() {
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold">{title}</p>
               <p className="text-[11px] text-muted-foreground">
-                Markdown 文档 · {documentContent.length.toLocaleString('zh-CN')} 字符 · 确认步骤后保存
+                Markdown 附件 · {documentContent.length.toLocaleString('zh-CN')} 字符
               </p>
             </div>
           </div>
@@ -1920,7 +2300,7 @@ export default function WorkflowsPage() {
       .filter((kb) => knowledgeBaseIds.includes(kb.id))
       .map((kb) => `知识库：${kb.name}（${kb.description}）`);
     const stepContextFiles = (workflow.contextFiles || [])
-      .filter((file) => file.stepId === step.id)
+      .filter((file) => file.stepId === step.id && !file.isImage)
       .map((file) => summarizeWorkflowFile(file, 800));
     const autoInjectedStepMaterials = priorSteps
       .filter((item) => item.output && !disabledAutoIds.has(item.id))
@@ -1952,9 +2332,13 @@ export default function WorkflowsPage() {
     const currentStep = workflow ? getVisibleSteps(workflow)[activeStepIndex] : undefined;
     if (!workflow || !currentStep) return;
 
-    const currentStepContextFiles = uploadedContextFiles.filter((file) => file.stepId === currentStep.id);
+    const currentStepContextFiles = uploadedContextFiles.filter((file) => file.stepId === currentStep.id && !file.isImage);
+    const currentStepContextFileIds = new Set(currentStepContextFiles.map((file) => file.id));
+    const pendingChatFiles = pendingChatFilesByStepId[currentStep.id] || [];
+    const transientChatFiles = pendingChatFiles.filter((file) => !currentStepContextFileIds.has(file.id));
+    const requestUploadedFiles = [...currentStepContextFiles, ...transientChatFiles];
     const stepInput = overrideMessage ?? chatInputByStepId[currentStep.id] ?? chatInput;
-    const userMessage = stepInput.trim() || (currentStepContextFiles.length > 0 ? '请基于我上传的文件继续分析。' : '');
+    const userMessage = stepInput.trim() || (requestUploadedFiles.length > 0 ? '请基于我上传的文件继续分析。' : '');
     if (!userMessage || streamingByStepId[currentStep.id]) return;
 
     const contextSelection = getContextSelection(workflow, currentStep.id);
@@ -1998,23 +2382,35 @@ export default function WorkflowsPage() {
       selectedKnowledgeBases.length > 0
         ? `选中的知识库：${selectedKnowledgeBases.map((kb) => `${kb.name}（${kb.description || '无描述'}）`).join('；')}。发送时将按本轮问题检索相关片段。`
         : '',
-      currentStepContextFiles.length > 0
-        ? `用户上传/粘贴的文件：\n${currentStepContextFiles.map((file) => summarizeWorkflowFile(file, 1200)).join('\n\n')}`
+      requestUploadedFiles.length > 0
+        ? `用户上传/粘贴的文件：\n${requestUploadedFiles.map((file) => summarizeWorkflowFile(file, 1200)).join('\n\n')}`
         : '',
     ].filter(Boolean).join('\n');
     const messageWithContext = contextSummary
       ? `${userMessage}\n\n[本轮补充上下文]\n${contextSummary}`
       : userMessage;
-    const visibleMessages: ChatMessage[] = [...chatMessages, { role: 'user', content: userMessage }];
+    const userVisibleMessage: ChatMessage = pendingChatFiles.length > 0
+      ? { role: 'user', content: userMessage, attachments: pendingChatFiles.map(toChatAttachment) }
+      : { role: 'user', content: userMessage };
+    const visibleMessages: ChatMessage[] = [...chatMessages, userVisibleMessage];
     const requestMessages: ChatMessage[] = [...chatMessages, { role: 'user', content: messageWithContext }];
 
     setChatInputByStepId((prev) => ({ ...prev, [currentStep.id]: '' }));
+    writeStoredChatDraft(currentStep.id, '');
     if (activeStepIdRef.current === currentStep.id) {
       setChatInput('');
     }
+    setPendingChatFilesByStepId((prev) => {
+      if (!prev[currentStep.id]?.length) return prev;
+      const next = { ...prev };
+      delete next[currentStep.id];
+      return next;
+    });
     updateVisibleChatMessagesForStep(currentStep.id, visibleMessages);
-    saveStepChatMessages(workflow, currentStep.id, visibleMessages, { persist: false });
-    setStepChatPersistenceStatus(currentStep.id, 'streaming');
+    const workflowWithUserMessage = saveStepChatMessages(workflow, currentStep.id, visibleMessages, { persist: false });
+    setStepChatPersistenceStatus(currentStep.id, 'saving');
+    const savedUserWorkflow = await persistWorkflow(workflowWithUserMessage);
+    setStepChatPersistenceStatus(currentStep.id, savedUserWorkflow ? 'streaming' : 'failed');
     const controller = new AbortController();
     activeChatRequestByStepIdRef.current[currentStep.id] = controller;
     let assistantContent = '';
@@ -2061,7 +2457,7 @@ export default function WorkflowsPage() {
           selected_knowledge_bases: selectedKnowledgeBases,
           knowledge_query: userMessage,
           selected_review_materials: [],
-          uploaded_files: currentStepContextFiles.map(({ previewUrl, ...file }) => file),
+          uploaded_files: requestUploadedFiles.map(({ previewUrl, ...file }) => file),
         }),
         signal: controller.signal,
       });
@@ -2099,9 +2495,12 @@ export default function WorkflowsPage() {
           }
         }
       }
+      const assistantMessage: ChatMessage = shouldStoreAssistantReplyAsDocument(userMessage, assistantContent)
+        ? { role: 'assistant', content: assistantContent, kind: 'document' }
+        : { role: 'assistant', content: assistantContent };
       const finalMessages: ChatMessage[] = [
         ...visibleMessages,
-        { role: 'assistant', content: assistantContent },
+        assistantMessage,
       ];
       updateVisibleChatMessagesForStep(currentStep.id, finalMessages);
       const workflowWithFinalMessages = saveStepChatMessages(
@@ -2186,6 +2585,7 @@ export default function WorkflowsPage() {
     knowledgeBases,
     selectedKnowledgeBaseIds,
     uploadedContextFiles,
+    pendingChatFilesByStepId,
   ]);
 
   const handleStopStreaming = useCallback(() => {
@@ -2277,7 +2677,7 @@ export default function WorkflowsPage() {
       activeStepIdRef.current = currentStep.id;
       syncWorkflowSupportingState(savedWorkflow, currentStepIndex);
       setChatMessages(getStepChatMessages(savedWorkflow, currentStep.id));
-      setChatInput(chatInputByStepId[currentStep.id] || '');
+      setChatInput(chatInputByStepId[currentStep.id] ?? readStoredChatDraft(currentStep.id));
       setRightPanelTab('outputs');
       const failedStep = savedWorkflow.steps.find((step) => step.id === currentStep.id);
       const summary = failedStep?.validationSummary || data.attempt?.agentValidation?.summary || data.attempt?.selfCheck?.summary || '';
@@ -2297,7 +2697,7 @@ export default function WorkflowsPage() {
   const handleCreateWorkflow = async () => {
     if (!activeWorkspaceId || !newWorkflowName.trim() || selectedSkills.length < 3) return;
 
-    const steps = buildSelectedWorkflowSteps(selectedSkills, selectedSkillModes);
+    const steps = buildSelectedWorkflowSteps(selectedSkills, selectedSkillModes, selectedSkillGroupBreaks);
 
     try {
       setErrorMessage('');
@@ -2322,10 +2722,7 @@ export default function WorkflowsPage() {
       );
       setWorkflows((prev) => [createdWorkflow, ...prev]);
       setActiveWorkflow(createdWorkflow);
-      setActiveStepIndex(0);
-      activeStepIdRef.current = getVisibleSteps(createdWorkflow)[0]?.id || null;
-      setChatMessages([]);
-      setChatInput('');
+      switchActiveStep(createdWorkflow, 0);
       if (hasWorkflowExecutionPlanChanged(rawCreatedWorkflow, createdWorkflow)) {
         void persistWorkflow(createdWorkflow);
       }
@@ -2335,6 +2732,7 @@ export default function WorkflowsPage() {
       setSelectedWorkflowTemplateId('');
       setSelectedSkills([]);
       setSelectedSkillModes({});
+      setSelectedSkillGroupBreaks({});
       resetSelectedSkillDrag();
     } catch (error) {
       console.error('Create workflow error:', error);
@@ -2386,6 +2784,7 @@ export default function WorkflowsPage() {
       setWorkspaces((prev) => [workspace, ...prev]);
       setActiveWorkspaceId(workspace.id);
       setWorkspaceSpaceId(workspace.id);
+      replaceWorkflowRoute({ workspaceId: workspace.id, workflowId: '', stepId: '' });
       setWorkspaceDialogOpen(false);
       setNewWorkspaceName('');
       setNewWorkspaceDesc('');
@@ -2454,6 +2853,7 @@ export default function WorkflowsPage() {
         activeStepIdRef.current = null;
         setChatMessages([]);
         setChatInput('');
+        setPendingChatFilesByStepId({});
       }
       setWorkspaces((prev) => {
         const next = prev.filter((workspace) => workspace.id !== workspaceId);
@@ -2465,6 +2865,9 @@ export default function WorkflowsPage() {
         }
         return next;
       });
+      if (workflowRouteStateRef.current.workspaceId === workspaceId) {
+        replaceWorkflowRoute(emptyWorkflowRouteState);
+      }
     } catch (error) {
       console.error('Delete workspace error:', error);
       setErrorMessage(error instanceof Error ? error.message : '删除工作目录失败');
@@ -2487,6 +2890,12 @@ export default function WorkflowsPage() {
         activeStepIdRef.current = null;
         setChatMessages([]);
         setChatInput('');
+        setPendingChatFilesByStepId({});
+        replaceWorkflowRoute({
+          workspaceId: activeWorkflow.workspaceId,
+          workflowId: '',
+          stepId: '',
+        });
       }
     } catch (error) {
       console.error('Delete workflow error:', error);
@@ -2595,6 +3004,7 @@ export default function WorkflowsPage() {
               runMode: 'serial',
               parallelGroupId: undefined,
               parallelGroupName: undefined,
+              parallelGroupBreakBefore: false,
               updated_at: updatedAt,
             };
           }
@@ -2605,6 +3015,30 @@ export default function WorkflowsPage() {
             updated_at: updatedAt,
           };
         }),
+        updated_at: updatedAt,
+      }, updatedAt);
+    });
+  };
+
+  const handleToggleParallelGroupBreak = (workflowId: string, stepId: string, enabled: boolean) => {
+    updateWorkflowById(workflowId, (workflow) => {
+      const visibleSteps = getVisibleSteps(workflow);
+      const stepPosition = visibleSteps.findIndex((step) => step.id === stepId);
+      if (stepPosition <= 0) return workflow;
+
+      const targetStep = visibleSteps[stepPosition];
+      const previousStep = visibleSteps[stepPosition - 1];
+      if (targetStep.runMode !== 'parallel' || previousStep.runMode !== 'parallel') return workflow;
+
+      const updatedAt = new Date().toISOString();
+
+      return normalizeWorkflowExecutionPlan({
+        ...workflow,
+        steps: workflow.steps.map((step) => (
+          step.id === targetStep.id
+            ? { ...step, parallelGroupBreakBefore: enabled, updated_at: updatedAt }
+            : step
+        )),
         updated_at: updatedAt,
       }, updatedAt);
     });
@@ -2727,6 +3161,13 @@ export default function WorkflowsPage() {
       delete next[skillId];
       return next;
     });
+    setSelectedSkillGroupBreaks((prev) => {
+      if (!(skillId in prev)) return prev;
+
+      const next = { ...prev };
+      delete next[skillId];
+      return next;
+    });
     resetSelectedSkillDrag();
   };
 
@@ -2738,6 +3179,7 @@ export default function WorkflowsPage() {
     setNewWorkflowDesc((current) => current.trim() ? current : template.defaultWorkflowDescription);
     setSelectedSkills(matchedSkills);
     setSelectedSkillModes(modes);
+    setSelectedSkillGroupBreaks({});
     resetSelectedSkillDrag();
 
     if (missingSteps.length > 0) {
@@ -2864,6 +3306,7 @@ export default function WorkflowsPage() {
       setActiveWorkspaceId(workspaceId);
       setWorkspaceSpaceId(workspaceId);
       setEditingWorkflowId(null);
+      replaceWorkflowRoute({ workspaceId, workflowId: '', stepId: '' });
     };
     const renderWorkflowCard = (wf: Workflow) => {
       const visibleSteps = getVisibleSteps(wf);
@@ -2999,6 +3442,7 @@ export default function WorkflowsPage() {
                   onClick={() => {
                     setWorkspaceSpaceId('');
                     setEditingWorkflowId(null);
+                    replaceWorkflowRoute(emptyWorkflowRouteState);
                   }}
                 >
                   <ArrowLeft className="h-4 w-4" />
@@ -3304,6 +3748,11 @@ export default function WorkflowsPage() {
                                 delete next[skill.id];
                                 return next;
                               });
+                              setSelectedSkillGroupBreaks((prev) => {
+                                const next = { ...prev };
+                                delete next[skill.id];
+                                return next;
+                              });
                             } else {
                               setSelectedSkills((prev) => [...prev, skill]);
                               setSelectedSkillModes((prev) => ({ ...prev, [skill.id]: 'serial' }));
@@ -3332,90 +3781,119 @@ export default function WorkflowsPage() {
                       <span className="text-xs text-muted-foreground">拖拽调整顺序</span>
                     </div>
                     <div className="space-y-2">
-                      {selectedSkills.map((skill, idx) => (
-                        <div
-                          key={skill.id}
-                          data-selected-skill-id={skill.id}
-                          draggable
-                          aria-grabbed={draggingSelectedSkillId === skill.id}
-                          onDragStart={(event) => {
-                            setDraggingSelectedSkillId(skill.id);
-                            setDragOverSelectedSkillId(skill.id);
-                            event.dataTransfer.effectAllowed = 'move';
-                            event.dataTransfer.setData('text/plain', skill.id);
-                          }}
-                          onDragOver={(event) => {
-                            event.preventDefault();
-                            event.dataTransfer.dropEffect = 'move';
-                            if (dragOverSelectedSkillId !== skill.id) {
+                      {selectedSkills.map((skill, idx) => {
+                        const mode = selectedSkillModes[skill.id] || 'serial';
+                        const previousSkill = idx > 0 ? selectedSkills[idx - 1] : undefined;
+                        const previousMode = previousSkill
+                          ? selectedSkillModes[previousSkill.id] || 'serial'
+                          : undefined;
+                        const canStartNewParallelGroup = mode === 'parallel' && previousMode === 'parallel';
+
+                        return (
+                          <div
+                            key={skill.id}
+                            data-selected-skill-id={skill.id}
+                            draggable
+                            aria-grabbed={draggingSelectedSkillId === skill.id}
+                            onDragStart={(event) => {
+                              setDraggingSelectedSkillId(skill.id);
                               setDragOverSelectedSkillId(skill.id);
-                            }
-                          }}
-                          onDragEnter={() => {
-                            if (!draggingSelectedSkillId || draggingSelectedSkillId === skill.id) return;
-                            handleReorderSelectedSkill(draggingSelectedSkillId, skill.id);
-                          }}
-                          onDrop={(event) => {
-                            event.preventDefault();
-                            const sourceSkillId = draggingSelectedSkillId || event.dataTransfer.getData('text/plain');
-                            handleReorderSelectedSkill(sourceSkillId, skill.id);
-                            resetSelectedSkillDrag();
-                          }}
-                          onDragEnd={resetSelectedSkillDrag}
-                          className={cn(
-                            'flex cursor-grab items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 p-2 transition-colors active:cursor-grabbing',
-                            draggingSelectedSkillId === skill.id && 'opacity-50',
-                            dragOverSelectedSkillId === skill.id && draggingSelectedSkillId !== skill.id
-                              && 'border-primary/60 bg-primary/10 ring-1 ring-primary/25',
-                          )}
-                        >
-                          <div className="flex min-w-0 items-center gap-2">
-                            <GripVertical className="size-4 shrink-0 text-muted-foreground" />
-                            <Badge variant="secondary" className="h-6 w-6 rounded-full p-0 flex items-center justify-center text-xs">
-                              {idx + 1}
-                            </Badge>
-                            <span className="truncate text-sm font-medium">{skill.name}</span>
-                          </div>
-                          <div className="flex shrink-0 items-center gap-2">
-                            <div className="flex items-center rounded-md border border-border/50 p-0.5">
+                              event.dataTransfer.effectAllowed = 'move';
+                              event.dataTransfer.setData('text/plain', skill.id);
+                            }}
+                            onDragOver={(event) => {
+                              event.preventDefault();
+                              event.dataTransfer.dropEffect = 'move';
+                              if (dragOverSelectedSkillId !== skill.id) {
+                                setDragOverSelectedSkillId(skill.id);
+                              }
+                            }}
+                            onDragEnter={() => {
+                              if (!draggingSelectedSkillId || draggingSelectedSkillId === skill.id) return;
+                              handleReorderSelectedSkill(draggingSelectedSkillId, skill.id);
+                            }}
+                            onDrop={(event) => {
+                              event.preventDefault();
+                              const sourceSkillId = draggingSelectedSkillId || event.dataTransfer.getData('text/plain');
+                              handleReorderSelectedSkill(sourceSkillId, skill.id);
+                              resetSelectedSkillDrag();
+                            }}
+                            onDragEnd={resetSelectedSkillDrag}
+                            className={cn(
+                              'flex cursor-grab items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 p-2 transition-colors active:cursor-grabbing',
+                              draggingSelectedSkillId === skill.id && 'opacity-50',
+                              dragOverSelectedSkillId === skill.id && draggingSelectedSkillId !== skill.id
+                                && 'border-primary/60 bg-primary/10 ring-1 ring-primary/25',
+                            )}
+                          >
+                            <div className="flex min-w-0 items-center gap-2">
+                              <GripVertical className="size-4 shrink-0 text-muted-foreground" />
+                              <Badge variant="secondary" className="h-6 w-6 rounded-full p-0 flex items-center justify-center text-xs">
+                                {idx + 1}
+                              </Badge>
+                              <span className="truncate text-sm font-medium">{skill.name}</span>
+                              {canStartNewParallelGroup && selectedSkillGroupBreaks[skill.id] && (
+                                <Badge variant="outline" className="text-[10px]">新组</Badge>
+                              )}
+                            </div>
+                            <div className="flex shrink-0 items-center gap-2">
+                              {canStartNewParallelGroup && (
+                                <Button
+                                  type="button"
+                                  variant={selectedSkillGroupBreaks[skill.id] ? 'default' : 'ghost'}
+                                  size="sm"
+                                  className="h-7 px-2 text-xs"
+                                  onClick={() => setSelectedSkillGroupBreaks((prev) => ({
+                                    ...prev,
+                                    [skill.id]: !prev[skill.id],
+                                  }))}
+                                >
+                                  {selectedSkillGroupBreaks[skill.id] ? '新组' : '同组'}
+                                </Button>
+                              )}
+                              <div className="flex items-center rounded-md border border-border/50 p-0.5">
+                                <Button
+                                  type="button"
+                                  variant={mode === 'serial' ? 'default' : 'ghost'}
+                                  size="sm"
+                                  className="h-7 px-2 text-xs"
+                                  onClick={() => {
+                                    setSelectedSkillModes((prev) => ({ ...prev, [skill.id]: 'serial' }));
+                                    setSelectedSkillGroupBreaks((prev) => ({ ...prev, [skill.id]: false }));
+                                  }}
+                                >
+                                  串行
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant={mode === 'parallel' ? 'default' : 'ghost'}
+                                  size="sm"
+                                  className="h-7 px-2 text-xs"
+                                  onClick={() => setSelectedSkillModes((prev) => ({ ...prev, [skill.id]: 'parallel' }))}
+                                >
+                                  并行
+                                </Button>
+                              </div>
                               <Button
                                 type="button"
-                                variant={(selectedSkillModes[skill.id] || 'serial') === 'serial' ? 'default' : 'ghost'}
-                                size="sm"
-                                className="h-7 px-2 text-xs"
-                                onClick={() => setSelectedSkillModes((prev) => ({ ...prev, [skill.id]: 'serial' }))}
+                                variant="ghost"
+                                size="icon"
+                                aria-label={`移除 ${skill.name}`}
+                                className="size-8 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                onClick={() => handleRemoveSelectedSkill(skill.id)}
+                                onMouseDown={(event) => event.stopPropagation()}
+                                onPointerDown={(event) => event.stopPropagation()}
+                                onDragStart={(event) => event.preventDefault()}
                               >
-                                串行
-                              </Button>
-                              <Button
-                                type="button"
-                                variant={(selectedSkillModes[skill.id] || 'serial') === 'parallel' ? 'default' : 'ghost'}
-                                size="sm"
-                                className="h-7 px-2 text-xs"
-                                onClick={() => setSelectedSkillModes((prev) => ({ ...prev, [skill.id]: 'parallel' }))}
-                              >
-                                并行
+                                <Trash2 className="size-4" />
                               </Button>
                             </div>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              aria-label={`移除 ${skill.name}`}
-                              className="size-8 shrink-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                              onClick={() => handleRemoveSelectedSkill(skill.id)}
-                              onMouseDown={(event) => event.stopPropagation()}
-                              onPointerDown={(event) => event.stopPropagation()}
-                              onDragStart={(event) => event.preventDefault()}
-                            >
-                              <Trash2 className="size-4" />
-                            </Button>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      连续标记为并行的 Skill 会组成同一个并行任务组，可分别推进；后续串行步骤会等待该并行组汇聚后继续。M2 验收要求至少选择 3 个 Skill。
+                      连续标记为并行的 Skill 默认属于同一任务组；在相邻并行项之间切换为“新组”后，可表达分阶段并行。M2 验收要求至少选择 3 个 Skill。
                     </p>
                   </div>
                 )}
@@ -3488,7 +3966,12 @@ export default function WorkflowsPage() {
                     </Badge>
                   </div>
                   <div data-testid="workflow-step-sort-list" className="flex flex-col gap-2">
-                    {getVisibleSteps(editingWorkflow).map((step, idx) => (
+                    {getVisibleSteps(editingWorkflow).map((step, idx) => {
+                      const visibleEditingSteps = getVisibleSteps(editingWorkflow);
+                      const previousStep = idx > 0 ? visibleEditingSteps[idx - 1] : undefined;
+                      const canStartNewParallelGroup = step.runMode === 'parallel' && previousStep?.runMode === 'parallel';
+
+                      return (
                       <div
                         key={step.id}
                         data-workflow-step-id={step.id}
@@ -3549,11 +4032,29 @@ export default function WorkflowsPage() {
                             <p className="truncate text-sm font-medium">{step.name}</p>
                             {step.output && <Badge variant="outline" className="text-[10px]">已有产物</Badge>}
                             {step.runMode === 'parallel' && <Badge variant="secondary" className="text-[10px]">并行</Badge>}
+                            {canStartNewParallelGroup && step.parallelGroupBreakBefore && (
+                              <Badge variant="outline" className="text-[10px]">新组</Badge>
+                            )}
                           </div>
                           <p className="text-xs text-muted-foreground">
                             {getStepStatusLabel(step.status)}
                           </p>
                         </div>
+                        {canStartNewParallelGroup && (
+                          <Button
+                            type="button"
+                            variant={step.parallelGroupBreakBefore ? 'default' : 'ghost'}
+                            size="sm"
+                            className="h-8 shrink-0 px-2 text-xs"
+                            onClick={() => handleToggleParallelGroupBreak(
+                              editingWorkflow.id,
+                              step.id,
+                              !step.parallelGroupBreakBefore,
+                            )}
+                          >
+                            {step.parallelGroupBreakBefore ? '新组' : '同组'}
+                          </Button>
+                        )}
                         <div className="flex items-center rounded-md border border-border/50 p-0.5">
                           <Button
                             type="button"
@@ -3584,7 +4085,8 @@ export default function WorkflowsPage() {
                           移除
                         </Button>
                       </div>
-                    ))}
+                      );
+                    })}
                     {getVisibleSteps(editingWorkflow).length === 0 && (
                       <p className="rounded-lg border border-dashed border-border/60 p-4 text-center text-sm text-muted-foreground">
                         当前没有启用步骤，可从已移除步骤恢复或追加 Skill。
@@ -3796,7 +4298,10 @@ export default function WorkflowsPage() {
     ? reviewedOutputFiles.filter((file) => file.stepId === currentStep.id)
     : [];
   const currentContextFiles = currentStep
-    ? uploadedContextFiles.filter((file) => file.stepId === currentStep.id)
+    ? uploadedContextFiles.filter((file) => file.stepId === currentStep.id && !file.isImage)
+    : [];
+  const currentPendingChatFiles = currentStep
+    ? pendingChatFilesByStepId[currentStep.id] || []
     : [];
   const selectedKnowledgeBaseOptions = knowledgeBases.filter((kb) => selectedKnowledgeBaseIds.includes(kb.id));
   const unavailableKnowledgeBaseCount = selectedKnowledgeBaseIds.filter((id) => (
@@ -3824,7 +4329,7 @@ export default function WorkflowsPage() {
       ),
   );
   const reviewedOutputPromptSavableFileCount = reviewedOutputSavePrompt
-    ? reviewedOutputSavePrompt.files.filter(isReadableTextFile).length
+    ? reviewedOutputSavePrompt.files.filter((file) => isReadableTextFile(file) || isServerExtractableWorkflowFile(file)).length
     : 0;
   const reviewedOutputPromptStep = reviewedOutputSavePrompt
     ? visibleWorkflowSteps.find((step) => step.id === reviewedOutputSavePrompt.stepId)
@@ -3918,12 +4423,42 @@ export default function WorkflowsPage() {
   };
   const removeContextFile = (fileId: string) => {
     const updatedAt = new Date().toISOString();
+    setPendingChatFilesByStepId((prev) => {
+      let changed = false;
+      const next = Object.fromEntries(
+        Object.entries(prev)
+          .map(([stepId, files]) => {
+            const remainingFiles = files.filter((file) => file.id !== fileId);
+            if (remainingFiles.length !== files.length) changed = true;
+            return [stepId, remainingFiles] as const;
+          })
+          .filter(([, files]) => files.length > 0),
+      );
+
+      return changed ? next : prev;
+    });
     setUploadedContextFiles((prev) => prev.filter((item) => item.id !== fileId));
     updateActiveWorkflow((workflow) => ({
       ...workflow,
       contextFiles: (workflow.contextFiles || []).filter((file) => file.id !== fileId),
       updated_at: updatedAt,
     }));
+  };
+  const removePendingChatFile = (fileId: string) => {
+    setPendingChatFilesByStepId((prev) => {
+      let changed = false;
+      const next = Object.fromEntries(
+        Object.entries(prev)
+          .map(([stepId, files]) => {
+            const remainingFiles = files.filter((file) => file.id !== fileId);
+            if (remainingFiles.length !== files.length) changed = true;
+            return [stepId, remainingFiles] as const;
+          })
+          .filter(([, files]) => files.length > 0),
+      );
+
+      return changed ? next : prev;
+    });
   };
   const removeReviewedOutputFile = (fileId: string) => {
     const updatedAt = new Date().toISOString();
@@ -4513,6 +5048,11 @@ export default function WorkflowsPage() {
             activeStepIdRef.current = null;
             setChatMessages([]);
             setChatInput('');
+            replaceWorkflowRoute({
+              workspaceId: activeWorkflow.workspaceId,
+              workflowId: '',
+              stepId: '',
+            });
           }}>
             ← 返回列表
           </Button>
@@ -4816,7 +5356,7 @@ export default function WorkflowsPage() {
                   : null;
                 const renderDocumentCard = msg.role === 'assistant'
                   && !stoppedMessageContent
-                  && isAssistantDocumentLike(msg.content);
+                  && shouldRenderAssistantDocumentCard(msg);
                 const renderThinkingIndicator = isStreaming
                   && idx === lastAssistantMessageIndex
                   && msg.role === 'assistant'
@@ -4871,7 +5411,38 @@ export default function WorkflowsPage() {
                                 {msg.role === 'assistant' ? (
                                   <CompactMarkdown content={msg.content} />
                                 ) : (
-                                  <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.content}</div>
+                                  <div className="flex min-w-0 max-w-full flex-col gap-2">
+                                    {msg.attachments && msg.attachments.length > 0 && (
+                                      <div className="flex max-w-full flex-wrap justify-end gap-2">
+                                        {msg.attachments.map((attachment) => (
+                                          attachment.isImage && attachment.previewUrl ? (
+                                            <img
+                                              key={attachment.id}
+                                              src={attachment.previewUrl}
+                                              alt={attachment.name}
+                                              className="max-h-64 max-w-full rounded-md border border-primary-foreground/20 object-contain"
+                                            />
+                                          ) : (
+                                            <div
+                                              key={attachment.id}
+                                              className="flex max-w-full items-center gap-1.5 rounded-md bg-primary-foreground/10 px-2 py-1 text-xs"
+                                            >
+                                              {attachment.isImage ? (
+                                                <ImageIcon className="size-3.5 shrink-0" />
+                                              ) : (
+                                                <Paperclip className="size-3.5 shrink-0" />
+                                              )}
+                                              <span className="max-w-44 truncate">{attachment.name}</span>
+                                              <span className="shrink-0 opacity-80">{formatFileSize(attachment.size)}</span>
+                                            </div>
+                                          )
+                                        ))}
+                                      </div>
+                                    )}
+                                    {msg.content.trim() && (
+                                      <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.content}</div>
+                                    )}
+                                  </div>
                                 )}
                               </div>
                             )}
@@ -5187,6 +5758,7 @@ export default function WorkflowsPage() {
               setChatInput(nextValue);
               if (currentStep?.id) {
                 setChatInputByStepId((prev) => ({ ...prev, [currentStep.id]: nextValue }));
+                writeStoredChatDraft(currentStep.id, nextValue);
               }
             }}
             isLoading={isStreaming}
@@ -5195,14 +5767,20 @@ export default function WorkflowsPage() {
             }}
             className="bg-background/70"
           >
-            {currentContextFiles.length > 0 && (
+            {currentPendingChatFiles.length > 0 && (
               <div className="flex flex-wrap gap-2 px-1 pb-2">
-                {currentContextFiles.map((file) => (
+                {currentPendingChatFiles.map((file) => (
                   <div
                     key={file.id}
                     className="flex min-w-0 items-center gap-2 rounded-lg bg-secondary px-2.5 py-1.5 text-xs"
                   >
-                    {file.isImage ? (
+                    {file.isImage && file.previewUrl ? (
+                      <img
+                        src={file.previewUrl}
+                        alt={file.name}
+                        className="size-6 shrink-0 rounded-md object-cover"
+                      />
+                    ) : file.isImage ? (
                       <ImageIcon className="size-3.5 shrink-0 text-primary" />
                     ) : (
                       <Paperclip className="size-3.5 shrink-0 text-primary" />
@@ -5213,7 +5791,11 @@ export default function WorkflowsPage() {
                       type="button"
                       className="rounded-full p-0.5 text-muted-foreground hover:bg-secondary-foreground/10 hover:text-foreground"
                       onClick={() => {
-                        removeContextFile(file.id);
+                        if (currentContextFiles.some((contextFile) => contextFile.id === file.id)) {
+                          removeContextFile(file.id);
+                        } else {
+                          removePendingChatFile(file.id);
+                        }
                         if (fileInputRef.current) {
                           fileInputRef.current.value = '';
                         }
@@ -5248,7 +5830,7 @@ export default function WorkflowsPage() {
                     id="workflow-chat-file-upload"
                     type="file"
                     multiple
-                    accept=".txt,.md,image/*"
+                    accept=".txt,.md,.markdown,.doc,.docx,.pdf,.xlsx,image/*"
                     className="hidden"
                     disabled={isStreaming}
                     onChange={(event) => {
@@ -5273,7 +5855,7 @@ export default function WorkflowsPage() {
                     }
                     void handleSendMessage();
                   }}
-                  disabled={!isStreaming && !chatInput.trim() && currentContextFiles.length === 0}
+                  disabled={!isStreaming && !chatInput.trim() && currentContextFiles.length === 0 && currentPendingChatFiles.length === 0}
                   aria-label={isStreaming ? '停止生成' : '发送消息'}
                 >
                   {isStreaming ? (
@@ -5425,7 +6007,7 @@ export default function WorkflowsPage() {
                         ref={reviewedOutputInputRef}
                         type="file"
                         multiple
-                        accept=".txt,.md,.doc,.docx,.pdf,image/*"
+                        accept=".txt,.md,.markdown,.doc,.docx,.pdf,.xlsx,image/*"
                         className="hidden"
                         onChange={(event) => {
                           openReviewedOutputUploadPrompt(Array.from(event.target.files || []), currentStep.id);

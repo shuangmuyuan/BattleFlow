@@ -7,6 +7,12 @@ export interface AgentChatMessage {
   content: string;
 }
 
+export interface AgentInputAttachment {
+  name: string;
+  mimeType: string;
+  dataUrl: string;
+}
+
 export type AgentSessionStatus = 'starting' | 'requesting' | 'running' | 'done' | 'aborted' | 'error';
 
 export type AgentEvent =
@@ -36,6 +42,7 @@ export interface AgentRuntimeStatus {
 export interface AgentTurnInput {
   messages: AgentChatMessage[];
   systemPrompt: string;
+  attachments?: AgentInputAttachment[];
   signal?: AbortSignal;
 }
 

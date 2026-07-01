@@ -68,6 +68,7 @@ export interface WorkflowStepRecord {
   runMode: WorkflowRunMode;
   parallelGroupId?: string;
   parallelGroupName?: string;
+  parallelGroupBreakBefore?: boolean;
   isRemoved?: boolean;
   removedAt?: string;
   status: WorkflowStepStatus;
@@ -108,6 +109,18 @@ export interface WorkflowReviewedOutputFileRecord {
   content?: string;
   note?: string;
   created_at: string;
+}
+
+export interface WorkflowChatAttachmentRecord {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  isImage: boolean;
+  previewUrl?: string;
+  contentKind: WorkflowFileContentKind;
+  note?: string;
+  created_at?: string;
 }
 
 export interface WorkflowContextSelectionRecord {
@@ -153,6 +166,7 @@ export interface WorkflowDemoHandoffRecord {
 export interface WorkflowChatMessageRecord {
   role: 'user' | 'assistant';
   content: string;
+  attachments?: WorkflowChatAttachmentRecord[];
 }
 
 const CLAUDE_RUNTIME_SKILL_MISFIRE_MARKERS = [
@@ -238,6 +252,7 @@ interface CreateWorkflowStepInput {
   runMode?: WorkflowRunMode;
   parallelGroupId?: string;
   parallelGroupName?: string;
+  parallelGroupBreakBefore?: boolean;
 }
 
 interface CreateWorkflowInput {
@@ -339,6 +354,7 @@ function normalizeStep(step: Partial<WorkflowStepRecord>, index: number): Workfl
     runMode: step.runMode === 'parallel' ? 'parallel' : 'serial',
     parallelGroupId: step.parallelGroupId,
     parallelGroupName: step.parallelGroupName,
+    parallelGroupBreakBefore: Boolean(step.parallelGroupBreakBefore),
     isRemoved: Boolean(step.isRemoved),
     removedAt: step.removedAt,
     status,
@@ -536,6 +552,35 @@ export function upsertWorkflowDemoHandoff(
   };
 }
 
+function normalizeChatAttachments(value: unknown): WorkflowChatAttachmentRecord[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((item, index): WorkflowChatAttachmentRecord[] => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const attachment = item as Partial<WorkflowChatAttachmentRecord>;
+    const name = typeof attachment.name === 'string' && attachment.name.trim()
+      ? attachment.name.trim()
+      : `附件 ${index + 1}`;
+    const type = typeof attachment.type === 'string' && attachment.type.trim()
+      ? attachment.type.trim()
+      : 'unknown';
+
+    return [{
+      id: typeof attachment.id === 'string' && attachment.id.trim()
+        ? attachment.id
+        : uniqueId('chat-attachment', name),
+      name,
+      type,
+      size: typeof attachment.size === 'number' && Number.isFinite(attachment.size) ? attachment.size : 0,
+      isImage: Boolean(attachment.isImage),
+      previewUrl: typeof attachment.previewUrl === 'string' ? attachment.previewUrl : undefined,
+      contentKind: normalizeFileContentKind(attachment.contentKind),
+      note: typeof attachment.note === 'string' ? attachment.note : undefined,
+      created_at: typeof attachment.created_at === 'string' ? attachment.created_at : undefined,
+    }];
+  });
+}
+
 function normalizeStepChats(value: unknown): Record<string, WorkflowChatMessageRecord[]> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return Object.fromEntries(
@@ -554,6 +599,10 @@ function normalizeStepChats(value: unknown): Record<string, WorkflowChatMessageR
           .map((message) => ({
             role: message.role === 'assistant' ? 'assistant' : 'user',
             content: message.content || '',
+            ...(() => {
+              const attachments = normalizeChatAttachments(message.attachments);
+              return attachments.length > 0 ? { attachments } : {};
+            })(),
           }))
         : [],
     ]).filter(([, messages]) => messages.length > 0),
@@ -957,6 +1006,7 @@ function buildSteps(inputs: CreateWorkflowStepInput[]): WorkflowStepRecord[] {
     runMode: input.runMode === 'parallel' ? 'parallel' : 'serial',
     parallelGroupId: input.parallelGroupId,
     parallelGroupName: input.parallelGroupName,
+    parallelGroupBreakBefore: Boolean(input.parallelGroupBreakBefore),
     status: inputStepIndexes[index] === firstStepIndex ? 'in_progress' : 'pending',
     output: null,
     validationStatus: 'not_started',

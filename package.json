@@ -66,12 +66,14 @@
     "mammoth": "^1.12.0",
     "next": "16.2.9",
     "next-themes": "^0.4.6",
+    "pdf-parse": "^2.4.5",
     "pg": "^8.16.3",
     "react": "19.2.3",
     "react-day-picker": "^9.13.0",
     "react-dom": "19.2.3",
     "react-hook-form": "^7.70.0",
     "react-resizable-panels": "^4.2.0",
+    "read-excel-file": "^9.2.0",
     "recharts": "2.15.4",
     "sonner": "^2.0.7",
     "tailwind-merge": "^2.6.0",
@@ -95,7 +97,8 @@
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
     "typescript": "^5",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.9",
+    "write-excel-file": "^4.1.1"
   },
   "packageManager": "pnpm@9.0.0",
   "pnpm": {
