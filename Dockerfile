@@ -4,6 +4,8 @@ WORKDIR /app
 
 ENV NEXT_TELEMETRY_DISABLED=1
 
+RUN sed -i 's|http://deb.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g; s|http://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g' /etc/apt/sources.list.d/debian.sources
+
 RUN apt-get update \
   && apt-get install -y --no-install-recommends git unzip ca-certificates \
   && rm -rf /var/lib/apt/lists/*

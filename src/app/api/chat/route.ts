@@ -680,6 +680,12 @@ function streamAgentEventsAsSse(agentStream: ReadableStream<AgentEvent>) {
           if (!value) continue;
           if (value.type === 'assistant_message') {
             emit({ content: value.text });
+          } else if (value.type === 'assistant_final') {
+            emit({
+              event: 'assistant_final',
+              content: value.text,
+              replace: true,
+            });
           } else if (value.type === 'session_status') {
             emit({
               event: 'session_status',

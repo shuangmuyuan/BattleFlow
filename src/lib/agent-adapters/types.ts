@@ -12,6 +12,7 @@ export type AgentSessionStatus = 'starting' | 'requesting' | 'running' | 'done' 
 export type AgentEvent =
   | { type: 'session_status'; status: AgentSessionStatus; sessionId?: string }
   | { type: 'assistant_message'; text: string }
+  | { type: 'assistant_final'; text: string }
   | { type: 'terminal_output'; stream: 'stdout' | 'stderr'; text: string }
   | { type: 'usage'; inputTokens?: number; outputTokens?: number; costUsd?: number; model?: string }
   | { type: 'error'; error: string };

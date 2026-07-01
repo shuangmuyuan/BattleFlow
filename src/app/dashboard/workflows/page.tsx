@@ -867,6 +867,30 @@ function isAbortError(error: unknown) {
   return maybeError.name === 'AbortError';
 }
 
+interface ChatStreamPayload {
+  event?: string;
+  content?: string;
+  done?: boolean;
+  error?: string;
+  replace?: boolean;
+}
+
+function parseChatStreamPayload(line: string): ChatStreamPayload | null {
+  if (!line.startsWith('data: ')) return null;
+
+  const payload = JSON.parse(line.slice(6)) as unknown;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+
+  const record = payload as Record<string, unknown>;
+  return {
+    event: typeof record.event === 'string' ? record.event : undefined,
+    content: typeof record.content === 'string' ? record.content : undefined,
+    done: record.done === true,
+    error: typeof record.error === 'string' ? record.error : undefined,
+    replace: record.replace === true,
+  };
+}
+
 interface KnowledgeBaseOption {
   id: string;
   name: string;
@@ -2071,34 +2095,56 @@ export default function WorkflowsPage() {
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      let streamBuffer = '';
+      let receivedDone = false;
 
       updateVisibleChatMessagesForStep(currentStep.id, [...visibleMessages, { role: 'assistant', content: '' }]);
 
+      streamLoop:
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const text = decoder.decode(value, { stream: true });
-        const lines = text.split('\n');
+        streamBuffer += decoder.decode(value, { stream: true });
+        const lines = streamBuffer.split(/\r?\n/);
+        streamBuffer = lines.pop() || '';
 
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            let data: { content?: string; done?: boolean; error?: string };
-            try {
-              data = JSON.parse(line.slice(6));
-            } catch {
-              // Skip non-JSON lines
-              continue;
-            }
-            if (data.error) throw new Error(data.error);
-            if (data.content) {
-              assistantContent += data.content;
-              updateVisibleChatMessagesForStep(currentStep.id, [...visibleMessages, { role: 'assistant', content: assistantContent }]);
-            }
-            if (data.done) break;
+          if (!line.trim()) continue;
+          const data = parseChatStreamPayload(line);
+          if (!data) continue;
+
+          if (data.error) throw new Error(data.error);
+          if (data.content) {
+            assistantContent = data.replace || data.event === 'assistant_final'
+              ? data.content
+              : assistantContent + data.content;
+            updateVisibleChatMessagesForStep(currentStep.id, [...visibleMessages, { role: 'assistant', content: assistantContent }]);
+          }
+          if (data.done) {
+            receivedDone = true;
+            break streamLoop;
           }
         }
       }
+
+      const tail = `${streamBuffer}${decoder.decode()}`.trim();
+      if (tail) {
+        const data = parseChatStreamPayload(tail);
+        if (data?.error) throw new Error(data.error);
+        if (data?.content) {
+          assistantContent = data.replace || data.event === 'assistant_final'
+            ? data.content
+            : assistantContent + data.content;
+          updateVisibleChatMessagesForStep(currentStep.id, [...visibleMessages, { role: 'assistant', content: assistantContent }]);
+        }
+        if (data?.done) receivedDone = true;
+      }
+
+      if (!receivedDone) {
+        throw new Error('Chat stream ended before the completion signal was received');
+      }
+
       const finalMessages: ChatMessage[] = [
         ...visibleMessages,
         { role: 'assistant', content: assistantContent },

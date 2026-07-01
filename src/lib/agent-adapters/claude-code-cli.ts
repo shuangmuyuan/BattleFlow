@@ -392,6 +392,7 @@ export function streamClaudeCodeCliTurn(input: AgentTurnInput) {
       let stdoutBuffer = '';
       let stderrBuffer = '';
       let sawContentDelta = false;
+      let streamedText = '';
       let finalResult = '';
 
       const handleLine = (line: string) => {
@@ -413,6 +414,7 @@ export function streamClaudeCodeCliTurn(input: AgentTurnInput) {
             const delta = event.event?.delta;
             if (event.event?.type === 'content_block_delta' && typeof delta?.text === 'string') {
               sawContentDelta = true;
+              streamedText += delta.text;
               emit({ type: 'assistant_message', text: delta.text });
             }
             return;
@@ -457,6 +459,8 @@ export function streamClaudeCodeCliTurn(input: AgentTurnInput) {
         }
         if (!sawContentDelta && finalResult) {
           emit({ type: 'assistant_message', text: finalResult });
+        } else if (finalResult && finalResult !== streamedText) {
+          emit({ type: 'assistant_final', text: finalResult });
         }
         closeWith({ type: 'session_status', status: 'done' });
       });
