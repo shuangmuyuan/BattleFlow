@@ -346,6 +346,30 @@ describe('permission engine', () => {
     expect(canAccess(adminContext, 'organization.members.manage', { organizationId: 'org-1' })).toBe(true);
   });
 
+  it('does not let organization admins bypass workflow resource grants', () => {
+    const context = makeContext({
+      organizationMembership: {
+        organizationId: 'org-1',
+        userId: 'user-1',
+        role: 'org_admin',
+        status: 'active',
+        organization: {
+          id: 'org-1',
+          name: 'Org One',
+          slug: 'org-one',
+          status: 'active',
+        },
+      },
+    });
+
+    expect(canAccess(context, 'workflow.read', {
+      organizationId: 'org-1',
+      resourceType: 'workflow',
+      resourceId: 'workflow-1',
+      ownerUserId: 'user-2',
+    })).toBe(false);
+  });
+
   it('keeps department managers inside inherited department scope', () => {
     const context = makeContext({
       departments: [

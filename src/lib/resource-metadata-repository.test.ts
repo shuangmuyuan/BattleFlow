@@ -116,6 +116,30 @@ describe('business resource authorization', () => {
     expect(canAccessBusinessResource(context, 'workflow.delete', row)).toBe(false);
   });
 
+  it('keeps user-created workflows private from organization admins without grants', () => {
+    const context = makeContext({
+      organizationMembership: {
+        organizationId: 'org-1',
+        userId: 'user-1',
+        role: 'org_admin',
+        status: 'active',
+        organization: {
+          id: 'org-1',
+          name: 'Org One',
+          slug: 'org-one',
+          status: 'active',
+        },
+      },
+    });
+    const row = makeRow({
+      resource_id: 'workflow-1',
+      owner_user_id: 'user-2',
+      resource_type: 'workflow',
+    });
+
+    expect(canAccessBusinessResource(context, 'workflow.read', row)).toBe(false);
+  });
+
   it('denies workflow asset reads across organizations without super admin access', () => {
     const context = makeContext({
       resourceGrants: [{
