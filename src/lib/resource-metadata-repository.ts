@@ -750,6 +750,19 @@ export async function upsertWorkflowBusinessMetadata(
       createdBy: context.user.id,
     });
 
+    for (const permission of ['read', 'update'] satisfies ResourcePermission[]) {
+      await upsertResourceGrant({
+        client,
+        organizationId,
+        resourceType: 'workflow',
+        resourceId: workflow.id,
+        subjectType: 'organization',
+        subjectId: organizationId,
+        permission,
+        createdBy: context.user.id,
+      });
+    }
+
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);

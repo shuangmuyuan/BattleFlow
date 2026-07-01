@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { loginSsoAccount } from '@/lib/auth/account-service';
 import { safeRedirectPath } from '@/lib/auth/redirect';
+import { authErrorResponse, authSuccessResponse } from '../../_shared';
 import {
-  battleflowAuthCookieName,
-  createSessionToken,
-  getTokenMaxAgeSeconds,
   normalizeIdTrustUser,
-  publicUser,
   upsertSsoUser,
   verifySsoState,
 } from '@/lib/sso-auth';
@@ -86,31 +84,21 @@ export async function POST(request: NextRequest) {
     const idTrustToken = await exchangeCodeForToken(code, statePayload.redirectUri);
     const rawUserInfo = await fetchUserInfo(idTrustToken);
     const profile = normalizeIdTrustUser(rawUserInfo);
-    const user = await upsertSsoUser(profile);
-    if (!user.is_active) {
+    const ssoUser = await upsertSsoUser(profile);
+    if (!ssoUser.is_active) {
       return NextResponse.json({ error: '当前用户已被禁用' }, { status: 403 });
     }
 
-    const sessionToken = createSessionToken(user.id);
-    const response = NextResponse.json({
-      token_type: 'bearer',
-      expires_in: getTokenMaxAgeSeconds(),
-      user: publicUser(user),
-      redirectTo: safeRedirectPath(statePayload.nextPath),
-    });
-    response.cookies.set({
-      name: battleflowAuthCookieName,
-      value: sessionToken,
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: process.env.COOKIE_SECURE === 'true',
-      path: '/',
-      maxAge: getTokenMaxAgeSeconds(),
+    const result = await loginSsoAccount({
+      userId: ssoUser.id,
+      email: ssoUser.email,
+      displayName: ssoUser.display_name ?? ssoUser.username,
+      isAdmin: ssoUser.is_admin,
     });
 
-    return response;
+    return authSuccessResponse(result, safeRedirectPath(statePayload.nextPath));
   } catch (error) {
     console.error('SSO callback error:', error);
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'SSO callback failed' }, { status: 500 });
+    return authErrorResponse(error);
   }
 }

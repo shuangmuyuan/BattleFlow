@@ -73,6 +73,13 @@ export interface LoginAccountInput {
   password: string;
 }
 
+export interface SsoAccountInput {
+  userId: string;
+  email?: string | null;
+  displayName?: string | null;
+  isAdmin?: boolean;
+}
+
 function normalizeEmail(email: string): string {
   const normalized = email.trim().toLowerCase();
   if (!normalized || normalized.length > 255 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
@@ -91,6 +98,16 @@ function normalizeOptionalText(value: string | null | undefined, maxLength: numb
 
 function displayNameFromEmail(email: string): string {
   return email.split('@')[0]?.slice(0, 128) || 'BattleFlow User';
+}
+
+function normalizeSsoEmail(input: SsoAccountInput): string {
+  const email = input.email?.trim().toLowerCase();
+  if (email && email.length <= 255 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return email;
+  }
+
+  const userId = input.userId.trim().toLowerCase().replace(/[^a-z0-9._+-]+/g, '-').slice(0, 96) || 'sso-user';
+  return `${userId}@sso.battleflow.local`;
 }
 
 function isBuiltInSuperAdminIdentifier(identifier: string): boolean {
@@ -267,6 +284,58 @@ async function ensureBuiltInSuperAdminOrganization(client: PoolClient, userId: s
       DO UPDATE SET role = 'org_owner', status = 'active', updated_at = now()
     `,
     [organizationId, userId],
+  );
+
+  return organizationId;
+}
+
+async function ensureDefaultOrganizationMembership(
+  client: PoolClient,
+  userId: string,
+  role: 'org_owner' | 'org_member',
+): Promise<string> {
+  const existing = await client.query<{ id: string }>(
+    `
+      SELECT id
+      FROM organizations
+      WHERE id = $1 OR slug = $2
+      ORDER BY CASE WHEN id = $1 THEN 0 ELSE 1 END
+      LIMIT 1
+    `,
+    [DEFAULT_ORGANIZATION_ID, DEFAULT_ORGANIZATION_SLUG],
+  );
+
+  const organizationId = existing.rows[0]?.id ?? DEFAULT_ORGANIZATION_ID;
+  if (!existing.rowCount) {
+    await client.query(
+      `
+        INSERT INTO organizations (id, name, slug, description, status, settings, created_by, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, 'active', '{}'::jsonb, $5, now(), now())
+      `,
+      [
+        organizationId,
+        DEFAULT_ORGANIZATION_NAME,
+        DEFAULT_ORGANIZATION_SLUG,
+        'Default BattleFlow organization.',
+        userId,
+      ],
+    );
+  }
+
+  await client.query(
+    `
+      INSERT INTO organization_members (organization_id, user_id, role, status, joined_at, updated_at)
+      VALUES ($1, $2, $3, 'active', now(), now())
+      ON CONFLICT (organization_id, user_id)
+      DO UPDATE SET
+        role = CASE
+          WHEN organization_members.role IN ('org_owner', 'org_admin') THEN organization_members.role
+          ELSE EXCLUDED.role
+        END,
+        status = 'active',
+        updated_at = now()
+    `,
+    [organizationId, userId, role],
   );
 
   return organizationId;
@@ -476,6 +545,49 @@ export async function loginAccount(input: LoginAccountInput): Promise<AuthFlowRe
       user: mapUser(row),
       session: await createSessionWithClient(client, row.id),
       activeOrganizationId: await fetchFirstMembershipOrganizationId(client, row.id),
+    };
+  });
+}
+
+export async function loginSsoAccount(input: SsoAccountInput): Promise<AuthFlowResult> {
+  const userId = normalizeOptionalText(input.userId, 36);
+  if (!userId) {
+    throw new AuthInputError('SSO user ID is required');
+  }
+
+  const email = normalizeSsoEmail({ ...input, userId });
+  const displayName = normalizeOptionalText(input.displayName, 128) || displayNameFromEmail(email);
+
+  return withTransaction(async (client) => {
+    const userResult = await client.query<UserRow>(
+      `
+        INSERT INTO users (id, email, display_name, status, created_at, updated_at)
+        VALUES ($1, $2, $3, 'active', now(), now())
+        ON CONFLICT (id)
+        DO UPDATE SET
+          email = EXCLUDED.email,
+          display_name = EXCLUDED.display_name,
+          status = 'active',
+          updated_at = now()
+        RETURNING id, email, display_name, avatar_url, status
+      `,
+      [userId, email, displayName],
+    );
+    const user = userResult.rows[0];
+    if (!user) {
+      throw new AuthInputError('Unable to create SSO account');
+    }
+
+    const activeOrganizationId = await ensureDefaultOrganizationMembership(
+      client,
+      user.id,
+      input.isAdmin ? 'org_owner' : 'org_member',
+    );
+
+    return {
+      user: mapUser(user),
+      session: await createSessionWithClient(client, user.id),
+      activeOrganizationId,
     };
   });
 }

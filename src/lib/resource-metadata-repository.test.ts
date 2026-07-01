@@ -1,9 +1,23 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mockQuery = vi.fn();
+const mockRelease = vi.fn();
+const mockConnect = vi.fn();
+
+vi.mock('../storage/database/postgres-client', () => ({
+  getPostgresPool: () => ({
+    connect: mockConnect,
+  }),
+  queryPostgres: vi.fn(),
+}));
+
 import {
   canAccessBusinessResource,
+  upsertWorkflowBusinessMetadata,
   type ResourceMetadataRow,
 } from './resource-metadata-repository';
 import type { AuthOrganizationContext } from './auth/types';
+import type { WorkflowRecord } from './workflow-registry';
 
 function makeContext(overrides: Partial<AuthOrganizationContext> = {}): AuthOrganizationContext {
   const context: AuthOrganizationContext = {
@@ -64,6 +78,42 @@ function makeRow(overrides: Partial<ResourceMetadataRow> = {}): ResourceMetadata
     ...overrides,
   };
 }
+
+function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowRecord {
+  return {
+    id: 'workflow-1',
+    workspaceId: 'workspace-1',
+    name: 'Product planning workflow',
+    description: '',
+    status: 'in_progress',
+    agentValidationEnabled: false,
+    steps: [],
+    contextFiles: [],
+    reviewedOutputFiles: [],
+    reviewComments: {},
+    archivedReviewStepIds: [],
+    contextSelections: {},
+    stepSnapshots: [],
+    stepChats: {},
+    skillDrafts: {},
+    validationAttempts: [],
+    demoHandoffs: [],
+    created_at: '2026-06-30T00:00:00.000Z',
+    updated_at: '2026-06-30T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  mockQuery.mockReset();
+  mockRelease.mockReset();
+  mockConnect.mockReset();
+  mockQuery.mockResolvedValue({ rows: [] });
+  mockConnect.mockResolvedValue({
+    query: mockQuery,
+    release: mockRelease,
+  });
+});
 
 describe('business resource authorization', () => {
   it('allows official Skills to be read and run by authenticated organization users', () => {
@@ -287,5 +337,21 @@ describe('business resource authorization', () => {
 
     expect(canAccessBusinessResource(context, 'knowledge_base.read', privateKnowledgeBase)).toBe(true);
     expect(canAccessBusinessResource(context, 'skill.read', publicSkill)).toBe(true);
+  });
+
+  it('shares upserted workflows with the active organization for read and update only', async () => {
+    await upsertWorkflowBusinessMetadata(makeContext(), makeWorkflow());
+
+    const grantCalls = mockQuery.mock.calls.filter(([sql]) => (
+      typeof sql === 'string' && sql.includes('INSERT INTO resource_access_grants')
+    ));
+
+    expect(grantCalls).toHaveLength(3);
+    expect(grantCalls.map(([, values]) => values)).toEqual(expect.arrayContaining([
+      ['org-1', 'workflow', 'workflow-1', 'user', 'user-1', 'admin', 'user-1'],
+      ['org-1', 'workflow', 'workflow-1', 'organization', 'org-1', 'read', 'user-1'],
+      ['org-1', 'workflow', 'workflow-1', 'organization', 'org-1', 'update', 'user-1'],
+    ]));
+    expect(grantCalls.map(([, values]) => values?.[5])).not.toContain('delete');
   });
 });
