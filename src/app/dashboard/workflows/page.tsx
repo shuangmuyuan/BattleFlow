@@ -4545,9 +4545,6 @@ export default function WorkflowsPage() {
                         );
                       })}
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                      连续标记为并行的 Skill 默认属于同一任务组；在相邻并行项之间切换为“新组”后，可表达分阶段并行。M2 验收要求至少选择 3 个 Skill。
-                    </p>
                   </div>
                 )}
               </div>
