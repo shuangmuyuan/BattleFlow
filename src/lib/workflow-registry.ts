@@ -56,6 +56,9 @@ export interface WorkspaceRecord {
   id: string;
   name: string;
   description: string;
+  created_by?: string | null;
+  created_by_name?: string | null;
+  created_by_email?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -236,6 +239,9 @@ export interface WorkflowRecord {
   skillDrafts: Record<string, WorkflowSkillDraftRecord>;
   validationAttempts: WorkflowStepValidationAttemptRecord[];
   demoHandoffs: WorkflowDemoHandoffRecord[];
+  created_by?: string | null;
+  created_by_name?: string | null;
+  created_by_email?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -260,6 +266,9 @@ interface CreateWorkflowInput {
   name: string;
   description?: string;
   steps: CreateWorkflowStepInput[];
+  created_by?: string | null;
+  created_by_name?: string | null;
+  created_by_email?: string | null;
 }
 
 const cwd = process.cwd();
@@ -785,6 +794,9 @@ function normalizeWorkflow(workflow: Partial<WorkflowRecord>): WorkflowRecord {
     skillDrafts: normalizeSkillDrafts(workflow.skillDrafts),
     validationAttempts: normalizeValidationAttempts(workflow.validationAttempts, workflow.id || ''),
     demoHandoffs: normalizeWorkflowDemoHandoffs(workflow.demoHandoffs, workflow.id || ''),
+    created_by: typeof workflow.created_by === 'string' ? workflow.created_by : null,
+    created_by_name: typeof workflow.created_by_name === 'string' ? workflow.created_by_name : null,
+    created_by_email: typeof workflow.created_by_email === 'string' ? workflow.created_by_email : null,
     created_at: workflow.created_at || now,
     updated_at: now,
   };
@@ -809,6 +821,9 @@ interface DatabaseWorkspaceRow extends QueryResultRow {
   id: string;
   name: string;
   description: string | null;
+  created_by: string | null;
+  created_by_name: string | null;
+  created_by_email: string | null;
   created_at: Date | string | null;
   updated_at: Date | string | null;
 }
@@ -820,6 +835,9 @@ interface DatabaseWorkflowRow extends QueryResultRow {
   description: string | null;
   status: string;
   state: unknown;
+  created_by: string | null;
+  created_by_name: string | null;
+  created_by_email: string | null;
   created_at: Date | string | null;
   updated_at: Date | string | null;
 }
@@ -850,6 +868,9 @@ function workspaceFromDatabase(row: DatabaseWorkspaceRow): WorkspaceRecord {
     id: row.id,
     name: row.name,
     description: row.description || '',
+    created_by: row.created_by,
+    created_by_name: row.created_by_name,
+    created_by_email: row.created_by_email,
     created_at: createdAt,
     updated_at: toIsoString(row.updated_at, createdAt),
   };
@@ -862,15 +883,19 @@ function workflowFromDatabase(
   const createdAt = toIsoString(row.created_at);
   const updatedAt = toIsoString(row.updated_at, createdAt);
   if (hasWorkflowStatePayload(row.state)) {
+    const stateRecord = toRecord(row.state);
     return normalizeWorkflow({
-      ...toRecord(row.state),
+      ...stateRecord,
       id: row.id,
-      workspaceId: typeof toRecord(row.state).workspaceId === 'string'
-        ? toRecord(row.state).workspaceId as string
+      workspaceId: typeof stateRecord.workspaceId === 'string'
+        ? stateRecord.workspaceId
         : row.workspace_id || '',
-      name: row.name || (toRecord(row.state).name as string | undefined),
-      description: row.description ?? (toRecord(row.state).description as string | undefined),
+      name: row.name || (stateRecord.name as string | undefined),
+      description: row.description ?? (stateRecord.description as string | undefined),
       status: row.status === 'completed' || row.status === 'draft' ? row.status : 'in_progress',
+      created_by: typeof stateRecord.created_by === 'string' ? stateRecord.created_by : row.created_by,
+      created_by_name: typeof stateRecord.created_by_name === 'string' ? stateRecord.created_by_name : row.created_by_name,
+      created_by_email: typeof stateRecord.created_by_email === 'string' ? stateRecord.created_by_email : row.created_by_email,
       created_at: createdAt,
       updated_at: updatedAt,
     });
@@ -902,6 +927,9 @@ function workflowFromDatabase(
     status: row.status === 'completed' || row.status === 'draft' ? row.status : 'in_progress',
     steps,
     stepChats,
+    created_by: row.created_by,
+    created_by_name: row.created_by_name,
+    created_by_email: row.created_by_email,
     created_at: createdAt,
     updated_at: updatedAt,
   });
@@ -912,16 +940,37 @@ async function readStoreFromDatabase(): Promise<WorkflowStore | null> {
   const [workspaceResult, workflowResult] = await Promise.all([
     queryPostgres<DatabaseWorkspaceRow>(
       `
-        SELECT id, name, description, created_at, updated_at
-        FROM workflow_workspaces
-        ORDER BY COALESCE(updated_at, created_at) DESC
+        SELECT
+          ww.id,
+          ww.name,
+          ww.description,
+          ww.created_by,
+          u.display_name AS created_by_name,
+          u.email AS created_by_email,
+          ww.created_at,
+          ww.updated_at
+        FROM workflow_workspaces ww
+        LEFT JOIN users u ON u.id = ww.created_by
+        ORDER BY COALESCE(ww.updated_at, ww.created_at) DESC
       `,
     ),
     queryPostgres<DatabaseWorkflowRow>(
       `
-        SELECT id, workspace_id, name, description, status, state, created_at, updated_at
-        FROM workflows
-        ORDER BY COALESCE(updated_at, created_at) DESC
+        SELECT
+          w.id,
+          w.workspace_id,
+          w.name,
+          w.description,
+          w.status,
+          w.state,
+          w.created_by,
+          u.display_name AS created_by_name,
+          u.email AS created_by_email,
+          w.created_at,
+          w.updated_at
+        FROM workflows w
+        LEFT JOIN users u ON u.id = w.created_by
+        ORDER BY COALESCE(w.updated_at, w.created_at) DESC
       `,
     ),
   ]);
@@ -1029,7 +1078,13 @@ export async function getWorkflow(id: string) {
   return workflow ? normalizeWorkflow(workflow) : null;
 }
 
-export async function createWorkspace(input: { name: string; description?: string }) {
+export async function createWorkspace(input: {
+  name: string;
+  description?: string;
+  created_by?: string | null;
+  created_by_name?: string | null;
+  created_by_email?: string | null;
+}) {
   const name = input.name.trim();
   if (!name) throw new Error('Workspace name is required');
 
@@ -1039,6 +1094,9 @@ export async function createWorkspace(input: { name: string; description?: strin
     id: uniqueId('workspace', name),
     name,
     description: input.description?.trim() || '',
+    created_by: input.created_by || null,
+    created_by_name: input.created_by_name || null,
+    created_by_email: input.created_by_email || null,
     created_at: now,
     updated_at: now,
   };
@@ -1106,6 +1164,9 @@ export async function createWorkflow(input: CreateWorkflowInput) {
     description: input.description?.trim() || '',
     status: 'in_progress',
     steps: buildSteps(input.steps),
+    created_by: input.created_by || null,
+    created_by_name: input.created_by_name || null,
+    created_by_email: input.created_by_email || null,
     created_at: now,
     updated_at: now,
   });

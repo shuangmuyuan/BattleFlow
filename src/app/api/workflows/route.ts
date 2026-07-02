@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireOrganizationContext } from '@/lib/auth/server';
+import type { AuthOrganizationContext } from '@/lib/auth/server';
 import { AuthError } from '@/lib/auth/types';
 import {
   deleteWorkflowBusinessMetadata,
@@ -57,6 +58,14 @@ function errorStatus(error: unknown) {
   return 500;
 }
 
+function creatorInput(context: AuthOrganizationContext) {
+  return {
+    created_by: context.user.id,
+    created_by_name: context.user.displayName,
+    created_by_email: context.user.email,
+  };
+}
+
 // GET /api/workflows - List workspaces and workflows, or get one workflow
 export async function GET(request: NextRequest) {
   try {
@@ -98,6 +107,7 @@ export async function POST(request: NextRequest) {
       const workspace = await createWorkspace({
         name: String(body.name || ''),
         description: typeof body.description === 'string' ? body.description : '',
+        ...creatorInput(context),
       });
       await upsertWorkspaceBusinessMetadata(context, workspace);
       return jsonOk({ workspace }, 201);
@@ -132,6 +142,7 @@ export async function POST(request: NextRequest) {
         name: String(body.name || ''),
         description: typeof body.description === 'string' ? body.description : '',
         steps: Array.isArray(body.steps) ? body.steps : [],
+        ...creatorInput(context),
       });
       await upsertWorkflowBusinessMetadata(context, workflow);
       return jsonOk({ workflow, steps: workflow.steps }, 201);
