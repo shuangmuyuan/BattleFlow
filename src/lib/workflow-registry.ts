@@ -87,7 +87,7 @@ export interface WorkflowStepRecord {
   completed_at?: string;
 }
 
-export type WorkflowFileContentKind = 'text' | 'image_data_url' | 'metadata';
+export type WorkflowFileContentKind = 'text' | 'image_data_url' | 'pdf_data_url' | 'metadata';
 
 export interface WorkflowContextFileRecord {
   id: string;
@@ -382,7 +382,7 @@ function normalizeStep(step: Partial<WorkflowStepRecord>, index: number): Workfl
 }
 
 function normalizeFileContentKind(value: unknown): WorkflowFileContentKind {
-  return value === 'text' || value === 'image_data_url' ? value : 'metadata';
+  return value === 'text' || value === 'image_data_url' || value === 'pdf_data_url' ? value : 'metadata';
 }
 
 function normalizeContextFile(file: Partial<WorkflowContextFileRecord>, index: number): WorkflowContextFileRecord {

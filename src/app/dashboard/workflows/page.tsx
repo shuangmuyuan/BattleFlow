@@ -272,7 +272,7 @@ interface WorkflowDemoHandoff {
   updated_at: string;
 }
 
-type WorkflowFileContentKind = 'text' | 'image_data_url' | 'metadata';
+type WorkflowFileContentKind = 'text' | 'image_data_url' | 'pdf_data_url' | 'metadata';
 
 interface WorkflowContextSelection {
   knowledgeBaseIds: string[];
@@ -749,7 +749,9 @@ function sanitizeChatAttachments(attachments?: ChatAttachment[]) {
       size: typeof attachment.size === 'number' && Number.isFinite(attachment.size) ? attachment.size : 0,
       isImage: Boolean(attachment.isImage),
       previewUrl: typeof attachment.previewUrl === 'string' ? attachment.previewUrl : undefined,
-      contentKind: attachment.contentKind === 'text' || attachment.contentKind === 'image_data_url'
+      contentKind: attachment.contentKind === 'text'
+        || attachment.contentKind === 'image_data_url'
+        || attachment.contentKind === 'pdf_data_url'
         ? attachment.contentKind
         : 'metadata',
       note: typeof attachment.note === 'string' ? attachment.note : undefined,
@@ -1214,6 +1216,7 @@ const defaultContextSelection: WorkflowContextSelection = {
 
 const maxTextContextChars = 32_000;
 const maxPreviewImageBytes = 800_000;
+const maxWorkflowPdfAttachmentBytes = 2 * 1024 * 1024;
 const maxStepPromptContextChars = 12_000;
 const maxTotalStepPromptContextChars = 36_000;
 const maxChatRequestMessages = 12;
@@ -1293,6 +1296,10 @@ function isServerExtractableWorkflowFile(file: File) {
   return /\.(doc|docx|pdf|xlsx)$/i.test(file.name);
 }
 
+function isPdfWorkflowFile(file: File) {
+  return file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+}
+
 function readFileAsDataUrl(file: File) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -1329,6 +1336,33 @@ async function extractWorkflowFileText(file: File) {
   };
 }
 
+async function buildPdfWorkflowFilePayload(file: File, extractionError: unknown) {
+  const errorMessage = extractionError instanceof Error ? extractionError.message : '';
+  if (
+    errorMessage.includes('password protected')
+    || errorMessage.includes('not a valid PDF')
+  ) {
+    throw extractionError instanceof Error ? extractionError : new Error('PDF 文件无法读取');
+  }
+
+  if (file.size > maxWorkflowPdfAttachmentBytes) {
+    return {
+      contentKind: 'metadata' as const,
+      content: undefined,
+      note: `PDF 未提取到可直接注入的文本，且超过 ${Math.round(maxWorkflowPdfAttachmentBytes / 1024 / 1024)}MB，当前仅保留元信息。请拆分或转换为带文本层的 PDF 后重新上传。`,
+      previewUrl: undefined,
+    };
+  }
+
+  const dataUrl = await readFileAsDataUrl(file);
+  return {
+    contentKind: 'pdf_data_url' as const,
+    content: dataUrl,
+    note: 'PDF 未提取到可直接注入的文本，发送时会将前几页转为图片交给运行时读取。',
+    previewUrl: undefined,
+  };
+}
+
 async function buildWorkflowFilePayload(file: File) {
   if (isReadableTextFile(file)) {
     const rawText = await file.text();
@@ -1343,7 +1377,14 @@ async function buildWorkflowFilePayload(file: File) {
   }
 
   if (isServerExtractableWorkflowFile(file)) {
-    return extractWorkflowFileText(file);
+    try {
+      return await extractWorkflowFileText(file);
+    } catch (error) {
+      if (isPdfWorkflowFile(file)) {
+        return buildPdfWorkflowFilePayload(file, error);
+      }
+      throw error;
+    }
   }
 
   if (file.type.startsWith('image/') && file.size <= maxPreviewImageBytes) {

@@ -22,6 +22,7 @@ import {
   upsertWorkflow,
   type WorkflowChatMessageRecord,
 } from '@/lib/workflow-registry';
+import { renderWorkflowPdfDataUrlAttachments } from '@/lib/workflow-pdf-attachments';
 import { cleanExecutableSkillText } from '@/lib/workflow-skill-draft';
 
 export const runtime = 'nodejs';
@@ -175,7 +176,7 @@ function getDataUrlByteLength(value: string) {
   return Math.floor((base64.length * 3) / 4);
 }
 
-function getImageAttachments(files: UploadedFileContext[]): AgentInputAttachment[] {
+function getImageDataUrlAttachments(files: UploadedFileContext[]): AgentInputAttachment[] {
   return files.flatMap((file): AgentInputAttachment[] => {
     const content = typeof file.content === 'string' ? file.content : '';
     const type = typeof file.type === 'string' ? file.type : '';
@@ -194,6 +195,26 @@ function getImageAttachments(files: UploadedFileContext[]): AgentInputAttachment
       dataUrl: content,
     }];
   }).slice(0, MAX_IMAGE_ATTACHMENT_COUNT);
+}
+
+async function getRuntimeAttachments(files: UploadedFileContext[]): Promise<AgentInputAttachment[]> {
+  const attachments = getImageDataUrlAttachments(files);
+  let remainingSlots = MAX_IMAGE_ATTACHMENT_COUNT - attachments.length;
+  if (remainingSlots <= 0) return attachments;
+
+  for (const file of files) {
+    if (remainingSlots <= 0) break;
+    if (file.contentKind !== 'pdf_data_url') continue;
+
+    const pdfAttachments = await renderWorkflowPdfDataUrlAttachments(file, {
+      maxPages: remainingSlots,
+      maxPdfBytes: MAX_IMAGE_ATTACHMENT_BYTES,
+    });
+    attachments.push(...pdfAttachments.slice(0, remainingSlots));
+    remainingSlots = MAX_IMAGE_ATTACHMENT_COUNT - attachments.length;
+  }
+
+  return attachments;
 }
 
 function truncateForPrompt(value: string, maxLength: number) {
@@ -831,6 +852,8 @@ function buildSystemPrompt(body: Record<string, unknown>) {
           ].filter(Boolean).join(' ')}\n`;
         }
         remainingUploadedFileBudget -= sliced.text.length;
+      } else if (file.contentKind === 'pdf_data_url') {
+        systemPrompt += `${file.note || 'PDF 原件已上传；如可渲染，前几页会作为图片附件提供给运行时读取。'}\n`;
       } else if (file.note) {
         systemPrompt += `${file.note}\n`;
       }
@@ -1180,7 +1203,8 @@ export async function POST(request: NextRequest) {
     chatRuns.set(run.id, run);
     pruneChatRuns();
 
-    return streamClaudeCodeCli(run, claudeMessages, systemPrompt, getImageAttachments(uploadedFiles));
+    const runtimeAttachments = await getRuntimeAttachments(uploadedFiles);
+    return streamClaudeCodeCli(run, claudeMessages, systemPrompt, runtimeAttachments);
   } catch (error) {
     console.error('Chat API error:', error);
     if (error instanceof AuthError) {
