@@ -72,6 +72,17 @@ The migration:
 
 Without this backfill, non-official historical file-backed resources are intentionally hidden because routes require a Postgres permission row before returning protected assets or prompt context.
 
+## Workflow Privacy Repair
+
+Workflow records are private to their owner by default. If an environment previously wrote organization-wide workflow grants, remove those grants before validating workflow isolation:
+
+```bash
+BATTLEFLOW_DATABASE_URL=postgresql://... \
+node scripts/apply-postgres-migration.mjs scripts/database/005_workflow_private_grants.sql
+```
+
+This repair is idempotent. It deletes only organization-subject `read` and `update` grants for `workflow` resources; owner user admin grants and explicit user, team, or department grants remain intact.
+
 ## Super Admin Bootstrap
 
 1. Set at least one bootstrap principal:

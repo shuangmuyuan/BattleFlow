@@ -363,19 +363,15 @@ describe('business resource authorization', () => {
     expect(canAccessBusinessResource(context, 'skill.read', publicSkill)).toBe(true);
   });
 
-  it('shares upserted workflows with the active organization for read and update only', async () => {
+  it('keeps upserted workflows private to the owner by default', async () => {
     await upsertWorkflowBusinessMetadata(makeContext(), makeWorkflow());
 
     const grantCalls = mockQuery.mock.calls.filter(([sql]) => (
       typeof sql === 'string' && sql.includes('INSERT INTO resource_access_grants')
     ));
 
-    expect(grantCalls).toHaveLength(3);
-    expect(grantCalls.map(([, values]) => values)).toEqual(expect.arrayContaining([
-      ['org-1', 'workflow', 'workflow-1', 'user', 'user-1', 'admin', 'user-1'],
-      ['org-1', 'workflow', 'workflow-1', 'organization', 'org-1', 'read', 'user-1'],
-      ['org-1', 'workflow', 'workflow-1', 'organization', 'org-1', 'update', 'user-1'],
-    ]));
-    expect(grantCalls.map(([, values]) => values?.[5])).not.toContain('delete');
+    expect(grantCalls).toHaveLength(1);
+    expect(grantCalls[0]?.[1]).toEqual(['org-1', 'workflow', 'workflow-1', 'user', 'user-1', 'admin', 'user-1']);
+    expect(grantCalls.map(([, values]) => values?.[3])).not.toContain('organization');
   });
 });

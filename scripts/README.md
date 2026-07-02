@@ -13,6 +13,7 @@ Repository automation scripts.
 - `check-responsive-layout.mjs`: static contract check for dashboard responsive layout classes.
 - `apply-postgres-migration.mjs`: applies static SQL migrations to `BATTLEFLOW_DATABASE_URL`.
 - `migrate-resource-metadata.mjs`: backfills Skill/workflow business metadata and owner grants from file-backed runtime registries into Postgres.
+- `database/005_workflow_private_grants.sql`: removes legacy organization-wide workflow grants so user-created workflows stay private by default.
 
 ## Rules
 
