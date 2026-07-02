@@ -35,12 +35,29 @@ interface DashboardStatsResponse {
   activeWorkflowCount?: number;
   knowledgeBaseCount?: number;
   completedPrdCount?: number;
-  recentWorkflows?: Array<{ id: string; name: string; status: string; updated_at?: string }>;
+  recentWorkflows?: RecentWorkflow[];
   recentSkills?: Array<{ id: string; name: string; scope?: string; version?: string }>;
+}
+
+interface RecentWorkflow {
+  id: string;
+  workspaceId?: string;
+  name: string;
+  status: string;
+  updated_at?: string;
 }
 
 const recentListViewportClassName = 'h-full max-h-[21rem] min-h-0 rounded-md';
 const recentListContentClassName = 'flex min-h-full flex-col gap-2 pr-3';
+
+function getWorkflowHref(workflow: RecentWorkflow) {
+  const params = new URLSearchParams();
+  if (workflow.workspaceId) {
+    params.set('workspaceId', workflow.workspaceId);
+  }
+  params.set('workflowId', workflow.id);
+  return `/dashboard/workflows?${params.toString()}`;
+}
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats>({
@@ -50,7 +67,7 @@ export default function DashboardPage() {
     totalKnowledgeBases: 0,
     completedPrds: 0,
   });
-  const [recentWorkflows, setRecentWorkflows] = useState<Array<{ id: string; name: string; status: string; updated_at?: string }>>([]);
+  const [recentWorkflows, setRecentWorkflows] = useState<RecentWorkflow[]>([]);
   const [recentSkills, setRecentSkills] = useState<Array<{ id: string; name: string; scope?: string; version?: string }>>([]);
   const [loading, setLoading] = useState(true);
 
@@ -235,7 +252,12 @@ export default function DashboardPage() {
                     className="min-h-32 border-0 bg-muted/30"
                   />
                 ) : recentWorkflows.map((wf) => (
-                  <div key={wf.id} className="flex min-w-0 items-center justify-between gap-3 rounded-lg p-2.5 transition-colors hover:bg-muted/50">
+                  <Link
+                    key={wf.id}
+                    href={getWorkflowHref(wf)}
+                    className="group flex min-w-0 items-center justify-between gap-3 rounded-lg p-2.5 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                    aria-label={`打开工作流 ${wf.name}`}
+                  >
                     <div className="flex min-w-0 items-center gap-3">
                       {wf.status === 'completed' ? (
                         <CheckCircle2 className="h-4 w-4 text-success" />
@@ -251,10 +273,13 @@ export default function DashboardPage() {
                         </p>
                       </div>
                     </div>
-                    <StatusBadge tone={wf.status === 'completed' ? 'success' : wf.status === 'in_progress' ? 'brand' : 'neutral'}>
-                      {wf.status === 'completed' ? '已完成' : wf.status === 'in_progress' ? '进行中' : '草稿'}
-                    </StatusBadge>
-                  </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <StatusBadge tone={wf.status === 'completed' ? 'success' : wf.status === 'in_progress' ? 'brand' : 'neutral'}>
+                        {wf.status === 'completed' ? '已完成' : wf.status === 'in_progress' ? '进行中' : '草稿'}
+                      </StatusBadge>
+                      <ArrowRight className="h-4 w-4 text-muted-foreground opacity-0 transition-all group-hover:translate-x-0.5 group-hover:opacity-100" />
+                    </div>
+                  </Link>
                 ))}
               </div>
             </ScrollArea>

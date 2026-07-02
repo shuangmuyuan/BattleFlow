@@ -113,6 +113,7 @@ async function countReadablePrdDocuments(
 function toRecentWorkflow(workflow: WorkflowRecord) {
   return {
     id: workflow.id,
+    workspaceId: workflow.workspaceId,
     name: workflow.name,
     status: workflow.status,
     updated_at: workflow.updated_at,
