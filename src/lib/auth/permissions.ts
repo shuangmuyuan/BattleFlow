@@ -187,6 +187,10 @@ function resourceGrantAllowsAction(context: AuthOrganizationContext, action: str
   ));
 }
 
+function isResourceScopedTarget(target: PermissionTarget): boolean {
+  return Boolean(target.resourceType && target.resourceId);
+}
+
 export function canAccess(context: AuthOrganizationContext, action: string, target: PermissionTarget = {}): boolean {
   if (target.containsSecretMaterial) {
     return false;
@@ -204,7 +208,7 @@ export function canAccess(context: AuthOrganizationContext, action: string, targ
     return true;
   }
 
-  if (organizationRoleAllowsAction(context, action)) {
+  if (!isResourceScopedTarget(target) && organizationRoleAllowsAction(context, action)) {
     return true;
   }
 

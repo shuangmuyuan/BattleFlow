@@ -1,6 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import { NextRequest } from 'next/server';
 import { streamClaudeCodeCliTurn } from '@/lib/agent-adapters/claude-code-cli';
-import type { AgentEvent } from '@/lib/agent-adapters/types';
+import type { AgentEvent, AgentInputAttachment } from '@/lib/agent-adapters/types';
 import { requireOrganizationContext, requirePermission } from '@/lib/auth/server';
 import { AuthError, ForbiddenError } from '@/lib/auth/types';
 import {
@@ -16,9 +17,16 @@ import {
   searchKnowledgeDocuments,
 } from '@/lib/knowledge-repository';
 import { requireSkillIdAccess, requireWorkflowAccess } from '@/lib/resource-metadata-repository';
+import {
+  getWorkflow,
+  upsertWorkflow,
+  type WorkflowChatMessageRecord,
+} from '@/lib/workflow-registry';
 import { cleanExecutableSkillText } from '@/lib/workflow-skill-draft';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 type ChatRole = 'user' | 'assistant' | 'system';
 
@@ -79,6 +87,21 @@ interface UploadedFileContext {
   note?: string;
 }
 
+type ChatRunStatus = 'running' | 'succeeded' | 'failed' | 'canceled';
+
+interface ChatRunRecord {
+  id: string;
+  workflowId: string;
+  stepId: string;
+  status: ChatRunStatus;
+  userMessage: string;
+  assistantContent: string;
+  startedAt: string;
+  updatedAt: string;
+  error?: string;
+  abortController: AbortController;
+}
+
 interface SkillPackageAssetContext {
   path?: string;
   kind?: string;
@@ -114,6 +137,13 @@ const MAX_CHAT_PROMPT_MESSAGE_CHARS = 12_000;
 const MAX_TOTAL_CHAT_PROMPT_MESSAGE_CHARS = 48_000;
 const MAX_KNOWLEDGE_CHUNKS_PER_BASE = 3;
 const MAX_KNOWLEDGE_CHUNK_PROMPT_CHARS = 1_200;
+const MAX_IMAGE_ATTACHMENT_COUNT = 6;
+const MAX_IMAGE_ATTACHMENT_BYTES = 2 * 1024 * 1024;
+const CHAT_RUN_RETENTION_MS = 30 * 60 * 1000;
+const MAX_RETAINED_CHAT_RUNS = 100;
+const MAX_DOCUMENT_TYPE_SCAN_CHARS = 12_000;
+
+const chatRuns = new Map<string, ChatRunRecord>();
 
 function sse(payload: Record<string, unknown>) {
   return `data: ${JSON.stringify(payload)}\n\n`;
@@ -140,6 +170,32 @@ function getNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+function getDataUrlByteLength(value: string) {
+  const base64 = value.split(',')[1] || '';
+  return Math.floor((base64.length * 3) / 4);
+}
+
+function getImageAttachments(files: UploadedFileContext[]): AgentInputAttachment[] {
+  return files.flatMap((file): AgentInputAttachment[] => {
+    const content = typeof file.content === 'string' ? file.content : '';
+    const type = typeof file.type === 'string' ? file.type : '';
+    if (
+      file.contentKind !== 'image_data_url'
+      || !type.startsWith('image/')
+      || !content.startsWith('data:image/')
+      || getDataUrlByteLength(content) > MAX_IMAGE_ATTACHMENT_BYTES
+    ) {
+      return [];
+    }
+
+    return [{
+      name: getString(file.name, 'uploaded-image'),
+      mimeType: type,
+      dataUrl: content,
+    }];
+  }).slice(0, MAX_IMAGE_ATTACHMENT_COUNT);
+}
+
 function truncateForPrompt(value: string, maxLength: number) {
   return value.length > maxLength ? `${value.slice(0, maxLength)}\n...（已截断）` : value;
 }
@@ -156,6 +212,153 @@ function getSafeChatErrorMessage(error: unknown) {
   }
 
   return message ? truncateForPrompt(message, 300) : 'Chat failed';
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function isRunningChatRun(run: ChatRunRecord) {
+  return run.status === 'running';
+}
+
+function pruneChatRuns() {
+  const cutoff = Date.now() - CHAT_RUN_RETENTION_MS;
+  for (const [id, run] of chatRuns.entries()) {
+    if (isRunningChatRun(run)) continue;
+    if (Date.parse(run.updatedAt) < cutoff) {
+      chatRuns.delete(id);
+    }
+  }
+
+  if (chatRuns.size <= MAX_RETAINED_CHAT_RUNS) return;
+
+  const removableRuns = [...chatRuns.values()]
+    .filter((run) => !isRunningChatRun(run))
+    .sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt));
+  for (const run of removableRuns.slice(0, chatRuns.size - MAX_RETAINED_CHAT_RUNS)) {
+    chatRuns.delete(run.id);
+  }
+}
+
+function serializeChatRun(run: ChatRunRecord) {
+  return {
+    id: run.id,
+    workflow_id: run.workflowId,
+    step_id: run.stepId,
+    status: run.status,
+    started_at: run.startedAt,
+    updated_at: run.updatedAt,
+    elapsed_seconds: Math.max(0, Math.floor((Date.now() - Date.parse(run.startedAt)) / 1000)),
+    error: run.error,
+  };
+}
+
+function extractMarkdownFence(content: string) {
+  const fenced = content.match(/```(?:markdown|md)\s*\n([\s\S]*?)```/i);
+  return fenced?.[1]?.trim();
+}
+
+function hasExplicitAssistantDocumentMarker(content: string) {
+  const raw = (extractMarkdownFence(content) || content).trim();
+  if (!raw) return false;
+  const sample = raw.length > MAX_DOCUMENT_TYPE_SCAN_CHARS ? raw.slice(0, MAX_DOCUMENT_TYPE_SCAN_CHARS) : raw;
+  const markerMatch = sample.match(
+    /(?:^|\n)#{1,3}\s*(?:Skill\s*输出文档|输出文档|最终产出|产出物|Deliverable|Output)\s*\n/i,
+  );
+
+  return markerMatch?.index !== undefined && markerMatch.index <= 320;
+}
+
+function hasExplicitDocumentGenerationRequest(content: string) {
+  const sample = content.trim().slice(0, 2000);
+  return (
+    /(?:生成|创建|输出|整理|导出|保存|产出|形成|返回).{0,16}(?:文档|文件|附件|Markdown|md|报告|产物)/i.test(sample)
+    || /(?:文档|文件|附件|Markdown|md|报告|产物).{0,16}(?:生成|创建|输出|整理|导出|保存|返回)/i.test(sample)
+    || /(?:以|用).{0,8}(?:附件|文件|Markdown|md).{0,8}(?:形式|格式).{0,8}(?:返回|输出|给我)/i.test(sample)
+  );
+}
+
+function shouldStoreAssistantReplyAsDocument(userMessage: string, assistantContent: string) {
+  const documentContent = (extractMarkdownFence(assistantContent) || assistantContent).trim();
+  if (!documentContent) return false;
+  if (!hasExplicitDocumentGenerationRequest(userMessage)) return false;
+
+  return (
+    documentContent.length >= 240
+    || Boolean(extractMarkdownFence(assistantContent))
+    || hasExplicitAssistantDocumentMarker(assistantContent)
+  );
+}
+
+function getChatCancelledContent(run: ChatRunRecord) {
+  const displaySeconds = Math.max(1, Math.round((Date.now() - Date.parse(run.startedAt)) / 1000));
+  return `你在 ${displaySeconds}s 后停止了`;
+}
+
+function getChatErrorContent(error: unknown) {
+  const safeMessage = getSafeChatErrorMessage(error);
+  if (!safeMessage || safeMessage === 'Chat request failed') return '抱歉，对话出现了问题，请重试。';
+  return `抱歉，对话出现了问题：${safeMessage}。`;
+}
+
+async function appendWorkflowAssistantMessage(
+  run: ChatRunRecord,
+  message: WorkflowChatMessageRecord,
+) {
+  const workflow = await getWorkflow(run.workflowId);
+  if (!workflow) {
+    throw new Error(`Workflow not found: ${run.workflowId}`);
+  }
+
+  const existingMessages = Array.isArray(workflow.stepChats?.[run.stepId])
+    ? workflow.stepChats[run.stepId]
+    : [];
+  const lastMessage = existingMessages[existingMessages.length - 1];
+  if (
+    lastMessage?.role === 'assistant'
+    && lastMessage.content === message.content
+    && lastMessage.kind === message.kind
+  ) {
+    return;
+  }
+
+  await upsertWorkflow({
+    ...workflow,
+    stepChats: {
+      ...(workflow.stepChats || {}),
+      [run.stepId]: [...existingMessages, message],
+    },
+    updated_at: nowIso(),
+  });
+}
+
+async function persistCompletedChatRun(run: ChatRunRecord) {
+  const content = run.assistantContent.trim();
+  if (!content) return;
+
+  const message: WorkflowChatMessageRecord = {
+    role: 'assistant',
+    content: run.assistantContent,
+    ...(shouldStoreAssistantReplyAsDocument(run.userMessage, run.assistantContent)
+      ? { kind: 'document' as const }
+      : {}),
+  };
+  await appendWorkflowAssistantMessage(run, message);
+}
+
+async function persistCanceledChatRun(run: ChatRunRecord) {
+  await appendWorkflowAssistantMessage(run, {
+    role: 'assistant',
+    content: getChatCancelledContent(run),
+  });
+}
+
+async function persistFailedChatRun(run: ChatRunRecord, error: unknown) {
+  await appendWorkflowAssistantMessage(run, {
+    role: 'assistant',
+    content: getChatErrorContent(error),
+  });
 }
 
 function boundPromptMessages(messages: ChatMessage[]) {
@@ -636,17 +839,69 @@ function buildSystemPrompt(body: Record<string, unknown>) {
 
   systemPrompt += '\n\n## Instructions\n- Provide structured, professional output\n- If this is a methodology-driven workflow capability, follow the methodology steps\n- Reference context from previous steps when relevant\n- Be thorough but concise\n- Use markdown formatting for better readability';
   systemPrompt += '\n- Never ask the user to choose a Claude Code or Codex runtime capability. The BattleFlow workflow step has already supplied the active method package when one is available.';
+  systemPrompt += '\n- For ordinary Q&A, reply as a conversational assistant message. Do not package the answer as a workflow deliverable or markdown file unless the user explicitly asks to generate/export a document or is confirming the step output.';
   systemPrompt += '\n- When a step is ready to be confirmed, make the durable deliverable a standalone Markdown document that can be saved as this workflow step output. Avoid making the saved deliverable depend on conversational wording such as greetings or follow-up chatter.';
 
   return systemPrompt;
 }
 
-function streamAgentEventsAsSse(agentStream: ReadableStream<AgentEvent>) {
+async function consumeChatRunForPersistence(run: ChatRunRecord, agentStream: ReadableStream<AgentEvent>) {
+  const reader = agentStream.getReader();
+  let canceledByRuntime = false;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+
+      if (value.type === 'assistant_message') {
+        run.assistantContent += value.text;
+        run.updatedAt = nowIso();
+      } else if (value.type === 'session_status' && value.status === 'aborted') {
+        canceledByRuntime = true;
+        break;
+      } else if (value.type === 'error') {
+        throw new Error(value.error);
+      }
+    }
+
+    if (run.abortController.signal.aborted || canceledByRuntime || run.status === 'canceled') {
+      run.status = 'canceled';
+      run.updatedAt = nowIso();
+      await persistCanceledChatRun(run);
+      return;
+    }
+
+    run.status = 'succeeded';
+    run.updatedAt = nowIso();
+    await persistCompletedChatRun(run);
+  } catch (error) {
+    if (run.abortController.signal.aborted || run.status === 'canceled') {
+      run.status = 'canceled';
+      run.updatedAt = nowIso();
+      await persistCanceledChatRun(run);
+      return;
+    }
+
+    run.status = 'failed';
+    run.error = getSafeChatErrorMessage(error);
+    run.updatedAt = nowIso();
+    await persistFailedChatRun(run, error);
+  } finally {
+    reader.releaseLock();
+    pruneChatRuns();
+  }
+}
+
+function streamAgentEventsAsSse(agentStream: ReadableStream<AgentEvent>, run?: ChatRunRecord) {
   const encoder = new TextEncoder();
+  let reader: ReadableStreamDefaultReader<AgentEvent> | null = null;
 
   const readable = new ReadableStream({
     async start(controller) {
-      const reader = agentStream.getReader();
+      const activeReader = agentStream.getReader();
+      reader = activeReader;
       let closed = false;
 
       const closeWith = (payload: Record<string, unknown>) => {
@@ -673,9 +928,20 @@ function streamAgentEventsAsSse(agentStream: ReadableStream<AgentEvent>) {
         }
       };
 
+      if (run) {
+        emit({
+          event: 'chat_run',
+          run_id: run.id,
+          workflow_id: run.workflowId,
+          step_id: run.stepId,
+          status: run.status,
+          started_at: run.startedAt,
+        });
+      }
+
       try {
         while (true) {
-          const { done, value } = await reader.read();
+          const { done, value } = await activeReader.read();
           if (done) break;
           if (!value) continue;
           if (value.type === 'assistant_message') {
@@ -720,7 +986,15 @@ function streamAgentEventsAsSse(agentStream: ReadableStream<AgentEvent>) {
       } catch (error) {
         closeWith({ error: error instanceof Error ? error.message : 'Agent stream interrupted' });
       } finally {
-        reader.releaseLock();
+        activeReader.releaseLock();
+        reader = null;
+      }
+    },
+    async cancel() {
+      try {
+        await reader?.cancel();
+      } catch {
+        // The client-side branch can be gone while the server persistence branch continues.
       }
     },
   });
@@ -735,12 +1009,114 @@ function streamAgentEventsAsSse(agentStream: ReadableStream<AgentEvent>) {
   });
 }
 
-function streamClaudeCodeCli(request: NextRequest, messages: ChatMessage[], systemPrompt: string) {
-  return streamAgentEventsAsSse(streamClaudeCodeCliTurn({
+function streamClaudeCodeCli(
+  run: ChatRunRecord,
+  messages: ChatMessage[],
+  systemPrompt: string,
+  attachments: AgentInputAttachment[],
+) {
+  const agentStream = streamClaudeCodeCliTurn({
     messages,
     systemPrompt,
-    signal: request.signal,
-  }));
+    attachments,
+    signal: run.abortController.signal,
+  });
+  const [clientStream, persistenceStream] = agentStream.tee();
+  void consumeChatRunForPersistence(run, persistenceStream);
+  return streamAgentEventsAsSse(clientStream, run);
+}
+
+export async function GET(request: NextRequest) {
+  try {
+    const context = await requireOrganizationContext(request);
+    const { searchParams } = new URL(request.url);
+    const workflowId = getString(searchParams.get('workflow_id') || searchParams.get('workflowId'));
+    const stepId = getString(searchParams.get('step_id') || searchParams.get('stepId'));
+
+    if (!workflowId) {
+      return new Response(JSON.stringify({ error: 'Workflow ID is required' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    await requireWorkflowAccess(context, workflowId, 'workflow.read');
+    pruneChatRuns();
+
+    const runs = [...chatRuns.values()]
+      .filter((run) => run.workflowId === workflowId && (!stepId || run.stepId === stepId))
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+      .map(serializeChatRun);
+
+    return new Response(JSON.stringify({ runs }), {
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store',
+      },
+    });
+  } catch (error) {
+    console.error('Chat run GET error:', error);
+    if (error instanceof AuthError) {
+      return new Response(JSON.stringify({ error: error.message }), {
+        status: error.status,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({ error: getSafeChatErrorMessage(error) }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const context = await requireOrganizationContext(request);
+    const { searchParams } = new URL(request.url);
+    const runId = getString(searchParams.get('run_id') || searchParams.get('runId'));
+    if (!runId) {
+      return new Response(JSON.stringify({ error: 'Run ID is required' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    const run = chatRuns.get(runId);
+    if (!run) {
+      return new Response(JSON.stringify({ success: true, missing: true }), {
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-store',
+        },
+      });
+    }
+
+    await requireWorkflowAccess(context, run.workflowId, 'workflow.update');
+    if (run.status === 'running') {
+      run.status = 'canceled';
+      run.updatedAt = nowIso();
+      run.abortController.abort();
+    }
+
+    return new Response(JSON.stringify({ success: true, run: serializeChatRun(run) }), {
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store',
+      },
+    });
+  } catch (error) {
+    console.error('Chat run DELETE error:', error);
+    if (error instanceof AuthError) {
+      return new Response(JSON.stringify({ error: error.message }), {
+        status: error.status,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({ error: getSafeChatErrorMessage(error) }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -753,6 +1129,23 @@ export async function POST(request: NextRequest) {
     if (messages.length === 0) {
       return new Response(JSON.stringify({ error: 'Messages are required' }), {
         status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    const workflowId = getString(body.workflow_id) || getString(body.workflowId);
+    const stepId = getString(body.workflow_step_id) || getString(body.step_id) || getString(body.stepId);
+    if (!workflowId || !stepId) {
+      return new Response(JSON.stringify({ error: 'Workflow ID and step ID are required' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    await requireWorkflowAccess(context, workflowId, 'workflow.update');
+    const workflow = await getWorkflow(workflowId);
+    if (!workflow || !workflow.steps.some((step) => step.id === stepId)) {
+      return new Response(JSON.stringify({ error: 'Workflow step not found' }), {
+        status: 404,
         headers: { 'Content-Type': 'application/json' },
       });
     }
@@ -771,7 +1164,23 @@ export async function POST(request: NextRequest) {
     }
 
     const claudeMessages = prepareMessagesForClaudeCodeCli(messages, Boolean(body.skill_definition));
-    return streamClaudeCodeCli(request, claudeMessages, systemPrompt);
+    const uploadedFiles = Array.isArray(body.uploaded_files) ? body.uploaded_files as UploadedFileContext[] : [];
+    const startedAt = nowIso();
+    const run: ChatRunRecord = {
+      id: randomUUID(),
+      workflowId,
+      stepId,
+      status: 'running',
+      userMessage: getString(body.visible_user_message, getLastUserMessage(messages)),
+      assistantContent: '',
+      startedAt,
+      updatedAt: startedAt,
+      abortController: new AbortController(),
+    };
+    chatRuns.set(run.id, run);
+    pruneChatRuns();
+
+    return streamClaudeCodeCli(run, claudeMessages, systemPrompt, getImageAttachments(uploadedFiles));
   } catch (error) {
     console.error('Chat API error:', error);
     if (error instanceof AuthError) {

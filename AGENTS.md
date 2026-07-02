@@ -63,25 +63,40 @@ Use `pnpm` only. Do not use `npm` or `yarn` for dependency or script execution i
 | Production build | `pnpm build` | Installs dependencies, runs `next build`, then bundles `src/server.ts` with `tsup`. |
 | Production start | `BATTLEFLOW_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start` | Runs `dist/server.js`; requires a prior build. |
 
-## Remote Test Deployment
+## Local Test Deployment
 
-After code development and local validation, test BattleFlow through the shared remote Linux host instead of relying only on a local unauthenticated dev server.
+After code development and validation, run BattleFlow locally against a local Postgres database. The local app should be exercised through `http://localhost:5100` unless the user explicitly asks for remote deployment.
 
 Required flow:
 
-1. Connect to the remote server with `ssh boxhub-r`.
-2. Deploy the service under `/root/data/BattleFlow` on that server.
-3. Install or refresh dependencies with `pnpm install` when `package.json` or `pnpm-lock.yaml` changed.
-4. Run the repository validation gate before serving test traffic:
+1. Install dependencies when `package.json` or `pnpm-lock.yaml` changed:
+   - `pnpm install`
+2. Ensure local Postgres is running and reachable on `127.0.0.1:5432`.
+   - Homebrew example: `brew services start postgresql@16`
+   - Health check: `pg_isready -h 127.0.0.1 -p 5432`
+3. Create or reuse the local `battleflow` database and `battleflow` role. Keep the connection string in a local `.env` file only.
+4. Prepare `.env` for local runtime. At minimum it should provide:
+   - `BATTLEFLOW_PROJECT_ENV=DEV`
+   - `BATTLEFLOW_DATABASE_URL=postgresql://...`
+   - `BATTLEFLOW_DATABASE_SSL=false`
+   - `BATTLEFLOW_AUTH_SECRET=...`
+   - local Claude CLI settings when workflow chat needs CLI-backed tool calls.
+5. Run the local database initialization scripts after the database is available:
+   - `pnpm db:knowledge:init`
+   - `pnpm db:accounts:init`
+   - `pnpm db:sso:init`
+   - `pnpm db:notifications:init`
+   - `pnpm db:resources:migrate` after auth/user bootstrap when resource metadata is needed.
+6. Run the repository validation gate before handing the app back:
    - `pnpm validate`
-   - `pnpm build` for server/runtime, dependency, route-handler, or deployment-impacting changes.
-5. Start the remote service from `/root/data/BattleFlow`. Prefer the production-like command for feature verification:
-   - `BATTLEFLOW_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start`
-6. Establish a local SSH tunnel and access the service through the tunnel:
-   - `ssh -N -L 5001:127.0.0.1:5100 boxhub-r`
-   - open `http://localhost:5001`
+   - `pnpm build` only for server/runtime, dependency, route-handler, or deployment-impacting changes.
+7. Start the local service:
+   - `DEPLOY_RUN_PORT=5100 pnpm dev`
+8. Open `http://localhost:5100` and verify the requested flow in the browser.
 
-Keep secrets on the remote server only. Do not paste or commit `BATTLEFLOW_DATABASE_URL`, `FRIEREN_DEMO_HMAC_SECRET`, Supabase service-role keys, or other credentials. If port `5001` is already in use locally, choose another local port for the left side of the tunnel, for example `ssh -N -L 5011:127.0.0.1:5100 boxhub-r`.
+Remote deployment is no longer the default verification path. Use `ssh boxhub-r` and `/root/data/BattleFlow` only when the user explicitly asks to deploy or verify on the shared remote Linux host.
+
+Never commit `.env*`, direct Postgres connection strings, Claude credentials, `FRIEREN_DEMO_HMAC_SECRET`, Supabase service-role keys, imported private Skill packages, or runtime registry data under `data/`.
 
 ## Mandatory Rules
 

@@ -7,6 +7,7 @@ import {
   CheckCheck,
   ChevronLeft,
   ChevronRight,
+  CircleHelp,
   Database,
   FileCode2,
   LayoutDashboard,
@@ -94,6 +95,7 @@ const navItems = [
   { href: '/dashboard/workflows', label: '工作流', icon: Play },
   { href: '/dashboard/knowledge', label: '知识库', icon: Database },
   { href: '/dashboard/demos', label: 'Demo 生成', icon: Rocket },
+  { href: '/dashboard/help', label: '使用说明', icon: CircleHelp },
   { href: '/dashboard/admin', label: '管理', icon: Shield, requiresAdmin: true },
 ];
 
@@ -103,6 +105,7 @@ function dashboardTitle(pathname: string): string {
   if (pathname === '/dashboard/workflows') return '工作流';
   if (pathname === '/dashboard/knowledge') return '知识库';
   if (pathname === '/dashboard/demos') return 'Demo 生成';
+  if (pathname === '/dashboard/help') return '使用说明';
   if (pathname === '/dashboard/admin') return '管理';
   if (pathname.includes('/dashboard/workflows/')) return '工作流详情';
   if (pathname.includes('/dashboard/skills/')) return 'Skill 详情';
@@ -111,6 +114,11 @@ function dashboardTitle(pathname: string): string {
 
 function loginPathFor(pathname: string): string {
   return `/login?next=${encodeURIComponent(pathname || '/dashboard')}`;
+}
+
+function currentPathForRedirect(pathname: string): string {
+  const search = window.location.search;
+  return search ? `${pathname}${search}` : pathname;
 }
 
 function normalizeOnlineCount(value: unknown): number {
@@ -295,9 +303,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     async function loadAuthState() {
       setAuthError('');
       const response = await fetch('/api/auth/me', { cache: 'no-store' });
+      const currentPath = currentPathForRedirect(pathname);
 
       if (response.status === 401) {
-        router.replace(loginPathFor(pathname));
+        router.replace(loginPathFor(currentPath));
         return;
       }
 
@@ -307,7 +316,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       }
 
       if (!data.organizations.length) {
-        router.replace(`/onboarding?next=${encodeURIComponent(pathname || '/dashboard')}`);
+        router.replace(`/onboarding?next=${encodeURIComponent(currentPath || '/dashboard')}`);
         return;
       }
 
@@ -477,7 +486,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <div className="flex min-h-screen items-center justify-center bg-background p-4">
         <div className="max-w-sm space-y-3 text-center">
           <p className="text-sm text-destructive">{authError || 'Account context is unavailable'}</p>
-          <Button variant="secondary" onClick={() => router.replace(loginPathFor(pathname))}>
+          <Button variant="secondary" onClick={() => router.replace(loginPathFor(currentPathForRedirect(pathname)))}>
             Return to Sign In
           </Button>
         </div>
