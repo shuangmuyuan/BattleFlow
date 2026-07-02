@@ -559,9 +559,9 @@ const builtInWorkflowTemplates: WorkflowTemplate[] = [
   {
     id: 'ai-native-product-planning-e2e',
     name: 'BattleFlow标准化工作流',
-    description: '按产品规划输入、并行分析、用户旅程、TR1、Demo、TR2 并行产物的链路进行端到端验证。',
+    description: '按产品规划输入、并行分析、用户旅程、TR1、TR2 并行产物的链路进行端到端验证。',
     defaultWorkflowName: 'BattleFlow标准化工作流',
-    defaultWorkflowDescription: '基于内置产品规划 Skill 模板，完成输入、分析、旅程、TR1、Demo 与 TR2 产物生成。',
+    defaultWorkflowDescription: '基于内置产品规划 Skill 模板，完成输入、分析、旅程、TR1 与 TR2 产物生成。',
     steps: [
       {
         label: '产品规划输入需求+Prompt',
@@ -607,11 +607,6 @@ const builtInWorkflowTemplates: WorkflowTemplate[] = [
           'requirements-spec',
           '需求规格',
         ],
-        runMode: 'serial',
-      },
-      {
-        label: 'Demo 生成',
-        aliases: ['Demo 生成', 'demo-creator', 'demo生成器', 'demo-generator'],
         runMode: 'serial',
       },
       {
