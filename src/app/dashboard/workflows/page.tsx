@@ -4300,7 +4300,6 @@ export default function WorkflowsPage() {
           <DialogContent className="flex max-h-[calc(100dvh-2rem)] max-w-2xl flex-col gap-0 overflow-hidden p-0">
             <DialogHeader className="border-b border-border/40 px-6 py-5 pr-12">
               <DialogTitle>新建工作流</DialogTitle>
-              <DialogDescription>选择 Skill 并配置串行或并行执行方式</DialogDescription>
             </DialogHeader>
             <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
               <div className="space-y-4">
@@ -4365,7 +4364,6 @@ export default function WorkflowsPage() {
                 <div className="space-y-2">
                   <label className="text-sm font-medium">工作流名称</label>
                   <Input
-                    placeholder="如：电商平台 v3.0 规划"
                     value={newWorkflowName}
                     onChange={(e) => setNewWorkflowName(e.target.value)}
                   />
@@ -4373,7 +4371,6 @@ export default function WorkflowsPage() {
                 <div className="space-y-2">
                   <label className="text-sm font-medium">描述</label>
                   <Input
-                    placeholder="简要描述本次规划的目标"
                     value={newWorkflowDesc}
                     onChange={(e) => setNewWorkflowDesc(e.target.value)}
                   />
