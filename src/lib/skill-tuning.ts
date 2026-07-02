@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { buildClaudeToolsArgs } from './agent-adapters/claude-code-tools';
 import { randomUUID } from 'node:crypto';
 import type { SkillRecord } from './skill-registry';
 import { cleanExecutableSkillText } from './workflow-skill-draft';
@@ -228,8 +229,7 @@ function runClaudeCli(systemPrompt: string, prompt: string, timeoutMs = 120_000)
       getClaudeModel(),
       '--max-budget-usd',
       getClaudeMaxBudgetUsd(),
-      '--tools',
-      '',
+      ...buildClaudeToolsArgs(),
       '--permission-mode',
       'dontAsk',
       '--system-prompt',

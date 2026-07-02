@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { buildClaudeToolsArgs, getConfiguredClaudeTools } from './claude-code-tools';
 import type { AgentEvent, AgentInputAttachment, AgentRunResult, AgentRuntimeStatus, AgentTurnInput } from './types';
 
 interface ClaudeCodeStreamEvent {
@@ -142,8 +143,7 @@ function buildClaudeReadOnlyArgs() {
     getClaudeModel(),
     '--max-budget-usd',
     getClaudeMaxBudgetUsd(),
-    '--tools',
-    '',
+    ...buildClaudeToolsArgs(),
     '--permission-mode',
     'dontAsk',
     '--input-format',
@@ -364,6 +364,7 @@ export async function checkClaudeCodeCliRuntime(): Promise<AgentRuntimeStatus> {
   const command = getClaudeCommand();
   const model = getClaudeModel();
   const cwd = getClaudeWorkspaceDir();
+  const configuredTools = getConfiguredClaudeTools();
 
   try {
     const result = await runCommand(command, ['--version'], 10_000);
@@ -378,7 +379,8 @@ export async function checkClaudeCodeCliRuntime(): Promise<AgentRuntimeStatus> {
       cwd,
       mode: 'structured-cli',
       outputFormat: 'stream-json',
-      toolsEnabled: false,
+      toolsEnabled: configuredTools.length > 0,
+      tools: configuredTools,
       auth: {
         anthropicBaseUrlConfigured: Boolean(process.env.ANTHROPIC_BASE_URL),
         anthropicTokenConfigured: Boolean(process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_API_KEY),
@@ -394,7 +396,8 @@ export async function checkClaudeCodeCliRuntime(): Promise<AgentRuntimeStatus> {
       cwd,
       mode: 'structured-cli',
       outputFormat: 'stream-json',
-      toolsEnabled: false,
+      toolsEnabled: configuredTools.length > 0,
+      tools: configuredTools,
       auth: {
         anthropicBaseUrlConfigured: Boolean(process.env.ANTHROPIC_BASE_URL),
         anthropicTokenConfigured: Boolean(process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_API_KEY),

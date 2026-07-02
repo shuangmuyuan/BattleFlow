@@ -2,6 +2,7 @@
   "version": 1,
   "repository": "BattleFlow",
   "agentRoot": ".agents",
+  "skipWebFetchPreflight": true,
   "modelTiers": {
     "light": "mechanical edits, catalog sync, simple doc updates",
     "standard": "default for implementation, UI, API, and test work",
@@ -19,4 +20,3 @@
     "draftsDir": ".dwp/drafts"
   }
 }
-

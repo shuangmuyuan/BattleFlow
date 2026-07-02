@@ -61,7 +61,7 @@ Use `pnpm` only. Do not use `npm` or `yarn` for dependency or script execution i
 | Responsive layout check | `pnpm check:responsive` | Verifies required responsive layout class contracts. |
 | Full validation gate | `pnpm validate` | Runs type-check, lint, overlay, and responsive checks in parallel. |
 | Production build | `pnpm build` | Installs dependencies, runs `next build`, then bundles `src/server.ts` with `tsup`. |
-| Production start | `BATTLEFLOW_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start` | Runs `dist/server.js`; requires a prior build. |
+| Production start | `BATTLEFLOW_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start` | Runs `dist/server.js`; requires a prior build. Production start enables Claude Code `WebSearch,WebFetch` unless `BATTLEFLOW_CLAUDE_TOOLS` is explicitly overridden. |
 
 ## Local Test Deployment
 
@@ -81,6 +81,7 @@ Required flow:
    - `BATTLEFLOW_DATABASE_SSL=false`
    - `BATTLEFLOW_AUTH_SECRET=...`
    - local Claude CLI settings when workflow chat needs CLI-backed tool calls.
+   - `BATTLEFLOW_CLAUDE_TOOLS=WebSearch,WebFetch` only when workflow chat needs Claude Code web search/fetch tools.
 5. Run the local database initialization scripts after the database is available:
    - `pnpm db:knowledge:init`
    - `pnpm db:accounts:init`
@@ -95,6 +96,8 @@ Required flow:
 8. Open `http://localhost:5100` and verify the requested flow in the browser.
 
 Remote deployment is no longer the default verification path. Use `ssh boxhub-r` and `/root/data/BattleFlow` only when the user explicitly asks to deploy or verify on the shared remote Linux host.
+
+Remote production deployments that use `pnpm start` do not need a manual web-tool environment edit: `scripts/start.sh` defaults `BATTLEFLOW_CLAUDE_TOOLS` to `WebSearch,WebFetch`. Codex still needs to ensure the remote host has Claude Code CLI installed/authenticated, outbound network access from the host, and the repository `.agents/settings.json` with `skipWebFetchPreflight: true`.
 
 Never commit `.env*`, direct Postgres connection strings, Claude credentials, `FRIEREN_DEMO_HMAC_SECRET`, Supabase service-role keys, imported private Skill packages, or runtime registry data under `data/`.
 

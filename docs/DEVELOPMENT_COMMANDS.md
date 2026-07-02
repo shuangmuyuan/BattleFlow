@@ -46,7 +46,7 @@ The build script:
 BATTLEFLOW_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start
 ```
 
-`scripts/start.sh` runs `node dist/server.js`, so `pnpm build` must run first.
+`scripts/start.sh` runs `node dist/server.js`, so `pnpm build` must run first. Production start defaults `BATTLEFLOW_CLAUDE_TOOLS` to `WebSearch,WebFetch`; override the variable only when the deployment needs to disable or restrict Claude Code web tools.
 
 ## Database Bootstrap
 
@@ -94,3 +94,4 @@ The local route is `POST /api/demos/handoffs` with `{ workflowId, stepId }`. It 
 | `CLAUDE_MODEL` | Claude model alias, defaults to `sonnet`. |
 | `CLAUDE_MAX_BUDGET_USD` | Per-turn CLI budget, defaults to `1.00`. |
 | `CLAUDE_WORKSPACE_DIR` | Working directory for Claude CLI turns. |
+| `BATTLEFLOW_CLAUDE_TOOLS` | Optional comma-separated Claude Code tools for CLI-backed chat and Skill tuning. Only `WebSearch` and `WebFetch` are accepted, for example `WebSearch,WebFetch`. Defaults to no tools in code and development; `scripts/start.sh` defaults production start to `WebSearch,WebFetch`. |

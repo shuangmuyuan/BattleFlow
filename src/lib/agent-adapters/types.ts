@@ -33,6 +33,7 @@ export interface AgentRuntimeStatus {
   mode: 'structured-cli';
   outputFormat: 'stream-json';
   toolsEnabled: boolean;
+  tools?: string[];
   auth: {
     anthropicBaseUrlConfigured: boolean;
     anthropicTokenConfigured: boolean;
