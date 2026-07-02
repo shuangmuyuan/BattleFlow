@@ -83,14 +83,74 @@ async function extractDocText(buffer: Buffer): Promise<string> {
   return normalizeExtractedText(document.getBody());
 }
 
+async function destroyPdfParser(parser: PDFParse): Promise<void> {
+  try {
+    await parser.destroy();
+  } catch {
+    // Cleanup failures should not mask successfully extracted PDF text.
+  }
+}
+
+async function extractPdfTextByPage(parser: PDFParse): Promise<string> {
+  let totalPages = 0;
+  try {
+    const info = await parser.getInfo();
+    totalPages = Number.isInteger(info.total) ? info.total : 0;
+  } catch {
+    return '';
+  }
+
+  const pageTexts: string[] = [];
+  for (let pageNumber = 1; pageNumber <= totalPages; pageNumber += 1) {
+    try {
+      const result = await parser.getText({ partial: [pageNumber], pageJoiner: '' });
+      const pageText = normalizeExtractedText(result.text);
+      if (pageText) pageTexts.push(pageText);
+    } catch {
+      // Keep recoverable PDFs importable when only some pages fail text extraction.
+    }
+  }
+
+  return normalizeExtractedText(pageTexts.join('\n\n'));
+}
+
 async function extractPdfText(buffer: Buffer): Promise<string> {
   const parser = new PDFParse({ data: buffer });
   try {
-    const result = await parser.getText();
-    return normalizeExtractedText(result.text);
+    try {
+      const result = await parser.getText({ pageJoiner: '' });
+      return normalizeExtractedText(result.text);
+    } catch (error) {
+      const partialText = await extractPdfTextByPage(parser);
+      if (partialText) return partialText;
+      throw error;
+    }
   } finally {
-    await parser.destroy();
+    await destroyPdfParser(parser);
   }
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function getPdfUploadValidationMessage(error: unknown): string {
+  const name = error instanceof Error ? error.name : '';
+  const message = getErrorMessage(error).toLowerCase();
+
+  if (name === 'PasswordException' || message.includes('password')) {
+    return 'PDF document is password protected and cannot be imported';
+  }
+  if (
+    name === 'InvalidPDFException'
+    || message.includes('invalid pdf')
+    || message.includes('bad pdf')
+    || message.includes('not a pdf')
+  ) {
+    return 'Uploaded file is not a valid PDF document';
+  }
+
+  return 'Could not extract text from PDF document';
 }
 
 function formatSpreadsheetCell(value: unknown) {
@@ -163,8 +223,8 @@ export async function extractTextFromUploadFile(
     const buffer = Buffer.from(await file.arrayBuffer());
     try {
       content = await extractPdfText(buffer);
-    } catch {
-      throw new KnowledgeUploadValidationError('Could not extract text from PDF document');
+    } catch (error) {
+      throw new KnowledgeUploadValidationError(getPdfUploadValidationMessage(error));
     }
   } else if (extension === '.xlsx') {
     const buffer = Buffer.from(await file.arrayBuffer());
@@ -184,6 +244,9 @@ export async function extractTextFromUploadFile(
     }
   }
 
+  if (!content && extension === '.pdf') {
+    throw new KnowledgeUploadValidationError('PDF document does not contain selectable text. OCR scanned PDFs before uploading.');
+  }
   if (!content) {
     throw new KnowledgeUploadValidationError('Uploaded document does not contain readable text');
   }
