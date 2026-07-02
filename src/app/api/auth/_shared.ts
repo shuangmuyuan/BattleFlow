@@ -4,6 +4,7 @@ import {
   type AuthFlowResult,
   InvalidCredentialsError,
 } from '@/lib/auth/account-service';
+import { PasswordValidationError } from '@/lib/auth/password';
 import { safeRedirectPath } from '@/lib/auth/redirect';
 import {
   activeOrganizationCookieOptions,
@@ -31,6 +32,10 @@ export async function readJsonRecord(request: Request): Promise<Record<string, u
 }
 
 export function authErrorResponse(error: unknown): NextResponse {
+  if (error instanceof PasswordValidationError) {
+    return NextResponse.json({ error: error.message }, { status: 400 });
+  }
+
   if (error instanceof AuthInputError) {
     return NextResponse.json({ error: error.message }, { status: error.status });
   }
