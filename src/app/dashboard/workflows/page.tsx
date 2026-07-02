@@ -2412,7 +2412,6 @@ export default function WorkflowsPage() {
       copiedChatMessageTimerRef.current = setTimeout(() => {
         setCopiedChatMessageKey((current) => (current === messageKey ? null : current));
       }, 1600);
-      toast.success('消息已复制');
     } catch (error) {
       if (fallbackCopy()) {
         setCopiedChatMessageKey(messageKey);
@@ -2422,7 +2421,6 @@ export default function WorkflowsPage() {
         copiedChatMessageTimerRef.current = setTimeout(() => {
           setCopiedChatMessageKey((current) => (current === messageKey ? null : current));
         }, 1600);
-        toast.success('消息已复制');
         return;
       }
 
@@ -6042,15 +6040,20 @@ export default function WorkflowsPage() {
                   const renderProcessingTimer = isStreaming
                     && idx === lastAssistantMessageIndex
                     && msg.role === 'assistant';
-                  const messageKey = `${msg.role}-${msg.created_at || 'legacy'}-${idx}`;
-                  const messageTime = formatChatMessageTime(msg.created_at);
+                  const messageCreatedAt = msg.created_at
+                    || chatMessages[idx + 1]?.created_at
+                    || chatMessages[idx - 1]?.created_at
+                    || currentStep?.updated_at
+                    || activeWorkflow?.updated_at;
+                  const messageKey = `${msg.role}-${messageCreatedAt || 'legacy'}-${idx}`;
+                  const messageTime = formatChatMessageTime(messageCreatedAt);
                   const canCopyMessage = Boolean(msg.content.trim());
                   const isMessageCopied = copiedChatMessageKey === messageKey;
                   return (
                     <div
                       key={idx}
                       className={cn(
-                        'flex w-full min-w-0 max-w-full',
+                        'group flex w-full min-w-0 max-w-full',
                         msg.role === 'user' ? 'justify-end pl-6 sm:pl-10' : 'justify-start',
                         msg.role !== 'user' && !stoppedMessageContent ? 'pr-6 sm:pr-10' : '',
                       )}
@@ -6065,7 +6068,7 @@ export default function WorkflowsPage() {
                       ) : (
                         <div
                           className={cn(
-                            'group/message flex min-w-0 max-w-full flex-col gap-1',
+                            'flex min-w-0 max-w-full flex-col gap-1',
                             msg.role === 'user'
                               ? 'items-end md:max-w-[80%] xl:max-w-2xl'
                               : stoppedMessageContent
@@ -6130,26 +6133,28 @@ export default function WorkflowsPage() {
                                   </div>
                                   <div
                                     className={cn(
-                                      'flex h-6 items-center gap-2 text-xs text-muted-foreground opacity-0 transition-opacity duration-150 group-hover/message:opacity-100 group-focus-within/message:opacity-100',
+                                      'flex h-6 items-center gap-2 text-xs text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100',
                                       msg.role === 'user' ? 'self-end' : 'self-start',
                                     )}
                                   >
                                     {messageTime && (
-                                      <time className="leading-none" dateTime={msg.created_at}>{messageTime}</time>
+                                      <time className="leading-none" dateTime={messageCreatedAt}>{messageTime}</time>
                                     )}
                                     {canCopyMessage && (
                                       <button
                                         type="button"
                                         className={cn(
-                                          'flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground',
+                                          'group/copy relative flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground',
                                           isMessageCopied && 'bg-success/10 text-success hover:bg-success/10 hover:text-success',
                                         )}
                                         onClick={() => {
                                           void copyChatMessageToClipboard(msg.content, messageKey);
                                         }}
                                         aria-label={isMessageCopied ? '消息已复制' : '复制消息'}
-                                        title={isMessageCopied ? '已复制' : '复制'}
                                       >
+                                        <span className="pointer-events-none absolute bottom-full left-1/2 mb-1.5 -translate-x-1/2 rounded-md border border-border/60 bg-popover px-2 py-1 text-xs font-medium text-popover-foreground opacity-0 shadow-md transition-opacity duration-150 group-hover/copy:opacity-100 group-focus-visible/copy:opacity-100">
+                                          {isMessageCopied ? '已复制' : '复制'}
+                                        </span>
                                         {isMessageCopied ? (
                                           <Check className="size-4" />
                                         ) : (
