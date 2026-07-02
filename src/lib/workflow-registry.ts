@@ -171,6 +171,7 @@ export interface WorkflowChatMessageRecord {
   content: string;
   attachments?: WorkflowChatAttachmentRecord[];
   kind?: 'document';
+  created_at?: string;
 }
 
 const CLAUDE_RUNTIME_SKILL_MISFIRE_MARKERS = [
@@ -610,6 +611,9 @@ function normalizeStepChats(value: unknown): Record<string, WorkflowChatMessageR
             role: message.role === 'assistant' ? 'assistant' : 'user',
             content: message.content || '',
             ...(message.kind === 'document' ? { kind: 'document' as const } : {}),
+            ...(typeof message.created_at === 'string' && message.created_at.trim()
+              ? { created_at: message.created_at }
+              : {}),
             ...(() => {
               const attachments = normalizeChatAttachments(message.attachments);
               return attachments.length > 0 ? { attachments } : {};

@@ -361,6 +361,7 @@ async function persistCompletedChatRun(run: ChatRunRecord) {
   const message: WorkflowChatMessageRecord = {
     role: 'assistant',
     content: run.assistantContent,
+    created_at: nowIso(),
     ...(shouldStoreAssistantReplyAsDocument(run.userMessage, run.assistantContent)
       ? { kind: 'document' as const }
       : {}),
@@ -372,6 +373,7 @@ async function persistCanceledChatRun(run: ChatRunRecord) {
   await appendWorkflowAssistantMessage(run, {
     role: 'assistant',
     content: getChatCancelledContent(run),
+    created_at: nowIso(),
   });
 }
 
@@ -379,6 +381,7 @@ async function persistFailedChatRun(run: ChatRunRecord, error: unknown) {
   await appendWorkflowAssistantMessage(run, {
     role: 'assistant',
     content: getChatErrorContent(error),
+    created_at: nowIso(),
   });
 }
 

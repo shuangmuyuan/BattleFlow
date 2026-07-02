@@ -62,6 +62,7 @@ import {
   ArrowDown,
   ArrowUp,
   Boxes,
+  Check,
   CheckCircle2,
   Circle,
   Clock,
@@ -355,6 +356,7 @@ interface ChatMessage {
   content: string;
   attachments?: ChatAttachment[];
   kind?: 'document';
+  created_at?: string;
 }
 
 type WorkflowStepRunMode = NonNullable<WorkflowStep['runMode']>;
@@ -445,24 +447,6 @@ function isEmptyWorkflowRouteState(state: WorkflowRouteState) {
   return !state.workspaceId && !state.workflowId && !state.stepId;
 }
 
-function readStoredWorkflowRouteState(): WorkflowRouteState | null {
-  try {
-    const raw = window.localStorage.getItem(workflowRouteStorageKey);
-    if (!raw) return null;
-
-    const parsed = JSON.parse(raw) as Partial<WorkflowRouteState>;
-    const state: WorkflowRouteState = {
-      workspaceId: typeof parsed.workspaceId === 'string' ? parsed.workspaceId : '',
-      workflowId: typeof parsed.workflowId === 'string' ? parsed.workflowId : '',
-      stepId: typeof parsed.stepId === 'string' ? parsed.stepId : '',
-    };
-
-    return isEmptyWorkflowRouteState(state) ? null : state;
-  } catch {
-    return null;
-  }
-}
-
 function writeStoredWorkflowRouteState(state: WorkflowRouteState) {
   try {
     if (isEmptyWorkflowRouteState(state)) {
@@ -545,10 +529,20 @@ function AssistantThinkingIndicator() {
   );
 }
 
+function formatElapsedDuration(seconds: number) {
+  const normalizedSeconds = Math.max(0, Math.round(seconds));
+  if (normalizedSeconds < 60) return `${normalizedSeconds}s`;
+
+  const minutes = Math.floor(normalizedSeconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+
+  return `${Math.floor(minutes / 60)}h`;
+}
+
 function AssistantProcessingTimer({ seconds }: { seconds: number }) {
   return (
     <div className="w-fit text-sm font-medium text-muted-foreground" aria-live="polite">
-      已处理 {Math.max(0, seconds)}s
+      已处理 {formatElapsedDuration(seconds)}
     </div>
   );
 }
@@ -565,9 +559,9 @@ const builtInWorkflowTemplates: WorkflowTemplate[] = [
   {
     id: 'ai-native-product-planning-e2e',
     name: 'BattleFlow标准化工作流',
-    description: '按产品规划输入、并行分析、用户旅程、TR1、Demo、TR2 并行产物的链路进行端到端验证。',
+    description: '按产品规划输入、并行分析、用户旅程、TR1、TR2 并行产物的链路进行端到端验证。',
     defaultWorkflowName: 'BattleFlow标准化工作流',
-    defaultWorkflowDescription: '基于内置产品规划 Skill 模板，完成输入、分析、旅程、TR1、Demo 与 TR2 产物生成。',
+    defaultWorkflowDescription: '基于内置产品规划 Skill 模板，完成输入、分析、旅程、TR1 与 TR2 产物生成。',
     steps: [
       {
         label: '产品规划输入需求+Prompt',
@@ -613,11 +607,6 @@ const builtInWorkflowTemplates: WorkflowTemplate[] = [
           'requirements-spec',
           '需求规格',
         ],
-        runMode: 'serial',
-      },
-      {
-        label: 'Demo 生成',
-        aliases: ['Demo 生成', 'demo-creator', 'demo生成器', 'demo-generator'],
         runMode: 'serial',
       },
       {
@@ -709,7 +698,7 @@ function resolveWorkflowTemplateSkills(template: WorkflowTemplate, skillOptions:
 const chatErrorFallbackContent = '抱歉，对话出现了问题，请重试。';
 const chatErrorFallbackPrefix = '抱歉，对话出现了问题';
 const chatCancelledLegacyContent = '已终止本次生成。';
-const chatCancelledContentPattern = /^你在\s+\d+s\s+后停止了$/;
+const chatCancelledContentPattern = /^你在\s+\d+(?:s|m|h)\s+后停止了$/;
 const chatScrollBottomThresholdPx = 48;
 const chatScrollIntentThresholdPx = 4;
 const claudeRuntimeSkillMisfireMarkers = [
@@ -772,6 +761,9 @@ function sanitizeChatMessages(messages: ChatMessage[]) {
       if (message.kind === 'document') {
         normalized.kind = 'document';
       }
+      if (typeof message.created_at === 'string' && message.created_at.trim()) {
+        normalized.created_at = message.created_at;
+      }
       return normalized;
     });
 }
@@ -785,8 +777,7 @@ function getLastUserMessage(messages: ChatMessage[]) {
 }
 
 function getChatCancelledContent(seconds: number) {
-  const displaySeconds = Math.max(1, Math.round(seconds));
-  return `你在 ${displaySeconds}s 后停止了`;
+  return `你在 ${formatElapsedDuration(Math.max(1, seconds))} 后停止了`;
 }
 
 function getChatCancelledDisplayContent(content: string) {
@@ -794,6 +785,25 @@ function getChatCancelledDisplayContent(content: string) {
   if (chatCancelledContentPattern.test(text)) return text;
   if (text === chatCancelledLegacyContent) return '你已停止生成';
   return null;
+}
+
+function formatChatMessageTime(value?: string) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function isImeComposing(event: KeyboardEvent<HTMLTextAreaElement>) {
+  return (
+    event.nativeEvent.isComposing
+    || event.key === 'Process'
+    || event.keyCode === 229
+    || event.nativeEvent.keyCode === 229
+  );
 }
 
 function isChatCancelledContent(content: string) {
@@ -1443,6 +1453,8 @@ export default function WorkflowsPage() {
   const [newWorkspaceDesc, setNewWorkspaceDesc] = useState('');
   const [newWorkflowName, setNewWorkflowName] = useState('');
   const [newWorkflowDesc, setNewWorkflowDesc] = useState('');
+  const [editWorkflowName, setEditWorkflowName] = useState('');
+  const [editWorkflowDesc, setEditWorkflowDesc] = useState('');
   const [selectedSkills, setSelectedSkills] = useState<Skill[]>([]);
   const [selectedSkillModes, setSelectedSkillModes] = useState<Record<string, 'serial' | 'parallel'>>({});
   const [selectedSkillGroupBreaks, setSelectedSkillGroupBreaks] = useState<Record<string, boolean>>({});
@@ -1461,6 +1473,7 @@ export default function WorkflowsPage() {
   const [rightPanelVisible, setRightPanelVisible] = useState(true);
   const [expandedOutputIds, setExpandedOutputIds] = useState<Record<string, boolean>>({});
   const [showChatScrollToBottom, setShowChatScrollToBottom] = useState(false);
+  const [copiedChatMessageKey, setCopiedChatMessageKey] = useState<string | null>(null);
   const [workflowRouteState, setWorkflowRouteState] = useState<WorkflowRouteState>(emptyWorkflowRouteState);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
@@ -1480,6 +1493,7 @@ export default function WorkflowsPage() {
   const activeWorkflowRef = useRef<Workflow | null>(null);
   const workflowRouteStateRef = useRef<WorkflowRouteState>(emptyWorkflowRouteState);
   const validationStageTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const copiedChatMessageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const workflowStepDragSourceRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -1489,13 +1503,10 @@ export default function WorkflowsPage() {
   useEffect(() => {
     const syncRouteState = () => {
       const searchState = readWorkflowRouteState(window.location.search);
-      const storedState = isEmptyWorkflowRouteState(searchState) ? readStoredWorkflowRouteState() : null;
-      const nextState = storedState || searchState;
+      const nextState = searchState;
 
-      if (storedState) {
-        const nextSearch = buildWorkflowRouteSearch(window.location.search, storedState);
-        const nextUrl = `${window.location.pathname}${nextSearch}${window.location.hash}`;
-        window.history.replaceState(window.history.state, '', nextUrl);
+      if (isEmptyWorkflowRouteState(searchState)) {
+        writeStoredWorkflowRouteState(emptyWorkflowRouteState);
       }
 
       workflowRouteStateRef.current = nextState;
@@ -2073,6 +2084,12 @@ export default function WorkflowsPage() {
     validationStageTimersRef.current = {};
   }, []);
 
+  useEffect(() => () => {
+    if (copiedChatMessageTimerRef.current) {
+      clearTimeout(copiedChatMessageTimerRef.current);
+    }
+  }, []);
+
   const getChatScrollViewport = useCallback(() => (
     chatScrollAreaRef.current?.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]') ?? null
   ), []);
@@ -2084,7 +2101,7 @@ export default function WorkflowsPage() {
 
     if (viewport) {
       viewport.scrollTo({ top: viewport.scrollHeight, behavior });
-      lastChatScrollTopRef.current = viewport.scrollTop;
+      lastChatScrollTopRef.current = viewport.scrollHeight;
       return;
     }
 
@@ -2399,6 +2416,60 @@ export default function WorkflowsPage() {
     }
   }, []);
 
+  const copyChatMessageToClipboard = useCallback(async (content: string, messageKey: string) => {
+    const normalizedContent = content.trim();
+
+    if (!normalizedContent) {
+      toast.warning('暂无可复制内容');
+      return;
+    }
+
+    const fallbackCopy = () => {
+      const textarea = document.createElement('textarea');
+      textarea.value = normalizedContent;
+      textarea.setAttribute('readonly', 'true');
+      textarea.style.position = 'fixed';
+      textarea.style.inset = '0 auto auto -9999px';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      const copied = document.execCommand('copy');
+      document.body.removeChild(textarea);
+      return copied;
+    };
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(normalizedContent);
+      } else if (!fallbackCopy()) {
+        throw new Error('Clipboard fallback failed');
+      }
+
+      setCopiedChatMessageKey(messageKey);
+      if (copiedChatMessageTimerRef.current) {
+        clearTimeout(copiedChatMessageTimerRef.current);
+      }
+      copiedChatMessageTimerRef.current = setTimeout(() => {
+        setCopiedChatMessageKey((current) => (current === messageKey ? null : current));
+      }, 1600);
+    } catch (error) {
+      if (fallbackCopy()) {
+        setCopiedChatMessageKey(messageKey);
+        if (copiedChatMessageTimerRef.current) {
+          clearTimeout(copiedChatMessageTimerRef.current);
+        }
+        copiedChatMessageTimerRef.current = setTimeout(() => {
+          setCopiedChatMessageKey((current) => (current === messageKey ? null : current));
+        }, 1600);
+        return;
+      }
+
+      console.warn('Failed to copy chat message', error);
+      toast.error('复制失败，可手动选择内容复制');
+    }
+  }, []);
+
   const getMarkdownDocumentTitle = (content: string, fallback: string) => {
     const sample = content.length > maxDocumentTitleScanChars ? content.slice(0, maxDocumentTitleScanChars) : content;
     const heading = sample.match(/^\s*#{1,3}\s+(.+)$/m)?.[1]?.trim();
@@ -2651,6 +2722,17 @@ export default function WorkflowsPage() {
     return date.toLocaleString('zh-CN', { hour12: false });
   };
 
+  const formatWorkflowCardDate = (value?: string) => {
+    if (!value) return '未知时间';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleDateString('zh-CN', {
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+    });
+  };
+
   const buildStepSnapshot = (
     workflow: Workflow,
     step: WorkflowStep,
@@ -2756,11 +2838,25 @@ export default function WorkflowsPage() {
     const messageWithContext = contextSummary
       ? `${userMessage}\n\n[本轮补充上下文]\n${contextSummary}`
       : userMessage;
+    const userMessageCreatedAt = new Date().toISOString();
     const userVisibleMessage: ChatMessage = pendingChatFiles.length > 0
-      ? { role: 'user', content: userMessage, attachments: pendingChatFiles.map(toChatAttachment) }
-      : { role: 'user', content: userMessage };
+      ? {
+        role: 'user',
+        content: userMessage,
+        attachments: pendingChatFiles.map(toChatAttachment),
+        created_at: userMessageCreatedAt,
+      }
+      : { role: 'user', content: userMessage, created_at: userMessageCreatedAt };
     const visibleMessages: ChatMessage[] = [...chatMessages, userVisibleMessage];
-    const requestMessages: ChatMessage[] = [...chatMessages, { role: 'user', content: messageWithContext }];
+    const requestMessages: ChatMessage[] = [
+      ...chatMessages,
+      { role: 'user', content: messageWithContext, created_at: userMessageCreatedAt },
+    ];
+    const followLatestChatMessage = () => {
+      chatScrollPinnedToBottomRef.current = true;
+      setShowChatScrollToBottom(false);
+      window.requestAnimationFrame(() => scrollChatToBottom('smooth'));
+    };
 
     setChatInputByStepId((prev) => ({ ...prev, [currentStep.id]: '' }));
     writeStoredChatDraft(currentStep.id, '');
@@ -2774,6 +2870,7 @@ export default function WorkflowsPage() {
       return next;
     });
     updateVisibleChatMessagesForStep(currentStep.id, visibleMessages);
+    followLatestChatMessage();
     const workflowWithUserMessage = saveStepChatMessages(workflow, currentStep.id, visibleMessages, { persist: false });
     setStepChatPersistenceStatus(currentStep.id, 'saving');
     const savedUserWorkflow = await persistWorkflow(workflowWithUserMessage);
@@ -2783,6 +2880,7 @@ export default function WorkflowsPage() {
     let activeRunId = '';
     let assistantContent = '';
     const requestStartedAt = Date.now();
+    const assistantMessageCreatedAt = new Date(requestStartedAt).toISOString();
     setProcessingStartedAtByStepId((prev) => ({ ...prev, [currentStep.id]: requestStartedAt }));
     setProcessingElapsedSecondsByStepId((prev) => ({ ...prev, [currentStep.id]: 0 }));
     setStreamingByStepId((prev) => ({ ...prev, [currentStep.id]: true }));
@@ -2840,7 +2938,10 @@ export default function WorkflowsPage() {
       let streamBuffer = '';
       let receivedDone = false;
 
-      updateVisibleChatMessagesForStep(currentStep.id, [...visibleMessages, { role: 'assistant', content: '' }]);
+      updateVisibleChatMessagesForStep(currentStep.id, [
+        ...visibleMessages,
+        { role: 'assistant', content: '', created_at: assistantMessageCreatedAt },
+      ]);
 
       const handleChatStreamPayload = (data: ChatStreamPayload | null) => {
         if (!data) return false;
@@ -2868,7 +2969,10 @@ export default function WorkflowsPage() {
           assistantContent = data.replace || data.event === 'assistant_final'
             ? data.content
             : assistantContent + data.content;
-          updateVisibleChatMessagesForStep(currentStep.id, [...visibleMessages, { role: 'assistant', content: assistantContent }]);
+          updateVisibleChatMessagesForStep(currentStep.id, [
+            ...visibleMessages,
+            { role: 'assistant', content: assistantContent, created_at: assistantMessageCreatedAt },
+          ]);
         }
         if (data.done) {
           receivedDone = true;
@@ -2905,8 +3009,8 @@ export default function WorkflowsPage() {
       }
 
       const assistantMessage: ChatMessage = shouldStoreAssistantReplyAsDocument(userMessage, assistantContent)
-        ? { role: 'assistant', content: assistantContent, kind: 'document' }
-        : { role: 'assistant', content: assistantContent };
+        ? { role: 'assistant', content: assistantContent, kind: 'document', created_at: assistantMessageCreatedAt }
+        : { role: 'assistant', content: assistantContent, created_at: assistantMessageCreatedAt };
       const finalMessages: ChatMessage[] = [
         ...visibleMessages,
         assistantMessage,
@@ -2936,7 +3040,11 @@ export default function WorkflowsPage() {
         const elapsedSeconds = (Date.now() - requestStartedAt) / 1000;
         const cancelledMessages: ChatMessage[] = [
           ...visibleMessages,
-          { role: 'assistant', content: getChatCancelledContent(elapsedSeconds) },
+          {
+            role: 'assistant',
+            content: getChatCancelledContent(elapsedSeconds),
+            created_at: new Date().toISOString(),
+          },
         ];
         updateVisibleChatMessagesForStep(currentStep.id, cancelledMessages);
         if (activeRunId) {
@@ -2964,7 +3072,7 @@ export default function WorkflowsPage() {
       console.error('Chat error:', error);
       const errorMessages: ChatMessage[] = [
         ...visibleMessages,
-        { role: 'assistant', content: getChatErrorContent(error) },
+        { role: 'assistant', content: getChatErrorContent(error), created_at: new Date().toISOString() },
       ];
       updateVisibleChatMessagesForStep(currentStep.id, errorMessages);
       if (activeRunId) {
@@ -3025,6 +3133,7 @@ export default function WorkflowsPage() {
     getLatestWorkflowSnapshot,
     updateVisibleChatMessagesForStep,
     persistWorkflow,
+    scrollChatToBottom,
     getEffectiveSkillForStep,
     knowledgeBases,
     selectedKnowledgeBaseIds,
@@ -3054,7 +3163,7 @@ export default function WorkflowsPage() {
       && !event.ctrlKey
       && !event.metaKey
       && !event.shiftKey
-      && !event.nativeEvent.isComposing
+      && !isImeComposing(event)
       && !event.currentTarget.value.trim()
     ) {
       const lastInput = getLastUserMessage(chatMessages)?.content.trim();
@@ -3074,7 +3183,7 @@ export default function WorkflowsPage() {
       return;
     }
 
-    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) {
+    if (event.key !== 'Enter' || event.shiftKey || isImeComposing(event)) {
       return;
     }
 
@@ -3400,7 +3509,41 @@ export default function WorkflowsPage() {
 
   const handleOpenEditWorkflow = (workflow: Workflow) => {
     setEditingWorkflowId(workflow.id);
+    setEditWorkflowName(workflow.name);
+    setEditWorkflowDesc(workflow.description.trim());
     setEditDialogOpen(true);
+  };
+
+  const resetEditWorkflowDialog = () => {
+    setEditingWorkflowId(null);
+    setEditWorkflowName('');
+    setEditWorkflowDesc('');
+  };
+
+  const handleEditWorkflowDialogOpenChange = (open: boolean) => {
+    setEditDialogOpen(open);
+    if (!open) resetEditWorkflowDialog();
+  };
+
+  const handleSaveWorkflowMetadata = (workflowId: string) => {
+    const nextName = editWorkflowName.trim();
+    if (!nextName) return;
+    const nextDescription = editWorkflowDesc.trim();
+
+    updateWorkflowById(workflowId, (workflow) => {
+      if (workflow.name === nextName && workflow.description === nextDescription) {
+        return workflow;
+      }
+
+      const updatedAt = new Date().toISOString();
+      return {
+        ...workflow,
+        name: nextName,
+        description: nextDescription,
+        updated_at: updatedAt,
+      };
+    });
+    toast.success('工作流信息已保存');
   };
 
   const handleCloneWorkflow = (workflow: Workflow) => {
@@ -3849,6 +3992,7 @@ export default function WorkflowsPage() {
       const hiddenStepCount = visibleSteps.length - compactSteps.length - (trailingStep ? 1 : 0);
       const progressItems = trailingStep ? [...compactSteps, trailingStep] : compactSteps;
       const creatorName = getCreatorDisplayName(wf);
+      const createdAt = wf.created_at || wf.updated_at;
 
       return (
         <Card
@@ -3862,6 +4006,12 @@ export default function WorkflowsPage() {
                 <p className="mt-1 flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
                   <UserRound className="h-3 w-3 shrink-0" />
                   <span className="truncate">创建人：{creatorName}</span>
+                </p>
+                <p className="mt-1 flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+                  <Clock className="h-3 w-3 shrink-0" />
+                  <span className="truncate">
+                    创建于 <time dateTime={createdAt}>{formatWorkflowCardDate(createdAt)}</time>
+                  </span>
                 </p>
                 <p className="mt-1 line-clamp-2 min-h-8 text-sm text-muted-foreground">
                   {wf.description.trim() || '-'}
@@ -4184,7 +4334,6 @@ export default function WorkflowsPage() {
           <DialogContent className="flex max-h-[calc(100dvh-2rem)] max-w-2xl flex-col gap-0 overflow-hidden p-0">
             <DialogHeader className="border-b border-border/40 px-6 py-5 pr-12">
               <DialogTitle>新建工作流</DialogTitle>
-              <DialogDescription>选择 Skill 并配置串行或并行执行方式</DialogDescription>
             </DialogHeader>
             <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
               <div className="space-y-4">
@@ -4249,7 +4398,6 @@ export default function WorkflowsPage() {
                 <div className="space-y-2">
                   <label className="text-sm font-medium">工作流名称</label>
                   <Input
-                    placeholder="如：电商平台 v3.0 规划"
                     value={newWorkflowName}
                     onChange={(e) => setNewWorkflowName(e.target.value)}
                   />
@@ -4257,7 +4405,6 @@ export default function WorkflowsPage() {
                 <div className="space-y-2">
                   <label className="text-sm font-medium">描述</label>
                   <Input
-                    placeholder="简要描述本次规划的目标"
                     value={newWorkflowDesc}
                     onChange={(e) => setNewWorkflowDesc(e.target.value)}
                   />
@@ -4432,9 +4579,6 @@ export default function WorkflowsPage() {
                         );
                       })}
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                      连续标记为并行的 Skill 默认属于同一任务组；在相邻并行项之间切换为“新组”后，可表达分阶段并行。M2 验收要求至少选择 3 个 Skill。
-                    </p>
                   </div>
                 )}
               </div>
@@ -4482,7 +4626,7 @@ export default function WorkflowsPage() {
         </Dialog>
 
         {/* Edit Workflow Dialog */}
-        <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
+        <Dialog open={editDialogOpen} onOpenChange={handleEditWorkflowDialogOpenChange}>
           <DialogContent className="flex max-h-[calc(100dvh-2rem)] max-w-3xl flex-col gap-0 overflow-hidden p-0">
             <DialogHeader className="border-b border-border/40 px-6 py-5 pr-12">
               <DialogTitle>编辑工作流</DialogTitle>
@@ -4490,9 +4634,41 @@ export default function WorkflowsPage() {
 
             {editingWorkflow && (
               <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-4">
-                <div>
-                  <h3 className="text-sm font-medium">{editingWorkflow.name}</h3>
-                  <p className="text-xs text-muted-foreground mt-1">{editingWorkflow.description}</p>
+                <div className="grid gap-3 rounded-lg border border-border/50 bg-muted/15 p-3">
+                  <div className="grid gap-2">
+                    <label className="text-sm font-medium" htmlFor="edit-workflow-name">工作流名称</label>
+                    <Input
+                      id="edit-workflow-name"
+                      value={editWorkflowName}
+                      onChange={(event) => setEditWorkflowName(event.target.value)}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <label className="text-sm font-medium" htmlFor="edit-workflow-description">工作流说明</label>
+                    <Textarea
+                      id="edit-workflow-description"
+                      value={editWorkflowDesc}
+                      onChange={(event) => setEditWorkflowDesc(event.target.value)}
+                      className="min-h-20 resize-none"
+                    />
+                  </div>
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="h-8"
+                      disabled={
+                        !editWorkflowName.trim()
+                        || (
+                          editWorkflowName.trim() === editingWorkflow.name
+                          && editWorkflowDesc.trim() === editingWorkflow.description
+                        )
+                      }
+                      onClick={() => handleSaveWorkflowMetadata(editingWorkflow.id)}
+                    >
+                      保存信息
+                    </Button>
+                  </div>
                 </div>
 
                 <div className="space-y-2">
@@ -5905,11 +6081,20 @@ export default function WorkflowsPage() {
                   const renderProcessingTimer = isStreaming
                     && idx === lastAssistantMessageIndex
                     && msg.role === 'assistant';
+                  const messageCreatedAt = msg.created_at
+                    || chatMessages[idx + 1]?.created_at
+                    || chatMessages[idx - 1]?.created_at
+                    || currentStep?.updated_at
+                    || activeWorkflow?.updated_at;
+                  const messageKey = `${msg.role}-${messageCreatedAt || 'legacy'}-${idx}`;
+                  const messageTime = formatChatMessageTime(messageCreatedAt);
+                  const canCopyMessage = Boolean(msg.content.trim());
+                  const isMessageCopied = copiedChatMessageKey === messageKey;
                   return (
                     <div
                       key={idx}
                       className={cn(
-                        'flex w-full min-w-0 max-w-full',
+                        'group flex w-full min-w-0 max-w-full',
                         msg.role === 'user' ? 'justify-end pl-6 sm:pl-10' : 'justify-start',
                         msg.role !== 'user' && !stoppedMessageContent ? 'pr-6 sm:pr-10' : '',
                       )}
@@ -5924,7 +6109,7 @@ export default function WorkflowsPage() {
                       ) : (
                         <div
                           className={cn(
-                            'flex min-w-0 max-w-full flex-col gap-2',
+                            'flex min-w-0 max-w-full flex-col gap-1',
                             msg.role === 'user'
                               ? 'items-end md:max-w-[80%] xl:max-w-2xl'
                               : stoppedMessageContent
@@ -5942,50 +6127,84 @@ export default function WorkflowsPage() {
                               {renderThinkingIndicator ? (
                                 <AssistantThinkingIndicator />
                               ) : (
-                                <div
-                                  className={`w-fit min-w-0 max-w-full overflow-hidden break-words rounded-lg p-3 text-sm [overflow-wrap:anywhere] ${
-                                    msg.role === 'user'
-                                      ? 'bg-primary text-primary-foreground'
-                                      : 'bg-muted/50 border border-border/40'
-                                  }`}
-                                >
-                                  {msg.role === 'assistant' ? (
-                                    <CompactMarkdown content={msg.content} />
-                                  ) : (
-                                    <div className="flex min-w-0 max-w-full flex-col gap-2">
-                                      {msg.attachments && msg.attachments.length > 0 && (
-                                        <div className="flex max-w-full flex-wrap justify-end gap-2">
-                                          {msg.attachments.map((attachment) => (
-                                            attachment.isImage && attachment.previewUrl ? (
-                                              <img
-                                                key={attachment.id}
-                                                src={attachment.previewUrl}
-                                                alt={attachment.name}
-                                                className="max-h-64 max-w-full rounded-md border border-primary-foreground/20 object-contain"
-                                              />
-                                            ) : (
-                                              <div
-                                                key={attachment.id}
-                                                className="flex max-w-full items-center gap-1.5 rounded-md bg-primary-foreground/10 px-2 py-1 text-xs"
-                                              >
-                                                {attachment.isImage ? (
-                                                  <ImageIcon className="size-3.5 shrink-0" />
-                                                ) : (
-                                                  <Paperclip className="size-3.5 shrink-0" />
-                                                )}
-                                                <span className="max-w-44 truncate">{attachment.name}</span>
-                                                <span className="shrink-0 opacity-80">{formatFileSize(attachment.size)}</span>
-                                              </div>
-                                            )
-                                          ))}
-                                        </div>
-                                      )}
-                                      {msg.content.trim() && (
-                                        <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.content}</div>
-                                      )}
-                                    </div>
-                                  )}
-                                </div>
+                                <>
+                                  <div
+                                    className={`w-fit min-w-0 max-w-full overflow-hidden break-words rounded-lg p-3 text-sm [overflow-wrap:anywhere] ${
+                                      msg.role === 'user'
+                                        ? 'bg-primary text-primary-foreground'
+                                        : 'bg-muted/50 border border-border/40'
+                                    }`}
+                                  >
+                                    {msg.role === 'assistant' ? (
+                                      <CompactMarkdown content={msg.content} />
+                                    ) : (
+                                      <div className="flex min-w-0 max-w-full flex-col gap-2">
+                                        {msg.attachments && msg.attachments.length > 0 && (
+                                          <div className="flex max-w-full flex-wrap justify-end gap-2">
+                                            {msg.attachments.map((attachment) => (
+                                              attachment.isImage && attachment.previewUrl ? (
+                                                <img
+                                                  key={attachment.id}
+                                                  src={attachment.previewUrl}
+                                                  alt={attachment.name}
+                                                  className="max-h-64 max-w-full rounded-md border border-primary-foreground/20 object-contain"
+                                                />
+                                              ) : (
+                                                <div
+                                                  key={attachment.id}
+                                                  className="flex max-w-full items-center gap-1.5 rounded-md bg-primary-foreground/10 px-2 py-1 text-xs"
+                                                >
+                                                  {attachment.isImage ? (
+                                                    <ImageIcon className="size-3.5 shrink-0" />
+                                                  ) : (
+                                                    <Paperclip className="size-3.5 shrink-0" />
+                                                  )}
+                                                  <span className="max-w-44 truncate">{attachment.name}</span>
+                                                  <span className="shrink-0 opacity-80">{formatFileSize(attachment.size)}</span>
+                                                </div>
+                                              )
+                                            ))}
+                                          </div>
+                                        )}
+                                        {msg.content.trim() && (
+                                          <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.content}</div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div
+                                    className={cn(
+                                      'flex h-6 items-center gap-2 text-xs text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100',
+                                      msg.role === 'user' ? 'self-end' : 'self-start',
+                                    )}
+                                  >
+                                    {messageTime && (
+                                      <time className="leading-none" dateTime={messageCreatedAt}>{messageTime}</time>
+                                    )}
+                                    {canCopyMessage && (
+                                      <button
+                                        type="button"
+                                        className={cn(
+                                          'group/copy relative flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground',
+                                          isMessageCopied && 'bg-success/10 text-success hover:bg-success/10 hover:text-success',
+                                        )}
+                                        onClick={() => {
+                                          void copyChatMessageToClipboard(msg.content, messageKey);
+                                        }}
+                                        aria-label={isMessageCopied ? '消息已复制' : '复制消息'}
+                                      >
+                                        <span className="pointer-events-none absolute bottom-full left-1/2 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded-md border border-border/60 bg-popover px-2 py-1 text-xs font-medium text-popover-foreground opacity-0 shadow-md transition-opacity delay-0 duration-150 group-hover/copy:delay-[1000ms] group-hover/copy:opacity-100 group-focus-visible/copy:delay-[1000ms] group-focus-visible/copy:opacity-100">
+                                          {isMessageCopied ? '已复制' : '复制'}
+                                        </span>
+                                        {isMessageCopied ? (
+                                          <Check className="size-4" />
+                                        ) : (
+                                          <Copy className="size-4" />
+                                        )}
+                                      </button>
+                                    )}
+                                  </div>
+                                </>
                               )}
                             </>
                           )}
@@ -6428,7 +6647,7 @@ export default function WorkflowsPage() {
       {/* Right: Context Panel */}
       <div
         className={cn(
-          'flex min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-border/40 lg:h-full lg:max-h-none lg:border-l lg:border-t-0',
+          'flex min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-border/40 transition-[max-height,width] duration-300 ease-in-out lg:h-full lg:max-h-none lg:border-l lg:border-t-0',
           rightPanelVisible ? 'max-h-[32rem] lg:w-80 xl:w-80' : 'max-h-14 lg:w-12 xl:w-12',
         )}
       >
@@ -6436,7 +6655,7 @@ export default function WorkflowsPage() {
           <Tabs
             value={rightPanelTab}
             onValueChange={(value) => setRightPanelTab(value as typeof rightPanelTab)}
-            className="min-h-0 flex-1 gap-0 overflow-hidden"
+            className="min-h-0 flex-1 gap-0 overflow-hidden transition-opacity duration-200"
           >
             <div className="shrink-0 border-b border-border/40 p-4">
               <div className="flex min-w-0 items-start justify-between gap-3">
@@ -6450,7 +6669,7 @@ export default function WorkflowsPage() {
                   type="button"
                   variant="outline"
                   size="icon"
-                  className="size-8 shrink-0 rounded-lg"
+                  className="size-8 shrink-0 rounded-lg transition-transform duration-300 ease-in-out hover:scale-105"
                   onClick={() => setRightPanelVisible(false)}
                   aria-label="隐藏上下文面板"
                   aria-pressed={rightPanelVisible}
@@ -6641,7 +6860,7 @@ export default function WorkflowsPage() {
               type="button"
               variant="outline"
               size="icon"
-              className="size-8 shrink-0 rounded-lg"
+              className="size-8 shrink-0 rounded-lg transition-transform duration-300 ease-in-out hover:scale-105"
               onClick={() => setRightPanelVisible(true)}
               aria-label="显示上下文面板"
               aria-pressed={rightPanelVisible}

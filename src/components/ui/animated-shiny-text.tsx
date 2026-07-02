@@ -11,7 +11,7 @@ function AnimatedShinyText({
     <span
       data-slot="animated-shiny-text"
       className={cn(
-        'inline-flex bg-[linear-gradient(110deg,var(--muted-foreground)_0%,var(--muted-foreground)_38%,var(--foreground)_50%,var(--muted-foreground)_62%,var(--muted-foreground)_100%)] bg-[length:250%_100%] bg-clip-text text-transparent motion-safe:animate-[battleflow-shiny-text_2.2s_linear_infinite] motion-reduce:bg-none motion-reduce:text-muted-foreground',
+        'inline-flex bg-[linear-gradient(110deg,var(--muted-foreground)_0%,var(--muted-foreground)_38%,var(--foreground)_50%,var(--muted-foreground)_62%,var(--muted-foreground)_100%)] bg-[length:250%_100%] bg-clip-text text-transparent motion-safe:animate-[battleflow-shiny-text_4.5s_linear_infinite] motion-reduce:bg-none motion-reduce:text-muted-foreground',
         className,
       )}
       {...props}
