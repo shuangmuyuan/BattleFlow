@@ -6152,7 +6152,7 @@ export default function WorkflowsPage() {
                                         }}
                                         aria-label={isMessageCopied ? '消息已复制' : '复制消息'}
                                       >
-                                        <span className="pointer-events-none absolute bottom-full left-1/2 mb-1.5 -translate-x-1/2 rounded-md border border-border/60 bg-popover px-2 py-1 text-xs font-medium text-popover-foreground opacity-0 shadow-md transition-opacity duration-150 group-hover/copy:opacity-100 group-focus-visible/copy:opacity-100">
+                                        <span className="pointer-events-none absolute bottom-full left-1/2 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded-md border border-border/60 bg-popover px-2 py-1 text-xs font-medium text-popover-foreground opacity-0 shadow-md transition-opacity delay-0 duration-150 group-hover/copy:delay-[2000ms] group-hover/copy:opacity-100 group-focus-visible/copy:delay-[2000ms] group-focus-visible/copy:opacity-100">
                                           {isMessageCopied ? '已复制' : '复制'}
                                         </span>
                                         {isMessageCopied ? (
