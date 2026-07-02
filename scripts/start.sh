@@ -7,12 +7,17 @@ PORT=5000
 DEPLOY_RUN_PORT="${DEPLOY_RUN_PORT:-$PORT}"
 BATTLEFLOW_PROJECT_ENV="${BATTLEFLOW_PROJECT_ENV:-PROD}"
 NODE_ENV="${NODE_ENV:-production}"
+BATTLEFLOW_CLAUDE_TOOLS="${BATTLEFLOW_CLAUDE_TOOLS:-WebSearch,WebFetch}"
 
 
 start_service() {
     cd "${BATTLEFLOW_WORKSPACE_PATH}"
     echo "Starting HTTP service on port ${DEPLOY_RUN_PORT} for deploy..."
-    PORT=${DEPLOY_RUN_PORT} BATTLEFLOW_PROJECT_ENV=${BATTLEFLOW_PROJECT_ENV} NODE_ENV=${NODE_ENV} node dist/server.js
+    PORT="${DEPLOY_RUN_PORT}" \
+      BATTLEFLOW_PROJECT_ENV="${BATTLEFLOW_PROJECT_ENV}" \
+      NODE_ENV="${NODE_ENV}" \
+      BATTLEFLOW_CLAUDE_TOOLS="${BATTLEFLOW_CLAUDE_TOOLS}" \
+      node dist/server.js
 }
 
 echo "Starting HTTP service on port ${DEPLOY_RUN_PORT} for deploy..."
