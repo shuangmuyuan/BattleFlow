@@ -170,6 +170,7 @@ export interface WorkflowChatMessageRecord {
   role: 'user' | 'assistant';
   content: string;
   attachments?: WorkflowChatAttachmentRecord[];
+  kind?: 'document';
 }
 
 const CLAUDE_RUNTIME_SKILL_MISFIRE_MARKERS = [
@@ -608,6 +609,7 @@ function normalizeStepChats(value: unknown): Record<string, WorkflowChatMessageR
           .map((message) => ({
             role: message.role === 'assistant' ? 'assistant' : 'user',
             content: message.content || '',
+            ...(message.kind === 'document' ? { kind: 'document' as const } : {}),
             ...(() => {
               const attachments = normalizeChatAttachments(message.attachments);
               return attachments.length > 0 ? { attachments } : {};

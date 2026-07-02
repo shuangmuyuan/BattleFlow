@@ -544,9 +544,8 @@ export function streamClaudeCodeCliTurn(input: AgentTurnInput) {
       });
 
       input.signal?.addEventListener('abort', () => {
-        streamClosed = true;
         child?.kill('SIGTERM');
-        cleanupPromptFile();
+        closeWith({ type: 'session_status', status: 'aborted' });
       });
     },
     cancel() {

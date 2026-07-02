@@ -59,6 +59,7 @@ import {
   Plus,
   Play,
   ArrowLeft,
+  ArrowDown,
   ArrowUp,
   Boxes,
   CheckCircle2,
@@ -381,6 +382,19 @@ interface WorkflowExecutionGroup {
 }
 
 type ChatPersistenceStatus = 'idle' | 'streaming' | 'saving' | 'saved' | 'failed';
+type ChatRunStatus = 'running' | 'succeeded' | 'failed' | 'canceled';
+
+interface ChatRunSummary {
+  id: string;
+  workflow_id: string;
+  step_id: string;
+  status: ChatRunStatus;
+  started_at: string;
+  updated_at: string;
+  elapsed_seconds?: number;
+  error?: string;
+}
+
 type DeleteTarget =
   | { type: 'workspace'; id: string; name: string; workflowCount: number }
   | { type: 'workflow'; id: string; name: string; workspaceId: string };
@@ -696,6 +710,8 @@ const chatErrorFallbackContent = '抱歉，对话出现了问题，请重试。'
 const chatErrorFallbackPrefix = '抱歉，对话出现了问题';
 const chatCancelledLegacyContent = '已终止本次生成。';
 const chatCancelledContentPattern = /^你在\s+\d+s\s+后停止了$/;
+const chatScrollBottomThresholdPx = 48;
+const chatScrollIntentThresholdPx = 4;
 const claudeRuntimeSkillMisfireMarkers = [
   '/<skill-name>',
   'system-reminder',
@@ -760,6 +776,10 @@ function sanitizeChatMessages(messages: ChatMessage[]) {
 
 function getLastAssistantMessage(messages: ChatMessage[]) {
   return [...messages].reverse().find((message) => message.role === 'assistant');
+}
+
+function getLastUserMessage(messages: ChatMessage[]) {
+  return [...messages].reverse().find((message) => message.role === 'user' && message.content.trim());
 }
 
 function getChatCancelledContent(seconds: number) {
@@ -1321,6 +1341,7 @@ export default function WorkflowsPage() {
   const [chatInput, setChatInput] = useState('');
   const [chatInputByStepId, setChatInputByStepId] = useState<Record<string, string>>({});
   const [streamingByStepId, setStreamingByStepId] = useState<Record<string, boolean>>({});
+  const [chatRunByStepId, setChatRunByStepId] = useState<Record<string, ChatRunSummary>>({});
   const [processingStartedAtByStepId, setProcessingStartedAtByStepId] = useState<Record<string, number>>({});
   const [processingElapsedSecondsByStepId, setProcessingElapsedSecondsByStepId] = useState<Record<string, number>>({});
   const [expandedAssistantDocumentIds, setExpandedAssistantDocumentIds] = useState<Record<string, boolean>>({});
@@ -1361,16 +1382,22 @@ export default function WorkflowsPage() {
   const [rightPanelTab, setRightPanelTab] = useState<'outputs' | 'review' | 'context' | 'demo'>('outputs');
   const [rightPanelVisible, setRightPanelVisible] = useState(true);
   const [expandedOutputIds, setExpandedOutputIds] = useState<Record<string, boolean>>({});
+  const [showChatScrollToBottom, setShowChatScrollToBottom] = useState(false);
   const [workflowRouteState, setWorkflowRouteState] = useState<WorkflowRouteState>(emptyWorkflowRouteState);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
   const workflowSkillOptions = useMemo(() => dedupeWorkflowSkillOptions(skills), [skills]);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatScrollAreaRef = useRef<HTMLDivElement>(null);
+  const chatScrollPinnedToBottomRef = useRef(true);
+  const lastChatScrollTopRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const reviewedOutputInputRef = useRef<HTMLInputElement>(null);
   const activeStepIdRef = useRef<string | null>(null);
   const activeChatRequestByStepIdRef = useRef<Record<string, AbortController>>({});
+  const activeChatRunIdByStepIdRef = useRef<Record<string, string>>({});
+  const chatRunByStepIdRef = useRef<Record<string, ChatRunSummary>>({});
   const workflowsRef = useRef<Workflow[]>([]);
   const activeWorkflowRef = useRef<Workflow | null>(null);
   const workflowRouteStateRef = useRef<WorkflowRouteState>(emptyWorkflowRouteState);
@@ -1409,6 +1436,10 @@ export default function WorkflowsPage() {
   useEffect(() => {
     activeWorkflowRef.current = activeWorkflow;
   }, [activeWorkflow]);
+
+  useEffect(() => {
+    chatRunByStepIdRef.current = chatRunByStepId;
+  }, [chatRunByStepId]);
 
   useEffect(() => {
     const activeEntries = Object.entries(processingStartedAtByStepId)
@@ -1566,6 +1597,35 @@ export default function WorkflowsPage() {
     } catch (error) {
       console.error('Workflow save error:', error);
       setErrorMessage(error instanceof Error ? error.message : '工作流保存失败');
+      return null;
+    }
+  }, []);
+
+  const refreshWorkflowById = useCallback(async (workflowId: string) => {
+    try {
+      const response = await fetch(`/api/workflows?id=${encodeURIComponent(workflowId)}`, {
+        cache: 'no-store',
+      });
+      const data = await response.json() as { workflow?: Workflow; error?: string };
+      if (!response.ok || !data.workflow) {
+        throw new Error(data.error || '工作流刷新失败');
+      }
+
+      const refreshedWorkflow = data.workflow;
+      setWorkflows((prev) => prev.map((workflow) => (
+        workflow.id === refreshedWorkflow.id ? refreshedWorkflow : workflow
+      )));
+      setActiveWorkflow((prev) => (prev?.id === refreshedWorkflow.id ? refreshedWorkflow : prev));
+
+      const activeStepId = activeStepIdRef.current;
+      if (activeStepId && activeWorkflowRef.current?.id === refreshedWorkflow.id) {
+        setChatMessages(getStepChatMessages(refreshedWorkflow, activeStepId));
+      }
+
+      return refreshedWorkflow;
+    } catch (error) {
+      console.error('Workflow refresh error:', error);
+      setErrorMessage(error instanceof Error ? error.message : '工作流刷新失败');
       return null;
     }
   }, []);
@@ -1753,6 +1813,155 @@ export default function WorkflowsPage() {
   }, [loadKnowledgeBases]);
 
   useEffect(() => {
+    if (!activeWorkflow?.id) return undefined;
+
+    const workflowId = activeWorkflow.id;
+    let cancelled = false;
+
+    const syncChatRuns = async () => {
+      try {
+        const response = await fetch(`/api/chat?workflow_id=${encodeURIComponent(workflowId)}`, {
+          cache: 'no-store',
+        });
+        const data = await response.json() as { runs?: ChatRunSummary[]; error?: string };
+        if (!response.ok) {
+          throw new Error(data.error || 'Chat run 状态同步失败');
+        }
+        if (cancelled) return;
+
+        const latestRunByStep = new Map<string, ChatRunSummary>();
+        for (const run of data.runs || []) {
+          const existing = latestRunByStep.get(run.step_id);
+          if (!existing || Date.parse(run.updated_at) > Date.parse(existing.updated_at)) {
+            latestRunByStep.set(run.step_id, run);
+          }
+        }
+
+        const previousRuns = chatRunByStepIdRef.current;
+        const nextRuns = Object.fromEntries(latestRunByStep.entries());
+        const trackedStepIds = new Set([
+          ...Object.keys(previousRuns),
+          ...Object.keys(nextRuns),
+        ]);
+        let shouldRefreshWorkflow = false;
+
+        for (const stepId of trackedStepIds) {
+          const previousRun = previousRuns[stepId];
+          const nextRun = nextRuns[stepId];
+          if (previousRun?.status === 'running' && !nextRun) {
+            shouldRefreshWorkflow = true;
+          }
+          if (nextRun && (!previousRun || previousRun.status !== nextRun.status) && nextRun.status !== 'running') {
+            shouldRefreshWorkflow = true;
+          }
+        }
+
+        setChatRunByStepId(nextRuns);
+        setStreamingByStepId((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          for (const stepId of trackedStepIds) {
+            const isRunning = nextRuns[stepId]?.status === 'running';
+            if (isRunning && !next[stepId]) {
+              next[stepId] = true;
+              changed = true;
+            } else if (!isRunning && next[stepId]) {
+              delete next[stepId];
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+        setProcessingStartedAtByStepId((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          for (const stepId of trackedStepIds) {
+            const run = nextRuns[stepId];
+            if (run?.status === 'running') {
+              const startedAt = Date.parse(run.started_at);
+              if (Number.isFinite(startedAt) && next[stepId] !== startedAt) {
+                next[stepId] = startedAt;
+                changed = true;
+              }
+            } else if (stepId in next) {
+              delete next[stepId];
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+        setProcessingElapsedSecondsByStepId((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          for (const stepId of trackedStepIds) {
+            const run = nextRuns[stepId];
+            if (run?.status === 'running') {
+              const seconds = run.elapsed_seconds || 0;
+              if (next[stepId] !== seconds) {
+                next[stepId] = seconds;
+                changed = true;
+              }
+            } else if (stepId in next) {
+              delete next[stepId];
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+
+        for (const stepId of trackedStepIds) {
+          const run = nextRuns[stepId];
+          if (run?.status === 'running') {
+            activeChatRunIdByStepIdRef.current[stepId] = run.id;
+            setStepChatPersistenceStatus(stepId, 'streaming');
+
+            if (activeStepIdRef.current === stepId) {
+              setChatMessages((currentMessages) => {
+                const lastCurrentMessage = currentMessages[currentMessages.length - 1];
+                if (lastCurrentMessage?.role === 'assistant') return currentMessages;
+
+                const workflowSnapshot = activeWorkflowRef.current;
+                if (!workflowSnapshot || workflowSnapshot.id !== workflowId) return currentMessages;
+                const stepMessages = getStepChatMessages(workflowSnapshot, stepId);
+                const lastWorkflowMessage = stepMessages[stepMessages.length - 1];
+                return lastWorkflowMessage?.role === 'user'
+                  ? [...stepMessages, { role: 'assistant', content: '' }]
+                  : currentMessages;
+              });
+            }
+            continue;
+          }
+
+          if (activeChatRunIdByStepIdRef.current[stepId]) {
+            delete activeChatRunIdByStepIdRef.current[stepId];
+          }
+          if (run?.status === 'failed') {
+            setStepChatPersistenceStatus(stepId, 'failed');
+          } else if (run?.status === 'succeeded' || run?.status === 'canceled') {
+            setStepChatPersistenceStatus(stepId, 'saved');
+          }
+        }
+
+        if (shouldRefreshWorkflow) {
+          await refreshWorkflowById(workflowId);
+        }
+      } catch (error) {
+        console.error('Chat run sync error:', error);
+      }
+    };
+
+    void syncChatRuns();
+    const intervalId = window.setInterval(() => {
+      void syncChatRuns();
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [activeWorkflow?.id, refreshWorkflowById]);
+
+  useEffect(() => {
     if (loading) return;
 
     const { workspaceId, workflowId, stepId } = workflowRouteState;
@@ -1786,10 +1995,74 @@ export default function WorkflowsPage() {
     validationStageTimersRef.current = {};
   }, []);
 
-  // Auto-scroll chat
+  const getChatScrollViewport = useCallback(() => (
+    chatScrollAreaRef.current?.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]') ?? null
+  ), []);
+
+  const scrollChatToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    const viewport = getChatScrollViewport();
+    chatScrollPinnedToBottomRef.current = true;
+    setShowChatScrollToBottom(false);
+
+    if (viewport) {
+      viewport.scrollTo({ top: viewport.scrollHeight, behavior });
+      lastChatScrollTopRef.current = viewport.scrollTop;
+      return;
+    }
+
+    chatEndRef.current?.scrollIntoView({ behavior });
+  }, [getChatScrollViewport]);
+
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatMessages]);
+    const viewport = getChatScrollViewport();
+    if (!viewport) return undefined;
+
+    lastChatScrollTopRef.current = viewport.scrollTop;
+
+    const handleScroll = () => {
+      const distanceToBottom = Math.max(0, viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop);
+      const isNearBottom = distanceToBottom <= chatScrollBottomThresholdPx;
+      const didScrollUp = viewport.scrollTop < lastChatScrollTopRef.current - chatScrollIntentThresholdPx;
+
+      lastChatScrollTopRef.current = viewport.scrollTop;
+
+      if (isNearBottom) {
+        chatScrollPinnedToBottomRef.current = true;
+        setShowChatScrollToBottom(false);
+        return;
+      }
+
+      if (didScrollUp) {
+        chatScrollPinnedToBottomRef.current = false;
+        setShowChatScrollToBottom(true);
+      }
+    };
+
+    viewport.addEventListener('scroll', handleScroll, { passive: true });
+    return () => viewport.removeEventListener('scroll', handleScroll);
+  }, [activeStepIndex, activeWorkflow?.id, getChatScrollViewport]);
+
+  useEffect(() => {
+    chatScrollPinnedToBottomRef.current = true;
+    setShowChatScrollToBottom(false);
+    window.requestAnimationFrame(() => scrollChatToBottom('auto'));
+  }, [activeStepIndex, activeWorkflow?.id, scrollChatToBottom]);
+
+  // Follow new chat content only while the user is already near the latest message.
+  useEffect(() => {
+    if (chatScrollPinnedToBottomRef.current) {
+      scrollChatToBottom('smooth');
+      return;
+    }
+
+    const viewport = getChatScrollViewport();
+    if (!viewport) return;
+
+    const distanceToBottom = Math.max(0, viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop);
+    if (distanceToBottom > chatScrollBottomThresholdPx) {
+      setShowChatScrollToBottom(true);
+    }
+  }, [chatMessages, getChatScrollViewport, scrollChatToBottom]);
 
   const clearValidationStage = useCallback((stepId: string) => {
     const existingTimer = validationStageTimersRef.current[stepId];
@@ -2429,6 +2702,7 @@ export default function WorkflowsPage() {
     setStepChatPersistenceStatus(currentStep.id, savedUserWorkflow ? 'streaming' : 'failed');
     const controller = new AbortController();
     activeChatRequestByStepIdRef.current[currentStep.id] = controller;
+    let activeRunId = '';
     let assistantContent = '';
     const requestStartedAt = Date.now();
     setProcessingStartedAtByStepId((prev) => ({ ...prev, [currentStep.id]: requestStartedAt }));
@@ -2449,6 +2723,8 @@ export default function WorkflowsPage() {
           agent_provider: 'claude-code-cli',
           model_id: 'doubao-seed-2-0-pro-260215',
           workflow_id: workflow.id,
+          workflow_step_id: currentStep.id,
+          visible_user_message: userMessage,
           skill_definition: skillDef ? {
             id: skillDef.id,
             skill_id: skillDef.id,
@@ -2495,12 +2771,39 @@ export default function WorkflowsPage() {
 
         for (const line of lines) {
           if (line.startsWith('data: ')) {
-            let data: { content?: string; done?: boolean; error?: string };
+            let data: {
+              content?: string;
+              done?: boolean;
+              error?: string;
+              run_id?: string;
+              status?: ChatRunStatus;
+              event?: string;
+              started_at?: string;
+              updated_at?: string;
+            };
             try {
               data = JSON.parse(line.slice(6));
             } catch {
               // Skip non-JSON lines
               continue;
+            }
+            if (data.run_id && !activeRunId) {
+              activeRunId = data.run_id;
+              activeChatRunIdByStepIdRef.current[currentStep.id] = data.run_id;
+            }
+            if (data.run_id && data.status) {
+              const now = new Date().toISOString();
+              setChatRunByStepId((prev) => ({
+                ...prev,
+                [currentStep.id]: {
+                  id: data.run_id || activeRunId,
+                  workflow_id: workflow.id,
+                  step_id: currentStep.id,
+                  status: data.status || 'running',
+                  started_at: data.started_at || now,
+                  updated_at: data.updated_at || now,
+                },
+              }));
             }
             if (data.error) throw new Error(data.error);
             if (data.content) {
@@ -2519,15 +2822,25 @@ export default function WorkflowsPage() {
         assistantMessage,
       ];
       updateVisibleChatMessagesForStep(currentStep.id, finalMessages);
-      const workflowWithFinalMessages = saveStepChatMessages(
-        getLatestWorkflowSnapshot(workflow.id, workflow),
-        currentStep.id,
-        finalMessages,
-        { persist: false },
-      );
-      setStepChatPersistenceStatus(currentStep.id, 'saving');
-      const savedWorkflow = await persistWorkflow(workflowWithFinalMessages);
-      setStepChatPersistenceStatus(currentStep.id, savedWorkflow ? 'saved' : 'failed');
+      if (activeRunId) {
+        saveStepChatMessages(
+          getLatestWorkflowSnapshot(workflow.id, workflow),
+          currentStep.id,
+          finalMessages,
+          { persist: false },
+        );
+        setStepChatPersistenceStatus(currentStep.id, 'streaming');
+      } else {
+        const workflowWithFinalMessages = saveStepChatMessages(
+          getLatestWorkflowSnapshot(workflow.id, workflow),
+          currentStep.id,
+          finalMessages,
+          { persist: false },
+        );
+        setStepChatPersistenceStatus(currentStep.id, 'saving');
+        const savedWorkflow = await persistWorkflow(workflowWithFinalMessages);
+        setStepChatPersistenceStatus(currentStep.id, savedWorkflow ? 'saved' : 'failed');
+      }
     } catch (error) {
       if (isAbortError(error)) {
         const elapsedSeconds = (Date.now() - requestStartedAt) / 1000;
@@ -2536,15 +2849,25 @@ export default function WorkflowsPage() {
           { role: 'assistant', content: getChatCancelledContent(elapsedSeconds) },
         ];
         updateVisibleChatMessagesForStep(currentStep.id, cancelledMessages);
-        const workflowWithCancelledMessages = saveStepChatMessages(
-          getLatestWorkflowSnapshot(workflow.id, workflow),
-          currentStep.id,
-          cancelledMessages,
-          { persist: false },
-        );
-        setStepChatPersistenceStatus(currentStep.id, 'saving');
-        const savedWorkflow = await persistWorkflow(workflowWithCancelledMessages);
-        setStepChatPersistenceStatus(currentStep.id, savedWorkflow ? 'saved' : 'failed');
+        if (activeRunId) {
+          saveStepChatMessages(
+            getLatestWorkflowSnapshot(workflow.id, workflow),
+            currentStep.id,
+            cancelledMessages,
+            { persist: false },
+          );
+          setStepChatPersistenceStatus(currentStep.id, 'streaming');
+        } else {
+          const workflowWithCancelledMessages = saveStepChatMessages(
+            getLatestWorkflowSnapshot(workflow.id, workflow),
+            currentStep.id,
+            cancelledMessages,
+            { persist: false },
+          );
+          setStepChatPersistenceStatus(currentStep.id, 'saving');
+          const savedWorkflow = await persistWorkflow(workflowWithCancelledMessages);
+          setStepChatPersistenceStatus(currentStep.id, savedWorkflow ? 'saved' : 'failed');
+        }
         return;
       }
 
@@ -2554,37 +2877,52 @@ export default function WorkflowsPage() {
         { role: 'assistant', content: getChatErrorContent(error) },
       ];
       updateVisibleChatMessagesForStep(currentStep.id, errorMessages);
-      const workflowWithErrorMessages = saveStepChatMessages(
-        getLatestWorkflowSnapshot(workflow.id, workflow),
-        currentStep.id,
-        errorMessages,
-        { persist: false },
-      );
-      setStepChatPersistenceStatus(currentStep.id, 'saving');
-      const savedWorkflow = await persistWorkflow(workflowWithErrorMessages);
-      setStepChatPersistenceStatus(currentStep.id, savedWorkflow ? 'saved' : 'failed');
+      if (activeRunId) {
+        saveStepChatMessages(
+          getLatestWorkflowSnapshot(workflow.id, workflow),
+          currentStep.id,
+          errorMessages,
+          { persist: false },
+        );
+        setStepChatPersistenceStatus(currentStep.id, 'streaming');
+      } else {
+        const workflowWithErrorMessages = saveStepChatMessages(
+          getLatestWorkflowSnapshot(workflow.id, workflow),
+          currentStep.id,
+          errorMessages,
+          { persist: false },
+        );
+        setStepChatPersistenceStatus(currentStep.id, 'saving');
+        const savedWorkflow = await persistWorkflow(workflowWithErrorMessages);
+        setStepChatPersistenceStatus(currentStep.id, savedWorkflow ? 'saved' : 'failed');
+      }
     } finally {
       if (activeChatRequestByStepIdRef.current[currentStep.id] === controller) {
         delete activeChatRequestByStepIdRef.current[currentStep.id];
       }
-      setStreamingByStepId((prev) => {
-        if (!prev[currentStep.id]) return prev;
-        const next = { ...prev };
-        delete next[currentStep.id];
-        return next;
-      });
-      setProcessingStartedAtByStepId((prev) => {
-        if (!(currentStep.id in prev)) return prev;
-        const next = { ...prev };
-        delete next[currentStep.id];
-        return next;
-      });
-      setProcessingElapsedSecondsByStepId((prev) => {
-        if (!(currentStep.id in prev)) return prev;
-        const next = { ...prev };
-        delete next[currentStep.id];
-        return next;
-      });
+      if (activeRunId && activeChatRunIdByStepIdRef.current[currentStep.id] === activeRunId) {
+        delete activeChatRunIdByStepIdRef.current[currentStep.id];
+      }
+      if (!activeRunId) {
+        setStreamingByStepId((prev) => {
+          if (!prev[currentStep.id]) return prev;
+          const next = { ...prev };
+          delete next[currentStep.id];
+          return next;
+        });
+        setProcessingStartedAtByStepId((prev) => {
+          if (!(currentStep.id in prev)) return prev;
+          const next = { ...prev };
+          delete next[currentStep.id];
+          return next;
+        });
+        setProcessingElapsedSecondsByStepId((prev) => {
+          if (!(currentStep.id in prev)) return prev;
+          const next = { ...prev };
+          delete next[currentStep.id];
+          return next;
+        });
+      }
     }
   }, [
     chatInput,
@@ -2607,17 +2945,52 @@ export default function WorkflowsPage() {
   const handleStopStreaming = useCallback(() => {
     const currentStep = activeWorkflow ? getVisibleSteps(activeWorkflow)[activeStepIndex] : undefined;
     if (!currentStep) return;
+    const runId = activeChatRunIdByStepIdRef.current[currentStep.id] || chatRunByStepId[currentStep.id]?.id;
+    if (runId) {
+      void fetch(`/api/chat?run_id=${encodeURIComponent(runId)}`, {
+        method: 'DELETE',
+        cache: 'no-store',
+      }).catch((error) => {
+        console.error('Chat run stop error:', error);
+      });
+    }
     activeChatRequestByStepIdRef.current[currentStep.id]?.abort();
-  }, [activeWorkflow, activeStepIndex]);
+  }, [activeWorkflow, activeStepIndex, chatRunByStepId]);
 
   const handleChatInputKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (
+      event.key === 'ArrowUp'
+      && !event.altKey
+      && !event.ctrlKey
+      && !event.metaKey
+      && !event.shiftKey
+      && !event.nativeEvent.isComposing
+      && !event.currentTarget.value.trim()
+    ) {
+      const lastInput = getLastUserMessage(chatMessages)?.content.trim();
+      if (!lastInput) return;
+
+      event.preventDefault();
+      const textarea = event.currentTarget;
+      setChatInput(lastInput);
+      const stepId = activeStepIdRef.current;
+      if (stepId) {
+        setChatInputByStepId((prev) => ({ ...prev, [stepId]: lastInput }));
+        writeStoredChatDraft(stepId, lastInput);
+      }
+      window.requestAnimationFrame(() => {
+        textarea.setSelectionRange(lastInput.length, lastInput.length);
+      });
+      return;
+    }
+
     if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) {
       return;
     }
 
     event.preventDefault();
     void handleSendMessage();
-  }, [handleSendMessage]);
+  }, [chatMessages, handleSendMessage]);
 
   const handleConfirmStep = async () => {
     if (!activeWorkflow || activeStepIndex < 0 || confirmingStepId) return;
@@ -3000,6 +3373,57 @@ export default function WorkflowsPage() {
     });
   };
 
+  const handleDeleteRemovedStep = (workflowId: string, stepId: string) => {
+    updateWorkflowById(workflowId, (workflow) => {
+      const targetStep = workflow.steps.find((step) => step.id === stepId);
+      if (!targetStep?.isRemoved) return workflow;
+
+      const updatedAt = new Date().toISOString();
+      const nextStepChats = workflow.stepChats ? { ...workflow.stepChats } : undefined;
+      const nextSkillDrafts = workflow.skillDrafts ? { ...workflow.skillDrafts } : undefined;
+      delete nextStepChats?.[stepId];
+      delete nextSkillDrafts?.[stepId];
+
+      const nextReviewComments = workflow.reviewComments ? { ...workflow.reviewComments } : undefined;
+      delete nextReviewComments?.[stepId];
+
+      const nextContextSelections = workflow.contextSelections
+        ? Object.fromEntries(
+          Object.entries(workflow.contextSelections)
+            .filter(([selectionStepId]) => selectionStepId !== stepId)
+            .map(([selectionStepId, selection]) => {
+              const disabledAutoInjectedStepIds = selection.disabledAutoInjectedStepIds
+                ?.filter((disabledStepId) => disabledStepId !== stepId);
+              return [
+                selectionStepId,
+                {
+                  ...selection,
+                  disabledAutoInjectedStepIds: disabledAutoInjectedStepIds?.length
+                    ? disabledAutoInjectedStepIds
+                    : undefined,
+                },
+              ];
+            }),
+        )
+        : undefined;
+
+      return normalizeWorkflowExecutionPlan({
+        ...workflow,
+        steps: workflow.steps.filter((step) => step.id !== stepId),
+        reviewedOutputFiles: workflow.reviewedOutputFiles?.filter((file) => file.stepId !== stepId),
+        reviewComments: nextReviewComments,
+        archivedReviewStepIds: workflow.archivedReviewStepIds?.filter((archivedStepId) => archivedStepId !== stepId),
+        contextSelections: nextContextSelections,
+        stepSnapshots: workflow.stepSnapshots?.filter((snapshot) => snapshot.stepId !== stepId),
+        stepChats: nextStepChats,
+        skillDrafts: nextSkillDrafts,
+        validationAttempts: workflow.validationAttempts?.filter((attempt) => attempt.stepId !== stepId),
+        demoHandoffs: workflow.demoHandoffs?.filter((handoff) => handoff.stepId !== stepId),
+        updated_at: updatedAt,
+      }, updatedAt);
+    });
+  };
+
   const handleUpdateStepRunMode = (workflowId: string, stepId: string, runMode: 'serial' | 'parallel') => {
     updateWorkflowById(workflowId, (workflow) => {
       const visibleSteps = getVisibleSteps(workflow);
@@ -3350,7 +3774,7 @@ export default function WorkflowsPage() {
                   <span className="truncate">创建人：{creatorName}</span>
                 </p>
                 <p className="mt-1 line-clamp-2 min-h-8 text-sm text-muted-foreground">
-                  {wf.description || '未填写工作流说明'}
+                  {wf.description.trim() || '-'}
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
@@ -3972,9 +4396,6 @@ export default function WorkflowsPage() {
           <DialogContent className="flex max-h-[calc(100dvh-2rem)] max-w-3xl flex-col gap-0 overflow-hidden p-0">
             <DialogHeader className="border-b border-border/40 px-6 py-5 pr-12">
               <DialogTitle>编辑工作流</DialogTitle>
-              <DialogDescription>
-                已有人执行过的步骤会软删除保留，可随时原样恢复，不破坏历史产物。
-              </DialogDescription>
             </DialogHeader>
 
             {editingWorkflow && (
@@ -3987,9 +4408,6 @@ export default function WorkflowsPage() {
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <label className="text-sm font-medium">当前流程步骤</label>
-                    <Badge variant="outline" className="text-xs">
-                      {getVisibleSteps(editingWorkflow).length} 个启用
-                    </Badge>
                   </div>
                   <div data-testid="workflow-step-sort-list" className="flex flex-col gap-2">
                     {getVisibleSteps(editingWorkflow).map((step, idx) => {
@@ -4124,9 +4542,6 @@ export default function WorkflowsPage() {
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <label className="text-sm font-medium">已移除步骤</label>
-                    <Badge variant="outline" className="text-xs">
-                      {editingWorkflow.steps.filter((step) => step.isRemoved).length} 个可恢复
-                    </Badge>
                   </div>
                   {editingWorkflow.steps.some((step) => step.isRemoved) ? (
                     <div className="space-y-2">
@@ -4137,19 +4552,28 @@ export default function WorkflowsPage() {
                         >
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-sm font-medium">{step.name}</p>
-                            <p className="text-xs text-muted-foreground">
-                              原步骤保留产物与状态，可原样加回
-                            </p>
                           </div>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-8 gap-1.5 text-xs"
-                            onClick={() => handleRestoreStep(editingWorkflow.id, step.id)}
-                          >
-                            <RotateCcw className="h-3.5 w-3.5" />
-                            恢复
-                          </Button>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-8 gap-1.5 text-xs"
+                              onClick={() => handleRestoreStep(editingWorkflow.id, step.id)}
+                            >
+                              <RotateCcw className="h-3.5 w-3.5" />
+                              恢复
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-8 gap-1.5 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+                              aria-label={`移除 ${step.name}`}
+                              onClick={() => handleDeleteRemovedStep(editingWorkflow.id, step.id)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              移除
+                            </Button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -5290,206 +5714,221 @@ export default function WorkflowsPage() {
         )}
 
         {/* Chat Messages */}
-        <ScrollArea className="min-h-0 min-w-0 flex-1 overflow-hidden p-4 [&_[data-slot=scroll-area-viewport]]:min-w-0 [&_[data-slot=scroll-area-viewport]]:overflow-x-hidden">
-          {currentStep?.status === 'completed' && currentStep.output && chatMessages.length === 0 ? (
-            /* Show completed step output */
-            <div className="min-w-0 max-w-full space-y-4 overflow-hidden">
-              <div className="flex items-center gap-2 mb-4">
-                <CheckCircle2 className="h-5 w-5 text-success" />
-                <h3 className="font-semibold">本步骤已完成</h3>
-              </div>
-              <div className="min-w-0 max-w-full overflow-hidden rounded-lg border border-border/40 bg-muted/50 p-4">
-                <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
-                  <h4 className="min-w-0 truncate text-sm font-medium text-primary">{currentStep.name} — 产出物</h4>
-                  <div className="flex shrink-0 items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 gap-1 text-xs"
-                      onClick={() => copyMarkdownToClipboard(currentStep.output || '', `${currentStep.name}产物`)}
-                    >
-                      复制
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 gap-1 text-xs"
-                      onClick={() => currentStep.output && downloadStepOutput(currentStep.name, currentStep.output)}
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                      下载
-                    </Button>
-                  </div>
+        <div ref={chatScrollAreaRef} className="relative min-h-0 min-w-0 flex-1">
+          <ScrollArea className="h-full min-w-0 overflow-hidden p-4 [&_[data-slot=scroll-area-viewport]]:min-w-0 [&_[data-slot=scroll-area-viewport]]:overflow-x-hidden">
+            {currentStep?.status === 'completed' && currentStep.output && chatMessages.length === 0 ? (
+              /* Show completed step output */
+              <div className="min-w-0 max-w-full space-y-4 overflow-hidden">
+                <div className="flex items-center gap-2 mb-4">
+                  <CheckCircle2 className="h-5 w-5 text-success" />
+                  <h3 className="font-semibold">本步骤已完成</h3>
                 </div>
-                {(() => {
-                  const outputPreview = getRenderedMarkdownPreview(currentStep.output || '');
-                  return (
-                    <>
-                      <CompactMarkdown content={outputPreview.content} />
-                      {outputPreview.truncated && (
-                        <p className="mt-3 rounded-md border border-border/60 bg-muted/35 px-3 py-2 text-xs text-muted-foreground">
-                          预览已省略 {outputPreview.omittedChars.toLocaleString('zh-CN')} 字符，下载可获取完整 Markdown。
-                        </p>
-                      )}
-                    </>
-                  );
-                })()}
-              </div>
-              {currentSkill?.checklist && currentSkill.checklist.length > 0 && (
-                <div className="bg-muted/30 border border-border/30 rounded-lg p-4">
-                  <p className="font-medium text-sm mb-2">质量 Checklist</p>
-                  <ul className="space-y-1">
-                    {currentSkill.checklist.map((item, idx) => (
-                      <li key={idx} className="text-sm text-muted-foreground flex items-start gap-2">
-                        <CheckCircle2 className="h-3.5 w-3.5 text-success mt-0.5 shrink-0" />
-                        {item}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          ) : chatMessages.length === 0 && currentSkill ? (
-            /* Show step start guide */
-            <div className="flex flex-col items-center justify-center h-full text-center py-10">
-              <Sparkles className="h-8 w-8 text-primary/50 mb-4" />
-              <h3 className="font-semibold text-lg mb-2">开始「{currentStep?.name}」步骤</h3>
-              <p className="text-sm text-muted-foreground max-w-md mb-4">
-                AI 将基于「{currentSkill.name}」Skill 的方法论框架，与你协作完成本步骤。
-              </p>
-                <div className="max-w-lg rounded-lg bg-muted/50 p-4 text-left text-sm">
-                <p className="font-medium mb-2">方法论框架：</p>
-                <pre className="whitespace-pre-wrap font-sans text-muted-foreground">{currentSkill.methodology}</pre>
-              </div>
-              {currentSkill.checklist.length > 0 && (
-                <div className="mt-4 max-w-lg w-full">
-                  <p className="font-medium text-sm mb-2">质量 Checklist：</p>
-                  <ul className="space-y-1">
-                    {currentSkill.checklist.map((item, idx) => (
-                      <li key={idx} className="text-sm text-muted-foreground flex items-start gap-2">
-                        <span>☐</span> {item}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="w-full min-w-0 max-w-full space-y-4 overflow-x-hidden">
-              {chatMessages.map((msg, idx) => {
-                const stoppedMessageContent = msg.role === 'assistant'
-                  ? getChatCancelledDisplayContent(msg.content)
-                  : null;
-                const renderDocumentCard = msg.role === 'assistant'
-                  && !stoppedMessageContent
-                  && shouldRenderAssistantDocumentCard(msg);
-                const renderThinkingIndicator = isStreaming
-                  && idx === lastAssistantMessageIndex
-                  && msg.role === 'assistant'
-                  && !msg.content.trim();
-                const renderProcessingTimer = isStreaming
-                  && idx === lastAssistantMessageIndex
-                  && msg.role === 'assistant';
-                return (
-                  <div
-                    key={idx}
-                    className={cn(
-                      'flex w-full min-w-0 max-w-full',
-                      msg.role === 'user' ? 'justify-end pl-6 sm:pl-10' : 'justify-start',
-                      msg.role !== 'user' && !stoppedMessageContent ? 'pr-6 sm:pr-10' : '',
-                    )}
-                  >
-                    {renderDocumentCard ? (
-                      <div className="flex min-w-0 max-w-full flex-col gap-2 items-start md:max-w-[80%] xl:max-w-2xl">
-                        {renderProcessingTimer && (
-                          <AssistantProcessingTimer seconds={currentProcessingElapsedSeconds} />
-                        )}
-                        {renderAssistantDocumentCard(msg.content, idx)}
-                      </div>
-                    ) : (
-                      <div
-                        className={cn(
-                          'flex min-w-0 max-w-full flex-col gap-2',
-                          msg.role === 'user'
-                            ? 'items-end md:max-w-[80%] xl:max-w-2xl'
-                            : stoppedMessageContent
-                              ? 'w-full items-stretch'
-                              : 'items-start md:max-w-[80%] xl:max-w-2xl',
-                        )}
+                <div className="min-w-0 max-w-full overflow-hidden rounded-lg border border-border/40 bg-muted/50 p-4">
+                  <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
+                    <h4 className="min-w-0 truncate text-sm font-medium text-primary">{currentStep.name} — 产出物</h4>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 gap-1 text-xs"
+                        onClick={() => copyMarkdownToClipboard(currentStep.output || '', `${currentStep.name}产物`)}
                       >
-                        {stoppedMessageContent ? (
-                          <AssistantStoppedMessage content={stoppedMessageContent} />
-                        ) : (
-                          <>
-                            {renderProcessingTimer && (
-                              <AssistantProcessingTimer seconds={currentProcessingElapsedSeconds} />
-                            )}
-                            {renderThinkingIndicator ? (
-                              <AssistantThinkingIndicator />
-                            ) : (
-                              <div
-                                className={`w-fit min-w-0 max-w-full overflow-hidden break-words rounded-lg p-3 text-sm [overflow-wrap:anywhere] ${
-                                  msg.role === 'user'
-                                    ? 'bg-primary text-primary-foreground'
-                                    : 'bg-muted/50 border border-border/40'
-                                }`}
-                              >
-                                {msg.role === 'assistant' ? (
-                                  <CompactMarkdown content={msg.content} />
-                                ) : (
-                                  <div className="flex min-w-0 max-w-full flex-col gap-2">
-                                    {msg.attachments && msg.attachments.length > 0 && (
-                                      <div className="flex max-w-full flex-wrap justify-end gap-2">
-                                        {msg.attachments.map((attachment) => (
-                                          attachment.isImage && attachment.previewUrl ? (
-                                            <img
-                                              key={attachment.id}
-                                              src={attachment.previewUrl}
-                                              alt={attachment.name}
-                                              className="max-h-64 max-w-full rounded-md border border-primary-foreground/20 object-contain"
-                                            />
-                                          ) : (
-                                            <div
-                                              key={attachment.id}
-                                              className="flex max-w-full items-center gap-1.5 rounded-md bg-primary-foreground/10 px-2 py-1 text-xs"
-                                            >
-                                              {attachment.isImage ? (
-                                                <ImageIcon className="size-3.5 shrink-0" />
-                                              ) : (
-                                                <Paperclip className="size-3.5 shrink-0" />
-                                              )}
-                                              <span className="max-w-44 truncate">{attachment.name}</span>
-                                              <span className="shrink-0 opacity-80">{formatFileSize(attachment.size)}</span>
-                                            </div>
-                                          )
-                                        ))}
-                                      </div>
-                                    )}
-                                    {msg.content.trim() && (
-                                      <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.content}</div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </>
+                        复制
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 gap-1 text-xs"
+                        onClick={() => currentStep.output && downloadStepOutput(currentStep.name, currentStep.output)}
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        下载
+                      </Button>
+                    </div>
+                  </div>
+                  {(() => {
+                    const outputPreview = getRenderedMarkdownPreview(currentStep.output || '');
+                    return (
+                      <>
+                        <CompactMarkdown content={outputPreview.content} />
+                        {outputPreview.truncated && (
+                          <p className="mt-3 rounded-md border border-border/60 bg-muted/35 px-3 py-2 text-xs text-muted-foreground">
+                            预览已省略 {outputPreview.omittedChars.toLocaleString('zh-CN')} 字符，下载可获取完整 Markdown。
+                          </p>
                         )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              {isStreaming && !hasStreamingAssistantPlaceholder && (
-                <div className="flex justify-start">
-                  <div className="flex flex-col items-start gap-2">
-                    <AssistantThinkingIndicator />
-                  </div>
+                      </>
+                    );
+                  })()}
                 </div>
-              )}
-              <div ref={chatEndRef} />
-            </div>
+                {currentSkill?.checklist && currentSkill.checklist.length > 0 && (
+                  <div className="bg-muted/30 border border-border/30 rounded-lg p-4">
+                    <p className="font-medium text-sm mb-2">质量 Checklist</p>
+                    <ul className="space-y-1">
+                      {currentSkill.checklist.map((item, idx) => (
+                        <li key={idx} className="text-sm text-muted-foreground flex items-start gap-2">
+                          <CheckCircle2 className="h-3.5 w-3.5 text-success mt-0.5 shrink-0" />
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ) : chatMessages.length === 0 && currentSkill ? (
+              /* Show step start guide */
+              <div className="flex flex-col items-center justify-center h-full text-center py-10">
+                <Sparkles className="h-8 w-8 text-primary/50 mb-4" />
+                <h3 className="font-semibold text-lg mb-2">开始「{currentStep?.name}」步骤</h3>
+                <p className="text-sm text-muted-foreground max-w-md mb-4">
+                  AI 将基于「{currentSkill.name}」Skill 的方法论框架，与你协作完成本步骤。
+                </p>
+                <div className="max-w-lg rounded-lg bg-muted/50 p-4 text-left text-sm">
+                  <p className="font-medium mb-2">方法论框架：</p>
+                  <pre className="whitespace-pre-wrap font-sans text-muted-foreground">{currentSkill.methodology}</pre>
+                </div>
+                {currentSkill.checklist.length > 0 && (
+                  <div className="mt-4 max-w-lg w-full">
+                    <p className="font-medium text-sm mb-2">质量 Checklist：</p>
+                    <ul className="space-y-1">
+                      {currentSkill.checklist.map((item, idx) => (
+                        <li key={idx} className="text-sm text-muted-foreground flex items-start gap-2">
+                          <span>☐</span> {item}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="w-full min-w-0 max-w-full space-y-4 overflow-x-hidden">
+                {chatMessages.map((msg, idx) => {
+                  const stoppedMessageContent = msg.role === 'assistant'
+                    ? getChatCancelledDisplayContent(msg.content)
+                    : null;
+                  const renderDocumentCard = msg.role === 'assistant'
+                    && !stoppedMessageContent
+                    && shouldRenderAssistantDocumentCard(msg);
+                  const renderThinkingIndicator = isStreaming
+                    && idx === lastAssistantMessageIndex
+                    && msg.role === 'assistant'
+                    && !msg.content.trim();
+                  const renderProcessingTimer = isStreaming
+                    && idx === lastAssistantMessageIndex
+                    && msg.role === 'assistant';
+                  return (
+                    <div
+                      key={idx}
+                      className={cn(
+                        'flex w-full min-w-0 max-w-full',
+                        msg.role === 'user' ? 'justify-end pl-6 sm:pl-10' : 'justify-start',
+                        msg.role !== 'user' && !stoppedMessageContent ? 'pr-6 sm:pr-10' : '',
+                      )}
+                    >
+                      {renderDocumentCard ? (
+                        <div className="flex min-w-0 max-w-full flex-col gap-2 items-start md:max-w-[80%] xl:max-w-2xl">
+                          {renderProcessingTimer && (
+                            <AssistantProcessingTimer seconds={currentProcessingElapsedSeconds} />
+                          )}
+                          {renderAssistantDocumentCard(msg.content, idx)}
+                        </div>
+                      ) : (
+                        <div
+                          className={cn(
+                            'flex min-w-0 max-w-full flex-col gap-2',
+                            msg.role === 'user'
+                              ? 'items-end md:max-w-[80%] xl:max-w-2xl'
+                              : stoppedMessageContent
+                                ? 'w-full items-stretch'
+                                : 'items-start md:max-w-[80%] xl:max-w-2xl',
+                          )}
+                        >
+                          {stoppedMessageContent ? (
+                            <AssistantStoppedMessage content={stoppedMessageContent} />
+                          ) : (
+                            <>
+                              {renderProcessingTimer && (
+                                <AssistantProcessingTimer seconds={currentProcessingElapsedSeconds} />
+                              )}
+                              {renderThinkingIndicator ? (
+                                <AssistantThinkingIndicator />
+                              ) : (
+                                <div
+                                  className={`w-fit min-w-0 max-w-full overflow-hidden break-words rounded-lg p-3 text-sm [overflow-wrap:anywhere] ${
+                                    msg.role === 'user'
+                                      ? 'bg-primary text-primary-foreground'
+                                      : 'bg-muted/50 border border-border/40'
+                                  }`}
+                                >
+                                  {msg.role === 'assistant' ? (
+                                    <CompactMarkdown content={msg.content} />
+                                  ) : (
+                                    <div className="flex min-w-0 max-w-full flex-col gap-2">
+                                      {msg.attachments && msg.attachments.length > 0 && (
+                                        <div className="flex max-w-full flex-wrap justify-end gap-2">
+                                          {msg.attachments.map((attachment) => (
+                                            attachment.isImage && attachment.previewUrl ? (
+                                              <img
+                                                key={attachment.id}
+                                                src={attachment.previewUrl}
+                                                alt={attachment.name}
+                                                className="max-h-64 max-w-full rounded-md border border-primary-foreground/20 object-contain"
+                                              />
+                                            ) : (
+                                              <div
+                                                key={attachment.id}
+                                                className="flex max-w-full items-center gap-1.5 rounded-md bg-primary-foreground/10 px-2 py-1 text-xs"
+                                              >
+                                                {attachment.isImage ? (
+                                                  <ImageIcon className="size-3.5 shrink-0" />
+                                                ) : (
+                                                  <Paperclip className="size-3.5 shrink-0" />
+                                                )}
+                                                <span className="max-w-44 truncate">{attachment.name}</span>
+                                                <span className="shrink-0 opacity-80">{formatFileSize(attachment.size)}</span>
+                                              </div>
+                                            )
+                                          ))}
+                                        </div>
+                                      )}
+                                      {msg.content.trim() && (
+                                        <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.content}</div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                {isStreaming && !hasStreamingAssistantPlaceholder && (
+                  <div className="flex justify-start">
+                    <div className="flex flex-col items-start gap-2">
+                      <AssistantThinkingIndicator />
+                    </div>
+                  </div>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+            )}
+          </ScrollArea>
+
+          {showChatScrollToBottom && (
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="absolute bottom-4 left-1/2 z-20 size-9 -translate-x-1/2 rounded-full border-border/70 bg-background/95 text-muted-foreground shadow-lg backdrop-blur hover:text-foreground"
+              onClick={() => scrollChatToBottom('smooth')}
+              aria-label="滚动到底部"
+            >
+              <ArrowDown className="size-4" />
+            </Button>
           )}
-        </ScrollArea>
+        </div>
 
         {/* Chat Input */}
         <div className="flex flex-col gap-3 border-t border-border/40 p-4">
