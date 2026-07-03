@@ -97,7 +97,9 @@ Required flow:
 
 Remote deployment is no longer the default verification path. Use `ssh boxhub-r` and `/root/data/BattleFlow` only when the user explicitly asks to deploy or verify on the shared remote Linux host.
 
-Remote production deployments that use `pnpm start` do not need a manual web-tool environment edit: `scripts/start.sh` defaults `BATTLEFLOW_CLAUDE_TOOLS` to `WebSearch,WebFetch`. Codex still needs to ensure the remote host has Claude Code CLI installed/authenticated, outbound network access from the host, and the repository `.agents/settings.json` with `skipWebFetchPreflight: true`.
+Remote production deployments that use `pnpm start` do not need a manual web-tool environment edit: `scripts/start.sh` defaults `BATTLEFLOW_CLAUDE_TOOLS` to `WebSearch,WebFetch`. Docker deployments must also keep `Dockerfile` pointed at `pnpm start` and keep `docker-compose.yml` passing `BATTLEFLOW_CLAUDE_TOOLS: "${BATTLEFLOW_CLAUDE_TOOLS:-WebSearch,WebFetch}"`. Codex still needs to ensure the remote host has Claude Code CLI installed/authenticated, outbound network access from the host, and the repository `.agents/settings.json` with `skipWebFetchPreflight: true`.
+
+After any production or Docker deployment, verify `GET /api/agent-runtime` returns `toolsEnabled: true` and `tools: ["WebSearch", "WebFetch"]`. This catches cases where the image or compose entrypoint bypasses `scripts/start.sh`.
 
 Never commit `.env*`, direct Postgres connection strings, Claude credentials, `FRIEREN_DEMO_HMAC_SECRET`, Supabase service-role keys, imported private Skill packages, or runtime registry data under `data/`.
 

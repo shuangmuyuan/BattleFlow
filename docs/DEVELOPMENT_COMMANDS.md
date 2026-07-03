@@ -48,6 +48,14 @@ BATTLEFLOW_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start
 
 `scripts/start.sh` runs `node dist/server.js`, so `pnpm build` must run first. Production start defaults `BATTLEFLOW_CLAUDE_TOOLS` to `WebSearch,WebFetch`; override the variable only when the deployment needs to disable or restrict Claude Code web tools.
 
+## Docker Compose
+
+```bash
+docker compose up -d --build
+```
+
+The Docker image starts through `pnpm start`, not `node dist/server.js`, so the same production defaults from `scripts/start.sh` are applied. `docker-compose.yml` also passes `BATTLEFLOW_CLAUDE_TOOLS` explicitly as `WebSearch,WebFetch` by default. After deployment, verify `GET /api/agent-runtime` reports `toolsEnabled: true` and includes both `WebSearch` and `WebFetch`.
+
 ## Database Bootstrap
 
 ```bash
