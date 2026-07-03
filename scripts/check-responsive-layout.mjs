@@ -6,7 +6,7 @@ const root = process.cwd();
 const layoutContracts = [
   {
     name: 'Dashboard shell uses fixed viewport and internal scroll',
-    file: 'src/app/dashboard/layout.tsx',
+    file: 'src/app/dashboard/dashboard-shell.tsx',
     requiredTokenSets: [
       ['h-dvh', 'min-w-0', 'overflow-hidden'],
       ['md:hidden'],
