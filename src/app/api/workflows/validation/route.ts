@@ -5,6 +5,7 @@ import { requireOrganizationContext } from '@/lib/auth/server';
 import { AuthError } from '@/lib/auth/types';
 import { requireWorkflowAccess } from '@/lib/resource-metadata-repository';
 import { getSkill } from '@/lib/skill-registry';
+import { normalizeAiGeneratedText } from '@/lib/simplified-chinese';
 import {
   getWorkflow,
   upsertWorkflow,
@@ -234,7 +235,7 @@ function normalizeWorkflowExecutionPlan(workflow: WorkflowRecord, updatedAt: str
 }
 
 function normalizeCandidateOutput(workflow: WorkflowRecord, step: WorkflowStepRecord, output: string) {
-  const trimmed = output.trim();
+  const trimmed = normalizeAiGeneratedText('workflow-validation.candidate-output', output).trim();
   if (/^#\s+\S/.test(trimmed)) return trimmed;
   return `# ${workflow.name}\n\n## ${step.name}\n\n${trimmed}`;
 }

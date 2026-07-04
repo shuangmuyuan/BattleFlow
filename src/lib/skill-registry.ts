@@ -25,6 +25,8 @@ export interface SkillPackageAsset {
   mime_type: string;
   size: number;
   content_kind: SkillPackageAssetContentKind;
+  package_path?: string;
+  absolute_path?: string;
   content?: string;
   truncated?: boolean;
   note?: string;
@@ -839,6 +841,9 @@ function normalizeStoredPackageAssets(value: unknown): SkillPackageAsset[] {
     if (!assetPath) return [];
 
     const contentKind = record.content_kind === 'text' ? 'text' : 'metadata';
+    const packagePath = getString(record.package_path);
+    const absolutePath = getString(record.absolute_path)
+      || (packagePath && path.isAbsolute(packagePath) ? path.join(packagePath, assetPath) : '');
     return [{
       path: assetPath,
       kind,
@@ -846,10 +851,41 @@ function normalizeStoredPackageAssets(value: unknown): SkillPackageAsset[] {
       mime_type: getString(record.mime_type, getAssetMimeType(assetPath)),
       size,
       content_kind: contentKind,
+      package_path: packagePath || undefined,
+      absolute_path: absolutePath || undefined,
       content: contentKind === 'text' && typeof record.content === 'string' ? record.content : undefined,
       truncated: typeof record.truncated === 'boolean' ? record.truncated : undefined,
       note: typeof record.note === 'string' ? record.note : undefined,
     }];
+  });
+}
+
+function withPackageAssetRuntimePaths(assets: SkillPackageAsset[], packagePath?: string): SkillPackageAsset[] {
+  const normalizedPackagePath = packagePath && path.isAbsolute(packagePath)
+    ? path.normalize(packagePath)
+    : undefined;
+
+  return assets.map((asset) => {
+    const assetPackagePath = normalizedPackagePath || getString(asset.package_path);
+    const normalizedAssetPackagePath = assetPackagePath && path.isAbsolute(assetPackagePath)
+      ? path.normalize(assetPackagePath)
+      : undefined;
+    const assetRelativePath = asset.path
+      .split(/[\\/]+/)
+      .filter((part) => part && part !== '.' && part !== '..')
+      .join(path.sep);
+    const assetAbsolutePath = normalizedAssetPackagePath && assetRelativePath
+      ? path.join(normalizedAssetPackagePath, assetRelativePath)
+      : getString(asset.absolute_path);
+    const normalizedAbsolutePath = assetAbsolutePath && path.isAbsolute(assetAbsolutePath)
+      ? path.normalize(assetAbsolutePath)
+      : undefined;
+
+    return {
+      ...asset,
+      package_path: normalizedAssetPackagePath,
+      absolute_path: normalizedAbsolutePath,
+    };
   });
 }
 
@@ -893,6 +929,8 @@ async function buildPackageAsset(packagePath: string, relativeAssetPath: string,
     mime_type: getAssetMimeType(assetPath),
     size: stat.size,
     content_kind: 'metadata',
+    package_path: packagePath,
+    absolute_path: fullPath,
   };
 
   if (!isPotentialTextAsset(assetPath, kind)) {
@@ -966,11 +1004,16 @@ function currentVersionPayload(skill: SkillRecord) {
 
 function withPackagePath(skill: SkillRecord, packagePath?: string): SkillRecord {
   if (!packagePath) return skill;
+  const packageAssets = withPackageAssetRuntimePaths(normalizeStoredPackageAssets(skill.package_assets), packagePath);
   return {
     ...skill,
+    package_assets: packageAssets,
     versions: skill.versions.map((version) => ({
       ...version,
       package_path: packagePath,
+      package_assets: Array.isArray(version.package_assets)
+        ? withPackageAssetRuntimePaths(normalizeStoredPackageAssets(version.package_assets), packagePath)
+        : packageAssets,
     })),
   };
 }
@@ -1189,15 +1232,23 @@ function skillFromDatabaseRow(
   const assetManifest = packageAssetFromManifest(row.asset_manifest);
   const createdAt = toIsoString(row.created_at);
   const updatedAt = toIsoString(row.updated_at, createdAt);
+  const fallbackPackagePath = getString(definition.package_path)
+    || getString(assetManifest.find((asset) => getString(asset.package_path))?.package_path)
+    || path.join(packageRoot, row.id, row.version);
   const versionPayloads = versions.map((versionRow) => {
     const versionDefinition = toRecord(versionRow.definition);
+    const versionAssets = packageAssetFromManifest(versionRow.asset_manifest);
+    const versionPackagePath = getString(versionDefinition.package_path)
+      || getString(versionAssets.find((asset) => getString(asset.package_path))?.package_path)
+      || fallbackPackagePath;
     return {
       version: getString(versionRow.version, row.version),
       updated_at: toIsoString(versionRow.created_at, updatedAt),
       changelog: getString(versionRow.changelog_note),
+      package_path: versionPackagePath || undefined,
       skill_md: getString(versionDefinition.skill_md),
       meta_json: toRecord(versionDefinition.meta_json),
-      package_assets: packageAssetFromManifest(versionRow.asset_manifest),
+      package_assets: versionAssets,
     };
   });
 
@@ -1229,6 +1280,7 @@ function skillFromDatabaseRow(
       version: row.version,
       updated_at: updatedAt,
       changelog: getString(definition.changelog),
+      package_path: fallbackPackagePath || undefined,
       skill_md: getString(definition.skill_md),
       meta_json: toRecord(definition.meta_json),
       package_assets: assetManifest,
@@ -1404,17 +1456,33 @@ function serializeSkillReviewRequest(request: SkillReviewRequest): Record<string
 
 async function hydrateSkillPackageAssets(skill: SkillRecord): Promise<SkillRecord> {
   const versionPayload = currentVersionPayload(skill);
+  const packagePathCandidates = [
+    versionPayload?.package_path,
+    path.join(packageRoot, skill.id, skill.version),
+    skill.scope === 'official' ? path.join(seedRoot, skill.id) : '',
+  ];
   const storedAssets = normalizeStoredPackageAssets(skill.package_assets).length > 0
     ? normalizeStoredPackageAssets(skill.package_assets)
     : normalizeStoredPackageAssets(versionPayload?.package_assets);
+  for (const asset of storedAssets) {
+    if (asset.package_path) packagePathCandidates.push(asset.package_path);
+  }
+  let packagePath: string | undefined;
+  for (const candidate of packagePathCandidates) {
+    if (!candidate) continue;
+    if (await isRuntimePackageAssetPathAllowed(candidate)) {
+      packagePath = candidate;
+      break;
+    }
+  }
+
   if (storedAssets.length > 0) {
     return {
       ...skill,
-      package_assets: storedAssets,
+      package_assets: withPackageAssetRuntimePaths(storedAssets, packagePath),
     };
   }
 
-  const packagePath = versionPayload?.package_path;
   if (!packagePath || !(await isRuntimePackageAssetPathAllowed(packagePath))) {
     return {
       ...skill,
@@ -1751,37 +1819,40 @@ async function upsertSkill(skill: SkillRecord, packagePath?: string, options: Im
   if (packagePath) {
     storedPackagePath = await copyPackage(packagePath, effectiveRecord);
   }
+  const runtimeRecord = storedPackagePath
+    ? withPackagePath(effectiveRecord, storedPackagePath)
+    : effectiveRecord;
 
   const versionChangelog = existing
     ? shouldBumpVersion
-      ? changelogNote || `${versionBumpLabel(versionBump)}：平台自动从 v${existing.version} 升级到 v${effectiveRecord.version}。`
-      : effectiveRecord.versions[0]?.changelog || existing.versions[0]?.changelog || '更新当前记录。'
-    : effectiveRecord.versions[0]?.changelog || '导入当前版本。';
+      ? changelogNote || `${versionBumpLabel(versionBump)}：平台自动从 v${existing.version} 升级到 v${runtimeRecord.version}。`
+      : runtimeRecord.versions[0]?.changelog || existing.versions[0]?.changelog || '更新当前记录。'
+    : runtimeRecord.versions[0]?.changelog || '导入当前版本。';
   const versionPayload = {
-    version: effectiveRecord.version,
-    updated_at: effectiveRecord.updated_at,
+    version: runtimeRecord.version,
+    updated_at: runtimeRecord.updated_at,
     changelog: versionChangelog,
     package_path: storedPackagePath,
-    skill_md: effectiveRecord.skill_md,
-    meta_json: effectiveRecord.meta_json,
-    package_assets: effectiveRecord.package_assets,
+    skill_md: runtimeRecord.skill_md,
+    meta_json: runtimeRecord.meta_json,
+    package_assets: runtimeRecord.package_assets,
   };
 
   const nextSkill: SkillRecord = {
-    ...effectiveRecord,
+    ...runtimeRecord,
     versions: existing
       ? [
           versionPayload,
-          ...existing.versions.filter((item) => item.version !== effectiveRecord.version),
+          ...existing.versions.filter((item) => item.version !== runtimeRecord.version),
         ]
       : [
           versionPayload,
-          ...effectiveRecord.versions.filter((item) => item.version !== effectiveRecord.version),
+          ...runtimeRecord.versions.filter((item) => item.version !== runtimeRecord.version),
         ],
   };
 
   const nextSkills = existing
-    ? index.skills.map((item) => (item.id === effectiveRecord.id ? nextSkill : item))
+    ? index.skills.map((item) => (item.id === runtimeRecord.id ? nextSkill : item))
     : [...index.skills, nextSkill];
 
   await writeIndex({ skills: nextSkills, review_requests: index.review_requests });

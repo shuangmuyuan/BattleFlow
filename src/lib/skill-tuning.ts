@@ -1,6 +1,11 @@
 import { spawn } from 'node:child_process';
 import { buildClaudeToolsArgs } from './agent-adapters/claude-code-tools';
 import { randomUUID } from 'node:crypto';
+import {
+  SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION,
+  toSimplifiedChineseDeep,
+  warnIfLikelyTraditionalChinese,
+} from './simplified-chinese';
 import type { SkillRecord } from './skill-registry';
 import { cleanExecutableSkillText } from './workflow-skill-draft';
 
@@ -214,6 +219,22 @@ function extractGeneratedDraft(text: string): RawGeneratedDraft {
   return extractJsonObject(text);
 }
 
+function simplifyGeneratedDraft(rawDraft: RawGeneratedDraft): RawGeneratedDraft {
+  const simplified = toSimplifiedChineseDeep(rawDraft);
+  const tuningRequest = rawDraft.tuning_request;
+  const generatedOnly = {
+    ...simplified,
+    tuning_request: undefined,
+  };
+
+  warnIfLikelyTraditionalChinese('skill-tuning.draft', JSON.stringify(generatedOnly));
+
+  return {
+    ...simplified,
+    tuning_request: tuningRequest,
+  };
+}
+
 function runClaudeCli(systemPrompt: string, prompt: string, timeoutMs = 120_000) {
   return new Promise<string>((resolve, reject) => {
     const command = getClaudeCommand();
@@ -380,6 +401,7 @@ function buildPrompt(input: GenerateWorkflowSkillDraftInput) {
     '7. acceptance criteria、required sections、evidence rules、failure conditions 应该描述该 Skill 产物的可验证验收契约；默认保留基线契约，并结合调优目标让标准更明确。',
     '8. quality_gates 应该是验证这个草稿是否生效的检查点。',
     '9. 只返回下方固定分区格式，不要 Markdown 代码块，不要解释文字。',
+    '10. 除 TUNING_REQUEST 必须保留用户原始调优请求外，其余所有面向用户的中文内容必须使用简体中文。',
     '',
     '固定分区格式：',
     '=== NAME ===',
@@ -448,18 +470,22 @@ export async function generateWorkflowSkillDraft(input: GenerateWorkflowSkillDra
     'You are a senior AI product workflow architect and Skill editor.',
     'You produce production-ready Skill drafts for BattleFlow.',
     'You must return only valid JSON matching the requested schema.',
+    SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION,
   ].join('\n');
   const rawText = await runClaudeCli(systemPrompt, buildPrompt({ ...input, instruction }));
   let rawDraft: RawGeneratedDraft;
   try {
-    rawDraft = extractGeneratedDraft(rawText);
+    rawDraft = simplifyGeneratedDraft(extractGeneratedDraft(rawText));
   } catch {
     const repairedText = await runClaudeCli(
-      'You repair malformed structured text. Return only the requested section format.',
+      [
+        'You repair malformed structured text. Return only the requested section format.',
+        SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION,
+      ].join('\n'),
       buildRepairPrompt(rawText),
       90_000,
     );
-    rawDraft = extractGeneratedDraft(repairedText);
+    rawDraft = simplifyGeneratedDraft(extractGeneratedDraft(repairedText));
   }
   const now = new Date().toISOString();
   const baseSkill = input.baseSkill;

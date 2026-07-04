@@ -87,7 +87,7 @@ export interface WorkflowStepRecord {
   completed_at?: string;
 }
 
-export type WorkflowFileContentKind = 'text' | 'image_data_url' | 'pdf_data_url' | 'metadata';
+export type WorkflowFileContentKind = 'text' | 'image_data_url' | 'metadata';
 
 export interface WorkflowStoredAttachmentFields {
   messageId?: string;
@@ -150,6 +150,7 @@ export interface WorkflowReviewedOutputFileRecord {
 
 export interface WorkflowChatAttachmentRecord {
   id: string;
+  stepId?: string;
   name: string;
   type: string;
   size: number;
@@ -427,7 +428,7 @@ function normalizeStep(step: Partial<WorkflowStepRecord>, index: number): Workfl
 }
 
 function normalizeFileContentKind(value: unknown): WorkflowFileContentKind {
-  return value === 'text' || value === 'image_data_url' || value === 'pdf_data_url' ? value : 'metadata';
+  return value === 'text' || value === 'image_data_url' ? value : 'metadata';
 }
 
 function normalizeStoredAttachmentFields(
@@ -451,6 +452,7 @@ function normalizeStoredAttachmentFields(
 
 function normalizeContextFile(file: Partial<WorkflowContextFileRecord>, index: number): WorkflowContextFileRecord {
   const now = nowIso();
+  const contentKind = normalizeFileContentKind(file.contentKind);
   return {
     id: file.id || uniqueId('context-file', file.name || `context-${index + 1}`),
     stepId: file.stepId || '',
@@ -459,8 +461,8 @@ function normalizeContextFile(file: Partial<WorkflowContextFileRecord>, index: n
     size: typeof file.size === 'number' ? file.size : 0,
     isImage: Boolean(file.isImage),
     previewUrl: typeof file.previewUrl === 'string' ? file.previewUrl : undefined,
-    contentKind: normalizeFileContentKind(file.contentKind),
-    content: typeof file.content === 'string' ? file.content : undefined,
+    contentKind,
+    content: contentKind === 'image_data_url' && typeof file.content === 'string' ? file.content : undefined,
     note: typeof file.note === 'string' ? file.note : undefined,
     created_at: file.created_at || now,
     ...normalizeStoredAttachmentFields(file),
@@ -472,14 +474,15 @@ function normalizeReviewedOutputFile(
   index: number,
 ): WorkflowReviewedOutputFileRecord {
   const now = nowIso();
+  const contentKind = normalizeFileContentKind(file.contentKind);
   return {
     id: file.id || uniqueId('reviewed-output', file.name || `reviewed-${index + 1}`),
     stepId: file.stepId || '',
     name: file.name || `已审核产物 ${index + 1}`,
     type: file.type || 'unknown',
     size: typeof file.size === 'number' ? file.size : 0,
-    contentKind: normalizeFileContentKind(file.contentKind),
-    content: typeof file.content === 'string' ? file.content : undefined,
+    contentKind,
+    content: contentKind === 'image_data_url' && typeof file.content === 'string' ? file.content : undefined,
     note: typeof file.note === 'string' ? file.note : undefined,
     created_at: file.created_at || now,
     ...normalizeStoredAttachmentFields(file),
@@ -646,6 +649,7 @@ function normalizeChatAttachments(value: unknown): WorkflowChatAttachmentRecord[
       id: typeof attachment.id === 'string' && attachment.id.trim()
         ? attachment.id
         : uniqueId('chat-attachment', name),
+      stepId: typeof attachment.stepId === 'string' ? attachment.stepId : undefined,
       name,
       type,
       size: typeof attachment.size === 'number' && Number.isFinite(attachment.size) ? attachment.size : 0,

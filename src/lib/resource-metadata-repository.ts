@@ -47,6 +47,7 @@ function skillDefinition(skill: SkillRecord): Record<string, unknown> {
     review: skill.review,
     attachments: skill.attachments,
     changelog: skill.changelog,
+    package_path: skill.versions[0]?.package_path,
   };
 }
 
@@ -57,6 +58,8 @@ function skillAssetManifest(skill: SkillRecord): Array<Record<string, unknown>> 
     source_folder: asset.source_folder,
     content_type: asset.mime_type,
     size_bytes: asset.size,
+    package_path: asset.package_path,
+    absolute_path: asset.absolute_path,
     content_kind: asset.content_kind,
     truncated: Boolean(asset.truncated),
     note: asset.note,
@@ -248,6 +251,8 @@ async function upsertSkillAssetRows(client: PoolClient, skill: SkillRecord): Pro
           kind: asset.kind,
           source_folder: asset.source_folder,
           content_kind: asset.content_kind,
+          package_path: asset.package_path,
+          absolute_path: asset.absolute_path,
           truncated: Boolean(asset.truncated),
           note: asset.note,
         }),
