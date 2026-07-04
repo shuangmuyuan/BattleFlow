@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import { SupabaseConfigProvider } from '@/lib/supabase-config-inject';
 import { Toaster } from '@/components/ui/sonner';
 import './globals.css';
 
@@ -66,10 +65,8 @@ export default function RootLayout({
             __html: `(function(){try{var t=localStorage.getItem('battleflow-theme')||localStorage.getItem('planflow-theme');if(t==='light'){document.documentElement.classList.remove('dark')}else{document.documentElement.classList.add('dark')}}catch(e){}})()`,
           }}
         />
-        <SupabaseConfigProvider>
-          {children}
-          <Toaster position="top-center" richColors />
-        </SupabaseConfigProvider>
+        {children}
+        <Toaster position="top-center" richColors />
       </body>
     </html>
   );

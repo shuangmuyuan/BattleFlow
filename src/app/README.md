@@ -4,7 +4,7 @@ Next.js App Router root for BattleFlow.
 
 ## Contents
 
-- `layout.tsx` defines global HTML structure and injects Supabase browser config.
+- `layout.tsx` defines global HTML structure and shared app providers.
 - `page.tsx` redirects the root route to `/dashboard`.
 - `robots.ts` defines crawler behavior.
 - `globals.css` holds Tailwind CSS 4 variables and global styling.

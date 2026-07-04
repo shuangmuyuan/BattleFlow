@@ -124,4 +124,4 @@ Run manual authorization QA from [AUTHORIZATION_QA.md](AUTHORIZATION_QA.md) agai
 - If a password hash is suspected to be compromised, disable the user until a password reset flow exists or rotate credentials manually through a controlled administrative path.
 - If a super admin was granted incorrectly, revoke it from `/dashboard/admin`; the API prevents revoking the last enabled super admin.
 - If file-backed resources disappear after enabling authorization, run `pnpm db:resources:migrate` with the intended migration organization and owner user.
-- Treat any committed or logged `BATTLEFLOW_DATABASE_URL`, Supabase service-role key, password hash, or session token hash as a security incident.
+- Treat any committed or logged `BATTLEFLOW_DATABASE_URL`, password hash, or session token hash as a security incident.

@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-BattleFlow now has a first-party account, organization, and permission foundation backed by direct Postgres through `BATTLEFLOW_DATABASE_URL`. The implementation replaces the prior Supabase Auth direction for new account flows, adds multi-organization membership, department and team authorization, platform super admins, resource grants, and route-level authorization for core product resources.
+BattleFlow now has a first-party account, organization, and permission foundation backed by direct Postgres through `BATTLEFLOW_DATABASE_URL`. The implementation replaces the prior external account-system direction for new account flows, adds multi-organization membership, department and team authorization, platform super admins, resource grants, and route-level authorization for core product resources.
 
 The work also keeps large Skill and workflow package assets in file or object storage while moving business metadata, versions, state indexes, asset manifests, and permission indexes into Postgres.
 
@@ -18,7 +18,7 @@ The work also keeps large Skill and workflow package assets in file or object st
 
 ## Technical Details
 
-- Added account and permission schema contracts in Drizzle plus `scripts/database/002_account_org_permissions.sql`.
+- Added account and permission schema contracts through `scripts/database/002_account_org_permissions.sql`.
 - Added Postgres bootstrap commands and resource metadata migration commands.
 - Added first-party auth services for password hashing, session token hashing, secure cookies, safe redirects, registration, login, logout, current-user lookup, and onboarding.
 - Added route-facing auth helpers: `requireUser`, `requireOrganizationContext`, `requirePermission`, `requirePlatformPermission`, `requireSkillIdAccess`, and `requireWorkflowAccess`.
@@ -92,14 +92,14 @@ Key manual flows to run against a non-production Postgres database:
 - Super admin management: `src/lib/auth/super-admins.ts`, `src/app/api/admin/super-admins/route.ts`
 - Resource metadata and authorization: `src/lib/resource-metadata-repository.ts`, resource-related API routes
 - Dashboard and admin UI: `src/app/dashboard/layout.tsx`, `src/app/dashboard/admin/page.tsx`, `src/app/onboarding/page.tsx`, `src/app/login/page.tsx`
-- Database and migration scripts: `src/storage/database/shared/schema.ts`, `scripts/database/002_account_org_permissions.sql`, `scripts/migrate-resource-metadata.mjs`
+- Database and migration scripts: `scripts/database/002_account_org_permissions.sql`, `scripts/migrate-resource-metadata.mjs`
 - Documentation: authorization design, runbook, security docs, testing guide, QA guides, module READMEs
 - Agent kit: `battleflow-authz-postgres` skill and `/battleflow-authz-change` command
 
 ## FAQs
 
-**Does this still use Supabase Auth?**
-No. The implemented account flow is first-party and backed by direct Postgres. Existing Supabase client/config code remains only where the broader app still needs it.
+**Does this still depend on the previous external auth direction?**
+No. The implemented account flow is first-party and backed by direct Postgres. The previous client/config path has been removed.
 
 **Can a new user create an organization?**
 Yes. Registration supports organization creation, and authenticated users without organizations are routed to onboarding.
