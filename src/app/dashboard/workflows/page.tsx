@@ -6199,7 +6199,7 @@ export default function WorkflowsPage() {
         </div>
 
         {/* Chat Input */}
-        <div className="flex flex-col gap-3 border-t border-border/40 p-4">
+        <div className="flex flex-col gap-1 border-t border-border/40 px-4 pb-1 pt-4">
           <div className="hidden">
             <div className="flex w-full items-center justify-between gap-3">
               <div className="flex min-w-0 items-center gap-2">
@@ -6600,6 +6600,9 @@ export default function WorkflowsPage() {
               </PromptInputAction>
             </PromptInputActions>
           </PromptInput>
+          <p className="px-1 text-center text-xs leading-4 text-muted-foreground">
+            BattleFlow是人工智能，可能会犯错误。请仔细检查回复。
+          </p>
         </div>
       </div>
 
