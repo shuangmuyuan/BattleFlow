@@ -217,6 +217,7 @@ export async function persistWorkflowAttachment(
 
   return {
     id: attachmentId,
+    stepId: options.stepId,
     name: originalName,
     type: file.type || 'application/octet-stream',
     size: file.size,
@@ -279,6 +280,7 @@ export async function persistWorkflowGeneratedMarkdownAttachment(
 
   return {
     id: attachmentId,
+    stepId: options.stepId,
     name: safeTitle,
     type: 'text/markdown; charset=utf-8',
     size: buffer.byteLength,

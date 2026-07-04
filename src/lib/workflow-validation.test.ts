@@ -101,6 +101,31 @@ describe('workflow validation core logic', () => {
     assert.equal(prose.ok, false);
   });
 
+  it('normalizes generated validation JSON string values to Simplified Chinese', () => {
+    const parsed = parseValidationResult(JSON.stringify({
+      outcome: 'needs_revision',
+      summary: '需要補充關鍵風險。',
+      findings: [
+        {
+          severity: 'blocking',
+          criterion: '產物必須包含風險。',
+          issue: '目前缺少風險說明。',
+          recommendation: '請補充風險與假設。',
+          evidence: '候選產物未覆蓋風險。',
+        },
+      ],
+    }));
+
+    assert.equal(parsed.ok, true);
+    if (parsed.ok) {
+      assert.equal(parsed.result.summary, '需要补充关键风险。');
+      assert.equal(parsed.result.findings[0].criterion, '产物必须包含风险。');
+      assert.equal(parsed.result.findings[0].issue, '目前缺少风险说明。');
+      assert.equal(parsed.result.findings[0].recommendation, '请补充风险与假设。');
+      assert.equal(parsed.result.findings[0].evidence, '候选产物未覆盖风险。');
+    }
+  });
+
   it('aggregates self-check and agent validation outcomes', () => {
     assert.equal(aggregateValidationStatus({ outcome: 'pass' }, { outcome: 'pass' }), 'passed');
     assert.equal(aggregateValidationStatus({ outcome: 'pass' }, { outcome: 'needs_revision' }), 'failed');

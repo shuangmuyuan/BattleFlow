@@ -132,6 +132,9 @@ importers:
       next-themes:
         specifier: ^0.4.6
         version: 0.4.6(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      opencc-js:
+        specifier: ^1.4.0
+        version: 1.4.0
       pdf-parse:
         specifier: ^2.4.5
         version: 2.4.5
@@ -4352,6 +4355,9 @@ packages:
   open@11.0.0:
     resolution: {integrity: sha512-smsWv2LzFjP03xmvFoJ331ss6h+jixfA4UUV/Bsiyuu4YJPfN+FIQGOIiv4w9/+MoHkfkJ22UIaQWRVFRfH6Vw==}
     engines: {node: '>=20'}
+
+  opencc-js@1.4.0:
+    resolution: {integrity: sha512-SEb4huI5+lT4CFPA4sgs+NAOOgpcmdHZ+vYxhRLR1bQWIt6VRwpFPjWgTJAWAg1MviDcXTBe5zVoUOVxVxNK8w==}
 
   option@0.2.4:
     resolution: {integrity: sha512-pkEqbDyl8ou5cpq+VsnQbe/WlEy5qS7xPzMS1U55OCG9KPvwFD46zDbxQIj3egJSFc3D+XhYOPUzz49zQAVy7A==}
@@ -9584,6 +9590,8 @@ snapshots:
       is-inside-container: 1.0.0
       powershell-utils: 0.1.0
       wsl-utils: 0.3.1
+
+  opencc-js@1.4.0: {}
 
   option@0.2.4: {}
 
