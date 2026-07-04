@@ -1145,6 +1145,7 @@ function streamAgentEventsAsSse(agentStream: ReadableStream<AgentEvent>, run?: C
   const encoder = new TextEncoder();
   let reader: ReadableStreamDefaultReader<AgentEvent> | null = null;
   let assistantContent = '';
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
   const readable = new ReadableStream({
     async start(controller) {
@@ -1152,9 +1153,16 @@ function streamAgentEventsAsSse(agentStream: ReadableStream<AgentEvent>, run?: C
       reader = activeReader;
       let closed = false;
 
+      const stopHeartbeat = () => {
+        if (!heartbeatTimer) return;
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      };
+
       const closeWith = (payload: Record<string, unknown>) => {
         if (closed) return;
         closed = true;
+        stopHeartbeat();
         try {
           controller.enqueue(encoder.encode(sse(payload)));
         } catch {
@@ -1175,6 +1183,10 @@ function streamAgentEventsAsSse(agentStream: ReadableStream<AgentEvent>, run?: C
           closed = true;
         }
       };
+
+      heartbeatTimer = setInterval(() => {
+        emit({ event: 'heartbeat', ts: Date.now() });
+      }, 15_000);
 
       if (run) {
         emit({
@@ -1287,11 +1299,16 @@ function streamAgentEventsAsSse(agentStream: ReadableStream<AgentEvent>, run?: C
         }
         closeWith({ error: error instanceof Error ? error.message : 'Agent stream interrupted' });
       } finally {
+        stopHeartbeat();
         activeReader.releaseLock();
         reader = null;
       }
     },
     async cancel() {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
       try {
         await reader?.cancel();
       } catch {
@@ -1303,9 +1320,10 @@ function streamAgentEventsAsSse(agentStream: ReadableStream<AgentEvent>, run?: C
   return new Response(readable, {
     headers: {
       'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
+      'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
       'Transfer-Encoding': 'chunked',
+      'X-Accel-Buffering': 'no',
     },
   });
 }

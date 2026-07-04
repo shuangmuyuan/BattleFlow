@@ -90,12 +90,6 @@ CREATE TRIGGER battleflow_users_set_updated_at
 BEFORE UPDATE ON battleflow_users
 FOR EACH ROW EXECUTE FUNCTION battleflow_set_updated_at();
 
-UPDATE battleflow_users
-SET is_admin = true
-WHERE lower(email) = '94399@sangfor.com'
-   OR sso_id = '94399'
-   OR username = '94399';
-
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'battleflow') THEN
