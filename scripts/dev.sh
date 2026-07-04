@@ -5,6 +5,14 @@ set -Eeuo pipefail
 PORT=5000
 BATTLEFLOW_WORKSPACE_PATH="${BATTLEFLOW_WORKSPACE_PATH:-$(pwd)}"
 DEPLOY_RUN_PORT="${DEPLOY_RUN_PORT:-${PORT}}"
+BATTLEFLOW_CLAUDE_TOOLS="${BATTLEFLOW_CLAUDE_TOOLS:-Read,Grep,Glob,WebSearch,WebFetch}"
+CLAUDE_WORKSPACE_DIR="${CLAUDE_WORKSPACE_DIR:-${BATTLEFLOW_WORKSPACE_PATH}}"
+
+if [[ "${CLAUDE_COMMAND:-}" == *"claude-web-tools-wrapper.sh" ]]; then
+    echo "Ignoring legacy Claude web-tools wrapper for local dev; using claude directly."
+    unset CLAUDE_COMMAND
+fi
+CLAUDE_COMMAND="${CLAUDE_COMMAND:-claude}"
 
 
 cd "${BATTLEFLOW_WORKSPACE_PATH}"
@@ -31,4 +39,8 @@ echo "Clearing port ${DEPLOY_RUN_PORT} before start."
 kill_port_if_listening
 echo "Starting HTTP service on port ${DEPLOY_RUN_PORT} for dev..."
 
-PORT=${DEPLOY_RUN_PORT} pnpm tsx watch src/server.ts
+PORT="${DEPLOY_RUN_PORT}" \
+  BATTLEFLOW_CLAUDE_TOOLS="${BATTLEFLOW_CLAUDE_TOOLS}" \
+  CLAUDE_COMMAND="${CLAUDE_COMMAND}" \
+  CLAUDE_WORKSPACE_DIR="${CLAUDE_WORKSPACE_DIR}" \
+  pnpm tsx watch src/server.ts

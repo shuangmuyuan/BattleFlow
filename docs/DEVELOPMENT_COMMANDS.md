@@ -16,6 +16,39 @@ pnpm dev
 
 `scripts/dev.sh` clears the selected port before starting. The default port is `5000`; override it with `DEPLOY_RUN_PORT` or `PORT`.
 
+## Local Worktree Runtime
+
+When running from an additional git worktree, do not rebuild local Postgres or create a new `.env` only because the worktree is missing one. Reuse the canonical local runtime configuration from the main checkout:
+
+```bash
+set -a
+source /Users/lichunhe/Documents/Playground/BattleFlow/.env
+set +a
+BATTLEFLOW_WORKSPACE_PATH="$(pwd)" \
+CLAUDE_WORKSPACE_DIR="$(pwd)" \
+CLAUDE_COMMAND=claude \
+BATTLEFLOW_CLAUDE_TOOLS=Read,Grep,Glob,WebSearch,WebFetch \
+DEPLOY_RUN_PORT=5101 \
+pnpm dev
+```
+
+If dependency approval blocks `pnpm dev`, keep the same environment and run the checked-in server entrypoint directly:
+
+```bash
+set -a
+source /Users/lichunhe/Documents/Playground/BattleFlow/.env
+set +a
+PORT=5101 \
+DEPLOY_RUN_PORT=5101 \
+BATTLEFLOW_WORKSPACE_PATH="$(pwd)" \
+CLAUDE_WORKSPACE_DIR="$(pwd)" \
+CLAUDE_COMMAND=claude \
+BATTLEFLOW_CLAUDE_TOOLS=Read,Grep,Glob,WebSearch,WebFetch \
+./node_modules/.bin/tsx watch src/server.ts
+```
+
+Before starting a new service, check whether the expected port is already used by another BattleFlow worktree. Reuse it or choose another port instead of killing it. A healthy unauthenticated runtime returns `401 Authentication required` from `/api/auth/me`; `503 Authentication storage is not configured` means the runtime environment was not loaded.
+
 ## Validation
 
 ```bash
@@ -46,7 +79,7 @@ The build script:
 BATTLEFLOW_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start
 ```
 
-`scripts/start.sh` runs `node dist/server.js`, so `pnpm build` must run first. Production start defaults `BATTLEFLOW_CLAUDE_TOOLS` to `WebSearch,WebFetch`; override the variable only when the deployment needs to disable or restrict Claude Code web tools.
+`scripts/start.sh` runs `node dist/server.js`, so `pnpm build` must run first. Production start defaults `BATTLEFLOW_CLAUDE_TOOLS` to `Read,Grep,Glob,WebSearch,WebFetch`; override the variable only when the deployment needs to disable or restrict Claude Code file-read or web tools.
 
 ## Docker Compose
 
@@ -54,7 +87,7 @@ BATTLEFLOW_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start
 docker compose up -d --build
 ```
 
-The Docker image starts through `pnpm start`, not `node dist/server.js`, so the same production defaults from `scripts/start.sh` are applied. `docker-compose.yml` also passes `BATTLEFLOW_CLAUDE_TOOLS` explicitly as `WebSearch,WebFetch` by default. After deployment, verify `GET /api/agent-runtime` reports `toolsEnabled: true` and includes both `WebSearch` and `WebFetch`.
+The Docker image starts through `pnpm start`, not `node dist/server.js`, so the same production defaults from `scripts/start.sh` are applied. `docker-compose.yml` also passes `BATTLEFLOW_CLAUDE_TOOLS` explicitly as `Read,Grep,Glob,WebSearch,WebFetch` by default. After deployment, verify `GET /api/agent-runtime` reports `toolsEnabled: true` and includes `Read`, `Grep`, `Glob`, `WebSearch`, and `WebFetch`.
 
 ## Database Bootstrap
 
@@ -99,4 +132,4 @@ The local route is `POST /api/demos/handoffs` with `{ workflowId, stepId }`. It 
 | `CLAUDE_MODEL` | Claude model alias, defaults to `sonnet`. |
 | `CLAUDE_MAX_BUDGET_USD` | Per-turn CLI budget, defaults to `1.00`. |
 | `CLAUDE_WORKSPACE_DIR` | Working directory for Claude CLI turns. |
-| `BATTLEFLOW_CLAUDE_TOOLS` | Optional comma-separated Claude Code tools for CLI-backed chat and Skill tuning. Only `WebSearch` and `WebFetch` are accepted, for example `WebSearch,WebFetch`. Defaults to no tools in code and development; `scripts/start.sh` defaults production start to `WebSearch,WebFetch`. |
+| `BATTLEFLOW_CLAUDE_TOOLS` | Optional comma-separated Claude Code tools for CLI-backed chat and Skill tuning. Only `Read`, `Grep`, `Glob`, `WebSearch`, and `WebFetch` are accepted, for example `Read,Grep,Glob,WebSearch,WebFetch`. Local `pnpm dev` and production `pnpm start` default to that approved tool set unless the variable is explicitly overridden. |

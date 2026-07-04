@@ -43,6 +43,21 @@ function getClaudeWorkspaceDir() {
   return process.env.CLAUDE_WORKSPACE_DIR || process.cwd();
 }
 
+function normalizeReadableDirectories(directories: string[] = []) {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  for (const directory of directories) {
+    if (!directory.trim()) continue;
+    const resolved = path.resolve(directory);
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    normalized.push(resolved);
+  }
+
+  return normalized;
+}
+
 interface WrittenAttachment {
   name: string;
   path: string;
@@ -130,7 +145,12 @@ function buildConversationPrompt(
     : conversationPrompt;
 }
 
-function buildClaudeReadOnlyArgs() {
+function buildClaudeReadOnlyArgs(readableDirectories: string[] = []) {
+  const normalizedReadableDirectories = normalizeReadableDirectories(readableDirectories);
+  const addDirArgs = normalizedReadableDirectories.length > 0
+    ? ['--add-dir', ...normalizedReadableDirectories]
+    : [];
+
   return [
     '-p',
     '--safe-mode',
@@ -144,6 +164,7 @@ function buildClaudeReadOnlyArgs() {
     '--max-budget-usd',
     getClaudeMaxBudgetUsd(),
     ...buildClaudeToolsArgs(),
+    ...addDirArgs,
     '--permission-mode',
     'dontAsk',
     '--input-format',
@@ -300,7 +321,7 @@ export async function runClaudeCodeCliPrompt(input: AgentTurnInput, timeoutMs = 
       };
 
       try {
-        child = spawn(command, [...buildClaudeReadOnlyArgs(), '--system-prompt-file', systemPromptPath], {
+        child = spawn(command, [...buildClaudeReadOnlyArgs(input.readableDirectories), '--system-prompt-file', systemPromptPath], {
           cwd: getClaudeWorkspaceDir(),
           env: {
             ...process.env,
@@ -365,6 +386,12 @@ export async function checkClaudeCodeCliRuntime(): Promise<AgentRuntimeStatus> {
   const model = getClaudeModel();
   const cwd = getClaudeWorkspaceDir();
   const configuredTools = getConfiguredClaudeTools();
+  const readableDirectories = normalizeReadableDirectories(
+    (process.env.BATTLEFLOW_CLAUDE_READABLE_DIRS || '')
+      .split(path.delimiter)
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
 
   try {
     const result = await runCommand(command, ['--version'], 10_000);
@@ -377,6 +404,7 @@ export async function checkClaudeCodeCliRuntime(): Promise<AgentRuntimeStatus> {
       version: version || undefined,
       model,
       cwd,
+      readableDirectories,
       mode: 'structured-cli',
       outputFormat: 'stream-json',
       toolsEnabled: configuredTools.length > 0,
@@ -394,6 +422,7 @@ export async function checkClaudeCodeCliRuntime(): Promise<AgentRuntimeStatus> {
       command,
       model,
       cwd,
+      readableDirectories,
       mode: 'structured-cli',
       outputFormat: 'stream-json',
       toolsEnabled: configuredTools.length > 0,
@@ -409,7 +438,7 @@ export async function checkClaudeCodeCliRuntime(): Promise<AgentRuntimeStatus> {
 
 export function streamClaudeCodeCliTurn(input: AgentTurnInput) {
   const command = getClaudeCommand();
-  const baseArgs = buildClaudeReadOnlyArgs();
+  const baseArgs = buildClaudeReadOnlyArgs(input.readableDirectories);
 
   let child: ReturnType<typeof spawn> | null = null;
   let promptTempDir: string | null = null;

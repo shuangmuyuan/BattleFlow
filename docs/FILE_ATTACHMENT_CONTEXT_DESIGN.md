@@ -185,7 +185,7 @@ agent runtime 需要满足：
 实现注意：
 
 - 运行 `claude -p` 时，需要确保工作目录或 `--add-dir` 覆盖当前工作流附件目录。
-- 当前工具白名单如果只支持 `WebSearch`、`WebFetch`，实现阶段需要扩展为可配置的 `Read`、`Grep`、`Glob`，但仍保持默认最小授权。
+- 工具白名单已扩展为 `Read`、`Grep`、`Glob`、`WebSearch`、`WebFetch`，但仍保持默认最小授权。
 - `Read`、`Grep`、`Glob` 只能看到当前工作流 runtime 目录；不能看到其它工作流、`.env`、凭据或系统路径。
 
 ## 文档解析策略
@@ -235,6 +235,14 @@ BattleFlow 不应该把所有上传文件都急切解析成 prompt 文本。解�
 - 上传的 runtime 数据不能提交进 Git；
 - 无权限用户不能看到绝对路径；
 - 用户取消发送或上传失败时，要清理孤儿附件。
+
+当前实现补充：
+
+- 服务端会把上传文件写入 `data/workflows/<workspace-id>/<workflow-id>/attachments/<message-id>/`。
+- 前端发送消息时只携带附件 ID 和元数据；`/api/chat` 会重新从服务端 workflow 记录中查找附件，避免信任客户端传入的绝对路径。
+- `.doc`、`.docx`、`.pdf`、`.xlsx` 会在服务端生成 `.extracted.md` sidecar，模型可优先读取 sidecar。
+- 服务端和前端均限制单文件 100MB；前端限制单条消息最多 50 个文件，服务端也按 `messageId` 做数量兜底。
+- 下载接口通过 `/api/workflows/uploads?workflow_id=...&attachment_id=...` 提供，需要当前用户具备工作流读取权限。
 
 ## 迁移策略
 
