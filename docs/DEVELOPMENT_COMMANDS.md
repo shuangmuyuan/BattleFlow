@@ -62,7 +62,7 @@ The Docker image starts through `pnpm start`, not `node dist/server.js`, so the 
 BATTLEFLOW_DATABASE_URL=postgresql://... pnpm db:knowledge:init
 ```
 
-This applies the direct Postgres knowledge-store bootstrap in `scripts/database/001_knowledge_store.sql`. It is intended for runtimes that expose Postgres but do not expose the Supabase REST/Auth API stack.
+This applies the direct Postgres knowledge-store bootstrap in `scripts/database/001_knowledge_store.sql`.
 
 ## Demo Handoff Integration
 
@@ -82,10 +82,7 @@ The local route is `POST /api/demos/handoffs` with `{ workflowId, stepId }`. It 
 | `BATTLEFLOW_PROJECT_ENV` | `DEV` for development, `PROD` for production mode. |
 | `DEPLOY_RUN_PORT` | HTTP port used by scripts. |
 | `HOSTNAME` | Server hostname, defaults to `localhost`. |
-| `BATTLEFLOW_SUPABASE_URL` | Supabase project URL. |
-| `BATTLEFLOW_SUPABASE_ANON_KEY` | Browser-safe Supabase anon key. |
-| `BATTLEFLOW_SUPABASE_SERVICE_ROLE_KEY` | Server-only privileged Supabase key. |
-| `BATTLEFLOW_DATABASE_URL` | Server-only direct Postgres connection string for knowledge-store operations. |
+| `BATTLEFLOW_DATABASE_URL` | Server-only direct Postgres connection string for account, authorization, knowledge, PRD, and resource metadata operations. |
 | `BATTLEFLOW_DEFAULT_ORGANIZATION_ID` | Default organization used by single-tenant knowledge operations. |
 | `BATTLEFLOW_DATABASE_POOL_MAX` | Optional Postgres pool size, defaults to `5`. |
 | `BATTLEFLOW_DATABASE_SSL` | Optional Postgres SSL mode. Use `true` or `require` to enable SSL. |

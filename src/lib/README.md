@@ -11,8 +11,6 @@ Shared application logic.
 - `knowledge-repository.ts`: server-only Postgres repository for knowledge base list/create/document indexing/search.
 - `agent-adapters/types.ts`: provider/runtime event and status types.
 - `agent-adapters/claude-code-cli.ts`: Claude Code CLI availability checks and streaming adapter.
-- `supabase-config-inject.tsx`: client-side Supabase config provider.
-- `supabase-browser.ts`: browser Supabase client creation and retry helpers.
 - `utils.ts`: shared `cn` utility.
 
 ## Registry Rules

@@ -11,10 +11,9 @@ BattleFlow API route handlers.
 | `dashboard/stats` | Provides dashboard overview counts and recent workflow state. |
 | `demos/handoffs` | Creates and reads workflow-node Demo handoff links through the external Frieren Demo integration after workflow authorization. |
 | `knowledge` | Provides knowledge-base data for the dashboard. Document indexing/search uses direct Postgres when configured. |
-| `prd` | Reads and writes PRD documents through Supabase. |
+| `prd` | Reads and writes PRD documents through direct Postgres. |
 | `skills` | Lists, imports, reviews, publishes, rolls back, downloads, and archives Skills. |
 | `skills/tune` | Generates workflow Skill tuning drafts through the Claude Code CLI path. |
-| `supabase-config` | Exposes browser-safe Supabase URL and anon key. |
 | `workflows` | Manages file-backed workspaces and workflows. |
 | `workflows/milestones` | Manages workflow milestone records. |
 | `workflows/snapshots` | Manages step and workflow snapshots. |
@@ -35,7 +34,7 @@ The route depends on server-only `FRIEREN_DEMO_BASE_URL` and `FRIEREN_DEMO_HMAC_
 - Return `Cache-Control: no-store` for dynamic runtime data.
 - Narrow request bodies before reading fields.
 - Keep user-provided content as data. Do not execute imported Skill Markdown or uploaded file content.
-- Preserve `runtime = 'nodejs'` for file-system, Supabase server, direct Postgres, and child-process routes.
+- Preserve `runtime = 'nodejs'` for file-system, direct Postgres, and child-process routes.
 
 ## Validation
 

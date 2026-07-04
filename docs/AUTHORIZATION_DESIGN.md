@@ -4,7 +4,7 @@
 
 BattleFlow needs first-party account management, organization administration, and resource authorization for product-planning teams. This document is the implementation source of truth for the account, organization, department, team, super admin, resource grant, and audit model.
 
-The first release uses direct Postgres through `BATTLEFLOW_DATABASE_URL`. It does not use Supabase Auth as the new account-system core.
+The first release uses direct Postgres through `BATTLEFLOW_DATABASE_URL` as the account-system core.
 
 ## Confirmed Product Decisions
 

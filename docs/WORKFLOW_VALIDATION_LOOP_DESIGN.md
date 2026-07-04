@@ -706,7 +706,7 @@ Prompt 中要明确：
 
 ### 阶段 5：数据库模型对齐
 
-如果后续 Supabase workflow execution 真正启用，需要增加或映射：
+If a database-backed workflow execution model is added later, add or map:
 
 - `workflow_step_validations`；
 - `workflow_steps.validation_status`；
@@ -842,4 +842,3 @@ pnpm validate
 | 校验 Agent 是否使用独立模型？ | 影响成本和质量 | 第一版沿用 `CLAUDE_MODEL`，以后再配置化。 |
 | 失败候选产物是否可下载？ | 有助于人工修订 | 可以下载，但不能进入下游上下文。 |
 | 验收标准是否在执行前展示？ | 减少用户意外 | 应该展示在 `门禁` Tab。 |
-

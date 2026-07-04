@@ -2,14 +2,13 @@
 
 ## Security Posture
 
-BattleFlow handles product-planning content, imported Skill packages, workflow context files, knowledge retrieval snippets, chat prompts, Supabase credentials, direct Postgres credentials, and optional Claude CLI execution. Treat all user-provided Skill content and imported files as untrusted.
+BattleFlow handles product-planning content, imported Skill packages, workflow context files, knowledge retrieval snippets, chat prompts, direct Postgres credentials, and optional Claude CLI execution. Treat all user-provided Skill content and imported files as untrusted.
 
 ## Secrets
 
 Never commit:
 
 - `.env`, `.env.local`, or environment-specific `.env.*.local` files;
-- Supabase service role keys;
 - direct Postgres connection strings and database passwords;
 - Frieren Demo integration shared secrets;
 - Anthropic, Claude, or Dailybot tokens;
@@ -17,19 +16,17 @@ Never commit:
 - generated runtime registry data under `data/`;
 - `.dwp/` plan state or `tmp/` scratch artifacts containing user data.
 
-`BATTLEFLOW_SUPABASE_SERVICE_ROLE_KEY`, `BATTLEFLOW_DATABASE_URL`, `BATTLEFLOW_SUPER_ADMIN_EMAILS`, `BATTLEFLOW_SUPER_ADMIN_USER_IDS`, and `FRIEREN_DEMO_HMAC_SECRET` are server-only. Do not expose them through client components or `/api/supabase-config`.
+`BATTLEFLOW_DATABASE_URL`, `BATTLEFLOW_SUPER_ADMIN_EMAILS`, `BATTLEFLOW_SUPER_ADMIN_USER_IDS`, and `FRIEREN_DEMO_HMAC_SECRET` are server-only. Do not expose them through client components or API responses.
 
 ## Authentication and Authorization
 
-- Browser auth uses Supabase session state through `getSupabaseBrowserClientWithRetry`.
-- Server Supabase access may use the service role key when no user token is provided.
+- Browser auth uses first-party HttpOnly session cookies backed by Postgres.
 - Protected API routes must use shared auth context and permission helpers before reading or mutating organization data.
 - Platform super admin bootstrap runs only on the server when a signed-in user matches `BATTLEFLOW_SUPER_ADMIN_EMAILS` or `BATTLEFLOW_SUPER_ADMIN_USER_IDS`. API responses and UI state must never return the configured bootstrap values.
 - Super admin product access can view and administer organization content, but it must still be blocked from secret material such as connection strings, service role keys, environment variables, and raw auth tokens.
 - Super admin grant and revoke changes must write audit events, and the last enabled super admin must not be revoked through normal management APIs.
 - Skill, workflow, knowledge-base, PRD, snapshot, milestone, and chat routes must resolve first-party auth and Postgres-backed resource permissions before returning file-backed package assets, workflow outputs, or prompt context.
 - Demo handoff routes must resolve organization context and workflow resource permissions before reading workflow outputs or writing returned Demo links.
-- Any change that broadens service-role usage requires a security review.
 
 ## Database Access
 
