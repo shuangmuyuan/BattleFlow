@@ -5386,7 +5386,7 @@ export default function WorkflowsPage() {
       [stepId]: !prev[stepId],
     }));
   };
-  const renderStepOutputPreview = (step: WorkflowStep, options: { label?: string } = {}) => {
+  const renderStepOutputPreview = (step: WorkflowStep) => {
     const output = step.output || '';
     const isExpanded = Boolean(expandedOutputIds[step.id]);
     const outputMarkdownPreview = getRenderedMarkdownPreview(output);
@@ -5402,9 +5402,6 @@ export default function WorkflowsPage() {
               <div className="flex min-w-0 items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="min-w-0 truncate text-xs font-semibold">{step.name}</p>
-                  <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                    {options.label || '已确认产物'} · {output.length.toLocaleString('zh-CN')} 字符
-                  </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
                   {output && (
@@ -6810,7 +6807,7 @@ export default function WorkflowsPage() {
                     </Badge>
                   </div>
                   {currentStep?.output ? (
-                    renderStepOutputPreview(currentStep, { label: '当前步骤' })
+                    renderStepOutputPreview(currentStep)
                   ) : (
                     <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
                       当前步骤验证通过后，会在这里展示本步骤产出。
@@ -6824,7 +6821,7 @@ export default function WorkflowsPage() {
                     <Badge variant="outline" className="shrink-0 text-[11px]">{previousSteps.length} 个</Badge>
                   </div>
                   {previousSteps.length > 0 ? (
-                    previousSteps.map((step) => renderStepOutputPreview(step, { label: '前序步骤' }))
+                    previousSteps.map((step) => renderStepOutputPreview(step))
                   ) : (
                     <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
                       当前步骤暂无前序产出。
@@ -6838,7 +6835,7 @@ export default function WorkflowsPage() {
                       <h4 className="min-w-0 truncate text-xs font-medium text-muted-foreground">并行任务产出</h4>
                       <Badge variant="outline" className="shrink-0 text-[11px]">{parallelPeerSteps.length} 个</Badge>
                     </div>
-                    {parallelPeerSteps.map((step) => renderStepOutputPreview(step, { label: '并行步骤' }))}
+                    {parallelPeerSteps.map((step) => renderStepOutputPreview(step))}
                   </div>
                 )}
 
@@ -6865,7 +6862,7 @@ export default function WorkflowsPage() {
                           全部下载
                         </Button>
                       </div>
-                      {finalWorkflowOutputSteps.map((step) => renderStepOutputPreview(step, { label: '最终产物' }))}
+                      {finalWorkflowOutputSteps.map((step) => renderStepOutputPreview(step))}
                     </div>
                   ) : (
                     <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
