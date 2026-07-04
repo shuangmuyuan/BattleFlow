@@ -89,6 +89,19 @@ export interface WorkflowStepRecord {
 
 export type WorkflowFileContentKind = 'text' | 'image_data_url' | 'metadata';
 
+export interface WorkflowStoredAttachmentFields {
+  messageId?: string;
+  storedName?: string;
+  relativePath?: string;
+  absolutePath?: string;
+  contentUrl?: string;
+  sha256?: string;
+  sourceType?: string;
+  extension?: string;
+  extractedTextRelativePath?: string;
+  extractedTextPath?: string;
+}
+
 export interface WorkflowContextFileRecord {
   id: string;
   stepId: string;
@@ -96,10 +109,21 @@ export interface WorkflowContextFileRecord {
   type: string;
   size: number;
   isImage: boolean;
+  previewUrl?: string;
   contentKind: WorkflowFileContentKind;
   content?: string;
   note?: string;
   created_at: string;
+  messageId?: string;
+  storedName?: string;
+  relativePath?: string;
+  absolutePath?: string;
+  contentUrl?: string;
+  sha256?: string;
+  sourceType?: string;
+  extension?: string;
+  extractedTextRelativePath?: string;
+  extractedTextPath?: string;
 }
 
 export interface WorkflowReviewedOutputFileRecord {
@@ -112,6 +136,16 @@ export interface WorkflowReviewedOutputFileRecord {
   content?: string;
   note?: string;
   created_at: string;
+  messageId?: string;
+  storedName?: string;
+  relativePath?: string;
+  absolutePath?: string;
+  contentUrl?: string;
+  sha256?: string;
+  sourceType?: string;
+  extension?: string;
+  extractedTextRelativePath?: string;
+  extractedTextPath?: string;
 }
 
 export interface WorkflowChatAttachmentRecord {
@@ -124,6 +158,16 @@ export interface WorkflowChatAttachmentRecord {
   contentKind: WorkflowFileContentKind;
   note?: string;
   created_at?: string;
+  messageId?: string;
+  storedName?: string;
+  relativePath?: string;
+  absolutePath?: string;
+  contentUrl?: string;
+  sha256?: string;
+  sourceType?: string;
+  extension?: string;
+  extractedTextRelativePath?: string;
+  extractedTextPath?: string;
 }
 
 export interface WorkflowContextSelectionRecord {
@@ -386,6 +430,25 @@ function normalizeFileContentKind(value: unknown): WorkflowFileContentKind {
   return value === 'text' || value === 'image_data_url' ? value : 'metadata';
 }
 
+function normalizeStoredAttachmentFields(
+  file: Partial<WorkflowStoredAttachmentFields>,
+): WorkflowStoredAttachmentFields {
+  return {
+    messageId: typeof file.messageId === 'string' ? file.messageId : undefined,
+    storedName: typeof file.storedName === 'string' ? file.storedName : undefined,
+    relativePath: typeof file.relativePath === 'string' ? file.relativePath : undefined,
+    absolutePath: typeof file.absolutePath === 'string' ? file.absolutePath : undefined,
+    contentUrl: typeof file.contentUrl === 'string' ? file.contentUrl : undefined,
+    sha256: typeof file.sha256 === 'string' ? file.sha256 : undefined,
+    sourceType: typeof file.sourceType === 'string' ? file.sourceType : undefined,
+    extension: typeof file.extension === 'string' ? file.extension : undefined,
+    extractedTextRelativePath: typeof file.extractedTextRelativePath === 'string'
+      ? file.extractedTextRelativePath
+      : undefined,
+    extractedTextPath: typeof file.extractedTextPath === 'string' ? file.extractedTextPath : undefined,
+  };
+}
+
 function normalizeContextFile(file: Partial<WorkflowContextFileRecord>, index: number): WorkflowContextFileRecord {
   const now = nowIso();
   return {
@@ -395,10 +458,12 @@ function normalizeContextFile(file: Partial<WorkflowContextFileRecord>, index: n
     type: file.type || 'unknown',
     size: typeof file.size === 'number' ? file.size : 0,
     isImage: Boolean(file.isImage),
+    previewUrl: typeof file.previewUrl === 'string' ? file.previewUrl : undefined,
     contentKind: normalizeFileContentKind(file.contentKind),
     content: typeof file.content === 'string' ? file.content : undefined,
     note: typeof file.note === 'string' ? file.note : undefined,
     created_at: file.created_at || now,
+    ...normalizeStoredAttachmentFields(file),
   };
 }
 
@@ -417,6 +482,7 @@ function normalizeReviewedOutputFile(
     content: typeof file.content === 'string' ? file.content : undefined,
     note: typeof file.note === 'string' ? file.note : undefined,
     created_at: file.created_at || now,
+    ...normalizeStoredAttachmentFields(file),
   };
 }
 
@@ -588,6 +654,7 @@ function normalizeChatAttachments(value: unknown): WorkflowChatAttachmentRecord[
       contentKind: normalizeFileContentKind(attachment.contentKind),
       note: typeof attachment.note === 'string' ? attachment.note : undefined,
       created_at: typeof attachment.created_at === 'string' ? attachment.created_at : undefined,
+      ...normalizeStoredAttachmentFields(attachment),
     }];
   });
 }

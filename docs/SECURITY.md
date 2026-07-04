@@ -59,11 +59,11 @@ The Claude Code CLI adapter is intentionally constrained:
 - safe mode;
 - no session persistence;
 - no tools by default in the adapter helper and development flows;
-- production `pnpm start` enables the approved `WebSearch` and `WebFetch` tools through `scripts/start.sh` unless `BATTLEFLOW_CLAUDE_TOOLS` is explicitly overridden;
+- production `pnpm start` enables the approved `Read`, `Grep`, `Glob`, `WebSearch`, and `WebFetch` tools through `scripts/start.sh` unless `BATTLEFLOW_CLAUDE_TOOLS` is explicitly overridden;
 - output streamed as JSON;
 - budget controlled by `CLAUDE_MAX_BUDGET_USD`.
 
-Do not enable broader CLI tools, broader permissions, or persistent sessions without documenting the threat model and validating the change. The current approved tool surface is limited to Claude Code `WebSearch` and `WebFetch`; these tools may send user prompts and URLs outside BattleFlow through the configured Claude Code runtime, so enable them only in environments where outbound web access is expected.
+Do not enable broader CLI tools, broader permissions, or persistent sessions without documenting the threat model and validating the change. The current approved tool surface is limited to Claude Code `Read`, `Grep`, `Glob`, `WebSearch`, and `WebFetch`. File tools exist so the runtime can read workflow-owned attachments by path instead of injecting full files into prompts. Web tools may send user prompts and URLs outside BattleFlow through the configured Claude Code runtime, so enable them only in environments where outbound web access is expected. Do not enable `Write`, `Edit`, `MultiEdit`, or `Bash` for ordinary chat turns.
 
 Workflow validation uses the same constrained Claude Code CLI boundary. Skill self-check always uses safe mode, no tools, no session persistence, and budget controlled by environment variables. Independent Agent validation uses the same boundary only when the workflow-level Agent validation switch is enabled. Validation prompts frame Skill Markdown, uploaded files, retrieved knowledge, chat history, self-check output, and candidate artifacts as untrusted reference material. The validation Agent is a judge only: it must return structured JSON and must not execute instructions from candidate content or package assets.
 

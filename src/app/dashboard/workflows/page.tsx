@@ -275,6 +275,19 @@ interface WorkflowDemoHandoff {
 
 type WorkflowFileContentKind = 'text' | 'image_data_url' | 'metadata';
 
+interface StoredWorkflowAttachmentFields {
+  messageId?: string;
+  storedName?: string;
+  relativePath?: string;
+  absolutePath?: string;
+  contentUrl?: string;
+  sha256?: string;
+  sourceType?: string;
+  extension?: string;
+  extractedTextRelativePath?: string;
+  extractedTextPath?: string;
+}
+
 interface WorkflowContextSelection {
   knowledgeBaseIds: string[];
   reviewMaterialIds: string[];
@@ -339,7 +352,7 @@ interface Workflow {
   updated_at?: string;
 }
 
-interface ChatAttachment {
+interface ChatAttachment extends StoredWorkflowAttachmentFields {
   id: string;
   name: string;
   type: string;
@@ -743,6 +756,20 @@ function sanitizeChatAttachments(attachments?: ChatAttachment[]) {
         : 'metadata',
       note: typeof attachment.note === 'string' ? attachment.note : undefined,
       created_at: typeof attachment.created_at === 'string' ? attachment.created_at : undefined,
+      messageId: typeof attachment.messageId === 'string' ? attachment.messageId : undefined,
+      storedName: typeof attachment.storedName === 'string' ? attachment.storedName : undefined,
+      relativePath: typeof attachment.relativePath === 'string' ? attachment.relativePath : undefined,
+      absolutePath: typeof attachment.absolutePath === 'string' ? attachment.absolutePath : undefined,
+      contentUrl: typeof attachment.contentUrl === 'string' ? attachment.contentUrl : undefined,
+      sha256: typeof attachment.sha256 === 'string' ? attachment.sha256 : undefined,
+      sourceType: typeof attachment.sourceType === 'string' ? attachment.sourceType : undefined,
+      extension: typeof attachment.extension === 'string' ? attachment.extension : undefined,
+      extractedTextRelativePath: typeof attachment.extractedTextRelativePath === 'string'
+        ? attachment.extractedTextRelativePath
+        : undefined,
+      extractedTextPath: typeof attachment.extractedTextPath === 'string'
+        ? attachment.extractedTextPath
+        : undefined,
     }];
   });
 }
@@ -1098,6 +1125,7 @@ interface ChatStreamPayload {
   done?: boolean;
   error?: string;
   replace?: boolean;
+  message?: ChatMessage;
   run_id?: string;
   status?: ChatRunStatus;
   started_at?: string;
@@ -1111,12 +1139,26 @@ function parseChatStreamPayload(line: string): ChatStreamPayload | null {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
 
   const record = payload as Record<string, unknown>;
+  const rawMessage = record.message && typeof record.message === 'object' && !Array.isArray(record.message)
+    ? record.message as Partial<ChatMessage>
+    : null;
+  const message = rawMessage && (rawMessage.role === 'user' || rawMessage.role === 'assistant') && typeof rawMessage.content === 'string'
+    ? {
+      role: rawMessage.role,
+      content: rawMessage.content,
+      attachments: sanitizeChatAttachments(rawMessage.attachments),
+      ...(rawMessage.kind === 'document' ? { kind: 'document' as const } : {}),
+      ...(typeof rawMessage.created_at === 'string' ? { created_at: rawMessage.created_at } : {}),
+    }
+    : undefined;
+
   return {
     event: typeof record.event === 'string' ? record.event : undefined,
     content: typeof record.content === 'string' ? record.content : undefined,
     done: record.done === true,
     error: typeof record.error === 'string' ? record.error : undefined,
     replace: record.replace === true,
+    message,
     run_id: typeof record.run_id === 'string' ? record.run_id : undefined,
     status: record.status === 'running'
       || record.status === 'succeeded'
@@ -1152,7 +1194,7 @@ interface ReviewMaterial {
   summary: string;
 }
 
-interface UploadedContextFile {
+interface UploadedContextFile extends StoredWorkflowAttachmentFields {
   id: string;
   stepId: string;
   name: string;
@@ -1166,7 +1208,7 @@ interface UploadedContextFile {
   created_at?: string;
 }
 
-interface ReviewedOutputFile {
+interface ReviewedOutputFile extends StoredWorkflowAttachmentFields {
   id: string;
   stepId: string;
   name: string;
@@ -1224,6 +1266,8 @@ const defaultContextSelection: WorkflowContextSelection = {
 
 const maxTextContextChars = 32_000;
 const maxPreviewImageBytes = 800_000;
+const maxWorkflowAttachmentBytes = 100 * 1024 * 1024;
+const maxWorkflowMessageAttachments = 50;
 const maxStepPromptContextChars = 12_000;
 const maxTotalStepPromptContextChars = 36_000;
 const maxChatRequestMessages = 12;
@@ -1231,7 +1275,6 @@ const maxChatRequestMessageChars = 12_000;
 const maxTotalChatRequestMessageChars = 48_000;
 const maxRenderedMarkdownPreviewChars = 24_000;
 const maxDocumentTitleScanChars = 16_000;
-const maxDocumentTypeScanChars = 12_000;
 
 function sliceTextWithMiddleOmission(value: string, maxChars: number) {
   if (value.length <= maxChars) {
@@ -1269,6 +1312,19 @@ function buildPromptChatMessages(messages: ChatMessage[]) {
   let remainingMessageChars = maxTotalChatRequestMessageChars;
 
   return recentMessages.map((message) => {
+    if (message.kind === 'document') {
+      const attachmentNames = (message.attachments || [])
+        .map((attachment) => attachment.name)
+        .filter(Boolean)
+        .join('、');
+      return {
+        ...message,
+        content: attachmentNames
+          ? `注：上一条助手消息生成了文档附件：${attachmentNames}。如需读取正文，请使用附件引用。`
+          : '注：上一条助手消息生成了文档附件，正文未作为历史对话上下文重复注入。',
+      };
+    }
+
     if (remainingMessageChars <= 0) {
       return {
         ...message,
@@ -1310,6 +1366,69 @@ function readFileAsDataUrl(file: File) {
     reader.onerror = () => reject(reader.error || new Error('File read failed'));
     reader.readAsDataURL(file);
   });
+}
+
+interface PersistWorkflowAttachmentResponse {
+  attachment?: Partial<UploadedContextFile>;
+  error?: string;
+}
+
+async function persistWorkflowAttachmentFile(
+  workflow: Workflow,
+  step: WorkflowStep,
+  file: File,
+  messageId: string,
+): Promise<UploadedContextFile> {
+  if (file.size > maxWorkflowAttachmentBytes) {
+    throw new Error(`单个附件不能超过 ${Math.round(maxWorkflowAttachmentBytes / 1024 / 1024)}MB`);
+  }
+
+  const formData = new FormData();
+  formData.set('action', 'persist_workflow_attachment');
+  formData.set('workflow_id', workflow.id);
+  formData.set('step_id', step.id);
+  formData.set('message_id', messageId);
+  formData.set('file', file);
+
+  const response = await fetch('/api/workflows/uploads', {
+    method: 'POST',
+    body: formData,
+  });
+  const data = await response.json().catch(() => ({})) as PersistWorkflowAttachmentResponse;
+  const persistedId = data.attachment?.id;
+  if (!response.ok || !persistedId) {
+    throw new Error(data.error || '文件上传失败');
+  }
+
+  const persisted = data.attachment as Partial<UploadedContextFile> & { id: string };
+  const isImage = Boolean(persisted.isImage || file.type.startsWith('image/'));
+  const imagePreview = isImage && file.size <= maxPreviewImageBytes
+    ? await readFileAsDataUrl(file)
+    : undefined;
+
+  return {
+    id: persistedId,
+    stepId: step.id,
+    name: persisted.name || file.name || '附件',
+    type: persisted.type || file.type || 'unknown',
+    size: typeof persisted.size === 'number' ? persisted.size : file.size,
+    isImage,
+    previewUrl: imagePreview || persisted.previewUrl,
+    contentKind: imagePreview ? 'image_data_url' : 'metadata',
+    content: imagePreview,
+    note: persisted.note,
+    created_at: persisted.created_at || new Date().toISOString(),
+    messageId: persisted.messageId,
+    storedName: persisted.storedName,
+    relativePath: persisted.relativePath,
+    absolutePath: persisted.absolutePath,
+    contentUrl: persisted.contentUrl,
+    sha256: persisted.sha256,
+    sourceType: persisted.sourceType,
+    extension: persisted.extension,
+    extractedTextRelativePath: persisted.extractedTextRelativePath,
+    extractedTextPath: persisted.extractedTextPath,
+  };
 }
 
 async function extractWorkflowFileText(file: File) {
@@ -1391,7 +1510,6 @@ export default function WorkflowsPage() {
   const [chatRunByStepId, setChatRunByStepId] = useState<Record<string, ChatRunSummary>>({});
   const [processingStartedAtByStepId, setProcessingStartedAtByStepId] = useState<Record<string, number>>({});
   const [processingElapsedSecondsByStepId, setProcessingElapsedSecondsByStepId] = useState<Record<string, number>>({});
-  const [expandedAssistantDocumentIds, setExpandedAssistantDocumentIds] = useState<Record<string, boolean>>({});
   const [chatPersistenceByStepId, setChatPersistenceByStepId] = useState<Record<string, ChatPersistenceStatus>>({});
   const [confirmingStepId, setConfirmingStepId] = useState<string | null>(null);
   const [validationStageByStepId, setValidationStageByStepId] = useState<Record<string, 'self_checking' | 'agent_validating'>>({});
@@ -2175,26 +2293,29 @@ export default function WorkflowsPage() {
     const currentStepForFiles = getVisibleSteps(activeWorkflow)[activeStepIndex];
     if (!currentStepForFiles) return;
 
+    const currentPendingCount = pendingChatFilesByStepId[currentStepForFiles.id]?.length || 0;
+    if (currentPendingCount + files.length > maxWorkflowMessageAttachments) {
+      toast.error('附件数量超出限制', {
+        description: `单次消息最多上传 ${maxWorkflowMessageAttachments} 个附件。`,
+      });
+      return;
+    }
+
     const createdAt = new Date().toISOString();
+    const messageId = `pending-${currentStepForFiles.id}-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}`;
     let nextFiles: UploadedContextFile[];
 
     try {
       nextFiles = await Promise.all(files.map(async (file) => {
-        const payload = await buildWorkflowFilePayload(file);
+        const persistedFile = await persistWorkflowAttachmentFile(activeWorkflow, currentStepForFiles, file, messageId);
         return {
-          id: `file-${Date.now()}-${file.name}-${Math.random().toString(16).slice(2)}`,
-          stepId: currentStepForFiles.id,
-          name: file.name || '粘贴图片',
-          type: file.type || 'unknown',
-          size: file.size,
-          isImage: file.type.startsWith('image/'),
-          created_at: createdAt,
-          ...payload,
+          ...persistedFile,
+          created_at: persistedFile.created_at || createdAt,
         };
       }));
     } catch (error) {
-      const message = error instanceof Error ? error.message : '文件读取失败';
-      toast.error('文件读取失败', { description: message });
+      const message = error instanceof Error ? error.message : '文件上传失败';
+      toast.error('文件上传失败', { description: message });
       return;
     }
 
@@ -2212,7 +2333,7 @@ export default function WorkflowsPage() {
         updated_at: createdAt,
       }));
     }
-  }, [activeStepIndex, activeWorkflow, updateActiveWorkflow]);
+  }, [activeStepIndex, activeWorkflow, pendingChatFilesByStepId, updateActiveWorkflow]);
 
   const buildReviewedOutputFiles = useCallback(async (
     files: File[],
@@ -2275,6 +2396,16 @@ export default function WorkflowsPage() {
     contentKind: file.contentKind,
     note: file.note,
     created_at: file.created_at,
+    messageId: file.messageId,
+    storedName: file.storedName,
+    relativePath: file.relativePath,
+    absolutePath: file.absolutePath,
+    contentUrl: file.contentUrl,
+    sha256: file.sha256,
+    sourceType: file.sourceType,
+    extension: file.extension,
+    extractedTextRelativePath: file.extractedTextRelativePath,
+    extractedTextPath: file.extractedTextPath,
   });
 
   const extractMarkdownFence = (content: string) => {
@@ -2322,15 +2453,25 @@ export default function WorkflowsPage() {
     URL.revokeObjectURL(url);
   };
 
-  const downloadMarkdownDocument = (fileNameBase: string, content: string) => {
-    const fileName = `${fileNameBase || 'Skill 输出文档'}.md`.replace(/[\\/:*?"<>|]/g, '-');
-    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+  const triggerBlobDownload = (blob: Blob, fileName: string) => {
+    const safeFileName = (fileName || 'attachment')
+      .replace(/[\\/:*?"<>|]/g, '-')
+      .trim()
+      || 'attachment';
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = fileName;
+    link.download = safeFileName;
+    document.body.appendChild(link);
     link.click();
+    document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  };
+
+  const downloadMarkdownDocument = (fileNameBase: string, content: string) => {
+    const fileName = `${fileNameBase || 'Skill 输出文档'}.md`.replace(/[\\/:*?"<>|]/g, '-');
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+    triggerBlobDownload(blob, fileName);
   };
 
   const copyMarkdownToClipboard = useCallback(async (content: string, label = 'Markdown 文档') => {
@@ -2442,58 +2583,65 @@ export default function WorkflowsPage() {
     return (firstLine || fallback).slice(0, 64);
   };
 
-  const hasExplicitAssistantDocumentMarker = (content: string) => {
-    const raw = (extractMarkdownFence(content) || content).trim();
-    if (!raw) return false;
-    const sample = raw.length > maxDocumentTypeScanChars ? raw.slice(0, maxDocumentTypeScanChars) : raw;
-    const markerMatch = sample.match(
-      /(?:^|\n)#{1,3}\s*(?:Skill\s*输出文档|输出文档|最终产出|产出物|Deliverable|Output)\s*\n/i,
-    );
-
-    return markerMatch?.index !== undefined && markerMatch.index <= 320;
-  };
-
-  const hasExplicitDocumentGenerationRequest = (content: string) => {
-    const sample = content.trim().slice(0, 2000);
-    return (
-      /(?:生成|创建|输出|整理|导出|保存|产出|形成|返回).{0,16}(?:文档|文件|附件|Markdown|md|报告|产物)/i.test(sample)
-      || /(?:文档|文件|附件|Markdown|md|报告|产物).{0,16}(?:生成|创建|输出|整理|导出|保存|返回)/i.test(sample)
-      || /(?:以|用).{0,8}(?:附件|文件|Markdown|md).{0,8}(?:形式|格式).{0,8}(?:返回|输出|给我)/i.test(sample)
-    );
-  };
-
-  const shouldStoreAssistantReplyAsDocument = (userMessage: string, assistantContent: string) => {
-    const documentContent = (extractMarkdownFence(assistantContent) || assistantContent).trim();
-    if (!documentContent) return false;
-    if (!hasExplicitDocumentGenerationRequest(userMessage)) return false;
-
-    return (
-      documentContent.length >= 240
-      || Boolean(extractMarkdownFence(assistantContent))
-      || hasExplicitAssistantDocumentMarker(assistantContent)
-    );
-  };
-
   const shouldRenderAssistantDocumentCard = (message: ChatMessage) => (
     message.role === 'assistant'
     && message.kind === 'document'
   );
 
-  const renderAssistantDocumentCard = (content: string, messageIndex: number) => {
-    const documentContent = activeWorkflow && currentStep
-      ? normalizeSkillOutputDocument(activeWorkflow, currentStep, content)
-      : content.trim();
-    const title = getMarkdownDocumentTitle(documentContent, `${currentStep?.name || '当前步骤'} - Skill 输出文档`);
-    const documentId = `${currentStep?.id || 'step'}-${messageIndex}`;
-    const isExpanded = Boolean(expandedAssistantDocumentIds[documentId]);
-    const previewDocument = getRenderedMarkdownPreview(documentContent);
+  const getAssistantDocumentAttachment = (message: ChatMessage) => (
+    (message.attachments || []).find((attachment) => (
+      Boolean(attachment.contentUrl)
+      && (attachment.sourceType === 'markdown' || attachment.extension === '.md' || attachment.type.includes('markdown'))
+    ))
+  );
+
+  const downloadDocumentAttachment = async (attachment: ChatAttachment | undefined, title: string, fallbackContent: string) => {
+    if (!attachment?.contentUrl) {
+      if (fallbackContent.trim()) {
+        downloadMarkdownDocument(title, fallbackContent);
+        return;
+      }
+      toast.error('附件下载地址缺失');
+      return;
+    }
+
+    try {
+      const response = await fetch(attachment.contentUrl, {
+        cache: 'no-store',
+        credentials: 'same-origin',
+      });
+      if (!response.ok) {
+        const message = await response.text().catch(() => '');
+        throw new Error(message || `Download failed with ${response.status}`);
+      }
+      const blob = await response.blob();
+      triggerBlobDownload(blob, attachment.name || `${title}.md`);
+    } catch (error) {
+      console.warn('Failed to download document attachment', error);
+      if (fallbackContent.trim()) {
+        downloadMarkdownDocument(title, fallbackContent);
+        toast.warning('附件下载失败，已导出当前可用内容');
+        return;
+      }
+      toast.error('下载失败，请稍后重试');
+    }
+  };
+
+  const renderAssistantDocumentCard = (message: ChatMessage, messageIndex: number) => {
+    const attachment = getAssistantDocumentAttachment(message);
+    const inlineContent = message.content.startsWith('已生成文档附件：') ? '' : message.content;
+    const documentContent = activeWorkflow && currentStep && inlineContent.trim()
+      ? normalizeSkillOutputDocument(activeWorkflow, currentStep, inlineContent)
+      : inlineContent.trim();
+    const title = attachment?.name?.replace(/\.md$/i, '')
+      || getMarkdownDocumentTitle(documentContent, `${currentStep?.name || '当前步骤'} - Skill 输出文档`);
 
     return (
       <div
         key={`assistant-document-${messageIndex}`}
         className="w-full min-w-0 max-w-full overflow-hidden rounded-lg border border-border/50 bg-card shadow-sm md:max-w-[80%] xl:max-w-[44rem]"
       >
-        <div className={`flex min-w-0 items-center justify-between gap-3 bg-muted/25 px-3 py-2.5 ${isExpanded ? 'border-b border-border/50' : ''}`}>
+        <div className="flex min-w-0 items-center justify-between gap-3 bg-muted/25 px-3 py-2.5">
           <div className="flex min-w-0 items-center gap-2">
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
               <FileText className="h-4 w-4" />
@@ -2501,7 +2649,8 @@ export default function WorkflowsPage() {
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold">{title}</p>
               <p className="text-[11px] text-muted-foreground">
-                Markdown 附件 · {documentContent.length.toLocaleString('zh-CN')} 字符
+                Markdown 附件
+                {attachment?.size ? ` · ${formatFileSize(attachment.size)}` : documentContent ? ` · ${documentContent.length.toLocaleString('zh-CN')} 字符` : ''}
               </p>
             </div>
           </div>
@@ -2510,57 +2659,16 @@ export default function WorkflowsPage() {
               variant="ghost"
               size="sm"
               className="h-8 w-8 p-0"
-              title="复制 Markdown"
-              aria-label="复制 Markdown 文档"
-              onClick={() => copyMarkdownToClipboard(documentContent)}
-            >
-              <Copy className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 w-8 p-0"
               title="下载 Markdown"
               aria-label="下载 Markdown 文档"
-              onClick={() => downloadMarkdownDocument(title, documentContent)}
+              onClick={() => {
+                void downloadDocumentAttachment(attachment, title, documentContent);
+              }}
             >
               <Download className="h-3.5 w-3.5" />
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 gap-1 px-2 text-xs"
-              title={isExpanded ? '折叠文档' : '展开文档'}
-              aria-expanded={isExpanded}
-              aria-controls={`assistant-document-body-${documentId}`}
-              onClick={() => {
-                setExpandedAssistantDocumentIds((prev) => ({
-                  ...prev,
-                  [documentId]: !isExpanded,
-                }));
-              }}
-            >
-              {isExpanded ? '折叠' : '展开'}
-              <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
-            </Button>
           </div>
         </div>
-        {isExpanded && (
-          <div
-            id={`assistant-document-body-${documentId}`}
-            className="max-h-[min(34rem,55vh)] min-w-0 overflow-y-auto p-4"
-          >
-            <CompactMarkdown
-              content={previewDocument.content}
-              className="text-sm leading-6 [&_h2]:text-sm [&_h3]:text-xs [&_table]:text-[11px]"
-            />
-            {previewDocument.truncated && (
-              <p className="mt-3 rounded-md border border-border/60 bg-muted/35 px-3 py-2 text-xs text-muted-foreground">
-                预览已省略 {previewDocument.omittedChars.toLocaleString('zh-CN')} 字符，复制或下载可获取完整 Markdown。
-              </p>
-            )}
-          </div>
-        )}
       </div>
     );
   };
@@ -2741,10 +2849,12 @@ export default function WorkflowsPage() {
     if (!workflow || !currentStep) return;
 
     const currentStepContextFiles = uploadedContextFiles.filter((file) => file.stepId === currentStep.id && !file.isImage);
-    const currentStepContextFileIds = new Set(currentStepContextFiles.map((file) => file.id));
     const pendingChatFiles = pendingChatFilesByStepId[currentStep.id] || [];
-    const transientChatFiles = pendingChatFiles.filter((file) => !currentStepContextFileIds.has(file.id));
-    const requestUploadedFiles = [...currentStepContextFiles, ...transientChatFiles];
+    const currentTurnUploadedFiles = pendingChatFiles;
+    const requestUploadedFiles = [
+      ...currentStepContextFiles,
+      ...pendingChatFiles.filter((file) => !currentStepContextFiles.some((contextFile) => contextFile.id === file.id)),
+    ];
     const stepInput = overrideMessage ?? chatInputByStepId[currentStep.id] ?? chatInput;
     const userMessage = stepInput.trim() || (requestUploadedFiles.length > 0 ? '请基于我上传的文件继续分析。' : '');
     if (!userMessage || streamingByStepId[currentStep.id]) return;
@@ -2784,18 +2894,18 @@ export default function WorkflowsPage() {
       });
     }
     const contextSummary = [
+      currentTurnUploadedFiles.length > 0
+        ? `本轮用户消息附带文件：${currentTurnUploadedFiles.map((file) => file.name || '未命名附件').join('、')}。如果用户提到“这份文档”“这个文件”或“附件”，优先指这些本轮消息附件；不要把默认注入的前序产物当成本轮附件。`
+        : '',
       autoInjectedStepOutputs.length > 0
-        ? `默认注入的前序步骤 Markdown 产物：${autoInjectedStepOutputs.map((step) => step.name).join('、')}。`
+        ? `系统另行注入了前序步骤 Markdown 产物作为背景参考：${autoInjectedStepOutputs.map((step) => step.name).join('、')}。这些不是本轮用户上传的文件。`
         : '',
       selectedKnowledgeBases.length > 0
         ? `选中的知识库：${selectedKnowledgeBases.map((kb) => `${kb.name}（${kb.description || '无描述'}）`).join('；')}。发送时将按本轮问题检索相关片段。`
         : '',
-      requestUploadedFiles.length > 0
-        ? `用户上传/粘贴的文件：\n${requestUploadedFiles.map((file) => summarizeWorkflowFile(file, 1200)).join('\n\n')}`
-        : '',
     ].filter(Boolean).join('\n');
     const messageWithContext = contextSummary
-      ? `${userMessage}\n\n[本轮补充上下文]\n${contextSummary}`
+      ? `${userMessage}\n\n[系统上下文说明]\n${contextSummary}`
       : userMessage;
     const userMessageCreatedAt = new Date().toISOString();
     const userVisibleMessage: ChatMessage = pendingChatFiles.length > 0
@@ -2838,6 +2948,7 @@ export default function WorkflowsPage() {
     activeChatRequestByStepIdRef.current[currentStep.id] = controller;
     let activeRunId = '';
     let assistantContent = '';
+    let persistedAssistantMessage: ChatMessage | null = null;
     const requestStartedAt = Date.now();
     const assistantMessageCreatedAt = new Date(requestStartedAt).toISOString();
     setProcessingStartedAtByStepId((prev) => ({ ...prev, [currentStep.id]: requestStartedAt }));
@@ -2884,6 +2995,7 @@ export default function WorkflowsPage() {
           selected_knowledge_bases: selectedKnowledgeBases,
           knowledge_query: userMessage,
           selected_review_materials: [],
+          current_turn_uploaded_files: currentTurnUploadedFiles.map(({ previewUrl, ...file }) => file),
           uploaded_files: requestUploadedFiles.map(({ previewUrl, ...file }) => file),
         }),
         signal: controller.signal,
@@ -2924,6 +3036,9 @@ export default function WorkflowsPage() {
           }));
         }
         if (data.error) throw new Error(data.error);
+        if (data.message?.role === 'assistant') {
+          persistedAssistantMessage = data.message;
+        }
         if (data.content) {
           assistantContent = data.replace || data.event === 'assistant_final'
             ? data.content
@@ -2967,9 +3082,11 @@ export default function WorkflowsPage() {
         throw new Error('Chat stream ended before the completion signal was received');
       }
 
-      const assistantMessage: ChatMessage = shouldStoreAssistantReplyAsDocument(userMessage, assistantContent)
-        ? { role: 'assistant', content: assistantContent, kind: 'document', created_at: assistantMessageCreatedAt }
-        : { role: 'assistant', content: assistantContent, created_at: assistantMessageCreatedAt };
+      const assistantMessage: ChatMessage = persistedAssistantMessage || {
+        role: 'assistant',
+        content: assistantContent,
+        created_at: assistantMessageCreatedAt,
+      };
       const finalMessages: ChatMessage[] = [
         ...visibleMessages,
         assistantMessage,
@@ -3169,7 +3286,10 @@ export default function WorkflowsPage() {
     setConfirmingStepId(currentStep.id);
 
     try {
-      const stepOutputDocument = normalizeSkillOutputDocument(activeWorkflow, currentStep, lastAssistantMsg.content);
+      const documentAttachment = getAssistantDocumentAttachment(lastAssistantMsg);
+      const stepOutputDocument = documentAttachment
+        ? ''
+        : lastAssistantMsg.content.trim();
       const agentValidationEnabled = WORKFLOW_OUTPUT_VALIDATION_ENABLED && Boolean(activeWorkflow.agentValidationEnabled);
       setErrorMessage('');
       if (WORKFLOW_OUTPUT_VALIDATION_ENABLED) {
@@ -3183,6 +3303,8 @@ export default function WorkflowsPage() {
           workflowId: activeWorkflow.id,
           stepId: currentStep.id,
           candidateOutput: stepOutputDocument,
+          candidateAttachmentId: documentAttachment?.id,
+          createCandidateAttachment: !documentAttachment,
           agentValidationEnabled,
         }),
       });
@@ -6063,7 +6185,7 @@ export default function WorkflowsPage() {
                           {renderProcessingTimer && (
                             <AssistantProcessingTimer seconds={currentProcessingElapsedSeconds} />
                           )}
-                          {renderAssistantDocumentCard(msg.content, idx)}
+                          {renderAssistantDocumentCard(msg, idx)}
                         </div>
                       ) : (
                         <div

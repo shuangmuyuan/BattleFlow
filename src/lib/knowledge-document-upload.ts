@@ -8,6 +8,7 @@ const DEFAULT_MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const MAX_EXTRACTED_CONTENT_CHARS = 250_000;
 
 export const SUPPORTED_KNOWLEDGE_UPLOAD_EXTENSIONS = [
+  '.txt',
   '.md',
   '.markdown',
   '.doc',
@@ -28,6 +29,7 @@ interface KnowledgeUploadDocumentInput {
 
 interface BuildKnowledgeDocumentOptions {
   maxBytes?: number;
+  maxExtractedChars?: number | null;
 }
 
 interface ExtractedUploadText {
@@ -54,40 +56,40 @@ export function getUploadExtension(fileName: string): SupportedKnowledgeUploadEx
   if (SUPPORTED_KNOWLEDGE_UPLOAD_EXTENSIONS.includes(extension as SupportedKnowledgeUploadExtension)) {
     return extension as SupportedKnowledgeUploadExtension;
   }
-  throw new KnowledgeUploadValidationError('Only .md, .doc, .docx, .pdf, and .xlsx uploads are supported');
+  throw new KnowledgeUploadValidationError('Only .txt, .md, .doc, .docx, .pdf, and .xlsx uploads are supported');
 }
 
-export function normalizeExtractedText(value: string): string {
-  return value
+export function normalizeExtractedText(value: string, maxChars = MAX_EXTRACTED_CONTENT_CHARS): string {
+  const normalized = value
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
     .split('\n')
     .map((line) => line.replace(/[ \t]+$/g, ''))
     .join('\n')
-    .trim()
-    .slice(0, MAX_EXTRACTED_CONTENT_CHARS);
+    .trim();
+  return maxChars > 0 ? normalized.slice(0, maxChars) : normalized;
 }
 
-async function extractMarkdownText(file: File): Promise<string> {
-  return normalizeExtractedText(await file.text());
+async function extractPlainText(file: File, maxChars?: number | null): Promise<string> {
+  return normalizeExtractedText(await file.text(), maxChars ?? MAX_EXTRACTED_CONTENT_CHARS);
 }
 
-async function extractDocxText(buffer: Buffer): Promise<string> {
+async function extractDocxText(buffer: Buffer, maxChars?: number | null): Promise<string> {
   const result = await mammoth.extractRawText({ buffer });
-  return normalizeExtractedText(result.value);
+  return normalizeExtractedText(result.value, maxChars ?? MAX_EXTRACTED_CONTENT_CHARS);
 }
 
-async function extractDocText(buffer: Buffer): Promise<string> {
+async function extractDocText(buffer: Buffer, maxChars?: number | null): Promise<string> {
   const extractor = new WordExtractor();
   const document = await extractor.extract(buffer);
-  return normalizeExtractedText(document.getBody());
+  return normalizeExtractedText(document.getBody(), maxChars ?? MAX_EXTRACTED_CONTENT_CHARS);
 }
 
-async function extractPdfText(buffer: Buffer): Promise<string> {
+async function extractPdfText(buffer: Buffer, maxChars?: number | null): Promise<string> {
   const parser = new PDFParse({ data: buffer });
   try {
     const result = await parser.getText();
-    return normalizeExtractedText(result.text);
+    return normalizeExtractedText(result.text, maxChars ?? MAX_EXTRACTED_CONTENT_CHARS);
   } finally {
     await parser.destroy();
   }
@@ -99,7 +101,7 @@ function formatSpreadsheetCell(value: unknown) {
   return String(value);
 }
 
-async function extractSpreadsheetText(buffer: Buffer): Promise<string> {
+async function extractSpreadsheetText(buffer: Buffer, maxChars?: number | null): Promise<string> {
   const sheets = await readXlsxFile(buffer);
   const content = sheets.map((sheet) => {
     const rows = sheet.data
@@ -110,10 +112,11 @@ async function extractSpreadsheetText(buffer: Buffer): Promise<string> {
     return rows ? `# Sheet: ${sheet.sheet}\n${rows}` : '';
   }).filter(Boolean).join('\n\n');
 
-  return normalizeExtractedText(content);
+  return normalizeExtractedText(content, maxChars ?? MAX_EXTRACTED_CONTENT_CHARS);
 }
 
 function sourceTypeForExtension(extension: SupportedKnowledgeUploadExtension): string {
+  if (extension === '.txt') return 'text';
   if (extension === '.md' || extension === '.markdown') return 'markdown';
   if (extension === '.pdf') return 'pdf';
   if (extension === '.xlsx') return 'spreadsheet';
@@ -148,6 +151,7 @@ export async function extractTextFromUploadFile(
   const fileName = getUploadFileName(file);
   const extension = getUploadExtension(fileName);
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_UPLOAD_BYTES;
+  const maxExtractedChars = options.maxExtractedChars ?? MAX_EXTRACTED_CONTENT_CHARS;
 
   if (file.size <= 0) {
     throw new KnowledgeUploadValidationError('Uploaded document is empty');
@@ -157,19 +161,19 @@ export async function extractTextFromUploadFile(
   }
 
   let content = '';
-  if (extension === '.md' || extension === '.markdown') {
-    content = await extractMarkdownText(file);
+  if (extension === '.txt' || extension === '.md' || extension === '.markdown') {
+    content = await extractPlainText(file, maxExtractedChars);
   } else if (extension === '.pdf') {
     const buffer = Buffer.from(await file.arrayBuffer());
     try {
-      content = await extractPdfText(buffer);
+      content = await extractPdfText(buffer, maxExtractedChars);
     } catch {
       throw new KnowledgeUploadValidationError('Could not extract text from PDF document');
     }
   } else if (extension === '.xlsx') {
     const buffer = Buffer.from(await file.arrayBuffer());
     try {
-      content = await extractSpreadsheetText(buffer);
+      content = await extractSpreadsheetText(buffer, maxExtractedChars);
     } catch {
       throw new KnowledgeUploadValidationError('Could not extract text from .xlsx spreadsheet');
     }
@@ -177,8 +181,8 @@ export async function extractTextFromUploadFile(
     const buffer = Buffer.from(await file.arrayBuffer());
     try {
       content = extension === '.docx'
-        ? await extractDocxText(buffer)
-        : await extractDocText(buffer);
+        ? await extractDocxText(buffer, maxExtractedChars)
+        : await extractDocText(buffer, maxExtractedChars);
     } catch {
       throw new KnowledgeUploadValidationError(`Could not extract text from ${extension} document`);
     }

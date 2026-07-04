@@ -61,7 +61,7 @@ Use `pnpm` only. Do not use `npm` or `yarn` for dependency or script execution i
 | Responsive layout check | `pnpm check:responsive` | Verifies required responsive layout class contracts. |
 | Full validation gate | `pnpm validate` | Runs type-check, lint, overlay, and responsive checks in parallel. |
 | Production build | `pnpm build` | Installs dependencies, runs `next build`, then bundles `src/server.ts` with `tsup`. |
-| Production start | `BATTLEFLOW_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start` | Runs `dist/server.js`; requires a prior build. Production start enables Claude Code `WebSearch,WebFetch` unless `BATTLEFLOW_CLAUDE_TOOLS` is explicitly overridden. |
+| Production start | `BATTLEFLOW_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start` | Runs `dist/server.js`; requires a prior build. Production start enables Claude Code `Read,Grep,Glob,WebSearch,WebFetch` unless `BATTLEFLOW_CLAUDE_TOOLS` is explicitly overridden. |
 
 ## Local Test Deployment
 
@@ -81,25 +81,33 @@ Required flow:
    - `BATTLEFLOW_DATABASE_SSL=false`
    - `BATTLEFLOW_AUTH_SECRET=...`
    - local Claude CLI settings when workflow chat needs CLI-backed tool calls.
-   - `BATTLEFLOW_CLAUDE_TOOLS=WebSearch,WebFetch` only when workflow chat needs Claude Code web search/fetch tools.
-5. Run the local database initialization scripts after the database is available:
+   - `BATTLEFLOW_CLAUDE_TOOLS=Read,Grep,Glob,WebSearch,WebFetch` only when workflow chat needs Claude Code file-read and web tools.
+5. When working from an additional git worktree, check whether the canonical repository already has a local `.env` and a running local service before creating or initializing anything:
+   - canonical local env path: `/Users/lichunhe/Documents/Playground/BattleFlow/.env`;
+   - if the current worktree has no `.env`, source the canonical `.env` or pass the same environment variables explicitly;
+   - if the expected port is already occupied, inspect the process working directory and reuse that service or start this worktree on another port; do not stop an existing local BattleFlow service unless the user explicitly asks;
+   - do not create a new local Postgres database and do not rerun migrations just because a worktree has no `.env`;
+   - for a one-off worktree run, prefer `set -a && source /Users/lichunhe/Documents/Playground/BattleFlow/.env && set +a` before `BATTLEFLOW_WORKSPACE_PATH="$(pwd)" CLAUDE_WORKSPACE_DIR="$(pwd)" CLAUDE_COMMAND=claude BATTLEFLOW_CLAUDE_TOOLS=Read,Grep,Glob,WebSearch,WebFetch DEPLOY_RUN_PORT=5101 pnpm dev`;
+   - if `GET /api/auth/me` returns `503` with `Authentication storage is not configured`, treat it as a missing runtime env problem first, not as a database bootstrap problem;
+   - a healthy unauthenticated local service should return `401 Authentication required` from `/api/auth/me`, not `503`.
+6. Run the local database initialization scripts only when the local `battleflow` database or tables are actually missing:
    - `pnpm db:knowledge:init`
    - `pnpm db:accounts:init`
    - `pnpm db:sso:init`
    - `pnpm db:notifications:init`
    - `pnpm db:resources:migrate` after auth/user bootstrap when resource metadata is needed.
-6. Run the repository validation gate before handing the app back:
+7. Run the repository validation gate before handing the app back:
    - `pnpm validate`
    - `pnpm build` only for server/runtime, dependency, route-handler, or deployment-impacting changes.
-7. Start the local service:
+8. Start the local service:
    - `DEPLOY_RUN_PORT=5100 pnpm dev`
-8. Open `http://localhost:5100` and verify the requested flow in the browser.
+9. Open `http://localhost:5100` and verify the requested flow in the browser.
 
 Remote deployment is no longer the default verification path. Use `ssh boxhub-r` and `/root/data/BattleFlow` only when the user explicitly asks to deploy or verify on the shared remote Linux host.
 
-Remote production deployments that use `pnpm start` do not need a manual web-tool environment edit: `scripts/start.sh` defaults `BATTLEFLOW_CLAUDE_TOOLS` to `WebSearch,WebFetch`. Docker deployments must also keep `Dockerfile` pointed at `pnpm start` and keep `docker-compose.yml` passing `BATTLEFLOW_CLAUDE_TOOLS: "${BATTLEFLOW_CLAUDE_TOOLS:-WebSearch,WebFetch}"`. Codex still needs to ensure the remote host has Claude Code CLI installed/authenticated, outbound network access from the host, and the repository `.agents/settings.json` with `skipWebFetchPreflight: true`.
+Remote production deployments that use `pnpm start` do not need a manual tool environment edit: `scripts/start.sh` defaults `BATTLEFLOW_CLAUDE_TOOLS` to `Read,Grep,Glob,WebSearch,WebFetch`. Docker deployments must also keep `Dockerfile` pointed at `pnpm start` and keep `docker-compose.yml` passing `BATTLEFLOW_CLAUDE_TOOLS: "${BATTLEFLOW_CLAUDE_TOOLS:-Read,Grep,Glob,WebSearch,WebFetch}"`. Codex still needs to ensure the remote host has Claude Code CLI installed/authenticated, outbound network access from the host, and the repository `.agents/settings.json` with `skipWebFetchPreflight: true`.
 
-After any production or Docker deployment, verify `GET /api/agent-runtime` returns `toolsEnabled: true` and `tools: ["WebSearch", "WebFetch"]`. This catches cases where the image or compose entrypoint bypasses `scripts/start.sh`.
+After any production or Docker deployment, verify `GET /api/agent-runtime` returns `toolsEnabled: true` and includes `Read`, `Grep`, `Glob`, `WebSearch`, and `WebFetch`. This catches cases where the image or compose entrypoint bypasses `scripts/start.sh`.
 
 Never commit `.env*`, direct Postgres connection strings, Claude credentials, `FRIEREN_DEMO_HMAC_SECRET`, Supabase service-role keys, imported private Skill packages, or runtime registry data under `data/`.
 

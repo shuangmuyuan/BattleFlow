@@ -30,6 +30,7 @@ export interface AgentRuntimeStatus {
   version?: string;
   model?: string;
   cwd?: string;
+  readableDirectories?: string[];
   mode: 'structured-cli';
   outputFormat: 'stream-json';
   toolsEnabled: boolean;
@@ -45,6 +46,7 @@ export interface AgentTurnInput {
   messages: AgentChatMessage[];
   systemPrompt: string;
   attachments?: AgentInputAttachment[];
+  readableDirectories?: string[];
   signal?: AbortSignal;
 }
 

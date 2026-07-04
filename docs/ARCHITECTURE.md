@@ -68,9 +68,9 @@ The Claude Code CLI adapter lives in `src/lib/agent-adapters/claude-code-cli.ts`
 
 - It checks CLI availability with `claude --version`.
 - It streams JSON events from `claude -p`.
-- It defaults to safe mode, no session persistence, no tools, and a configurable budget.
+- It defaults to safe mode, no session persistence, and a configurable budget. Tools are only enabled from the explicit `BATTLEFLOW_CLAUDE_TOOLS` allowlist.
 - It uses `CLAUDE_COMMAND`, `CLAUDE_MODEL`, `CLAUDE_MAX_BUDGET_USD`, and `CLAUDE_WORKSPACE_DIR`.
-- It can enable the Claude Code `WebSearch` and `WebFetch` tools when `BATTLEFLOW_CLAUDE_TOOLS=WebSearch,WebFetch` is configured. Unsupported tool names are ignored. Production start through `scripts/start.sh` supplies that approved tool list by default so deployments that run `pnpm start` get web access without a manual environment edit.
+- It can enable the approved Claude Code `Read`, `Grep`, `Glob`, `WebSearch`, and `WebFetch` tools when configured through `BATTLEFLOW_CLAUDE_TOOLS`. Unsupported tool names are ignored. Production start through `scripts/start.sh` supplies that approved tool list by default so deployments that run `pnpm start` get workflow attachment reads and web access without a manual environment edit.
 
 Do not grant CLI tools or broaden permissions without a security review.
 

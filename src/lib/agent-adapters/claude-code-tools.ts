@@ -1,4 +1,7 @@
 const SUPPORTED_CLAUDE_TOOLS = new Map([
+  ['read', 'Read'],
+  ['grep', 'Grep'],
+  ['glob', 'Glob'],
   ['websearch', 'WebSearch'],
   ['webfetch', 'WebFetch'],
 ]);
