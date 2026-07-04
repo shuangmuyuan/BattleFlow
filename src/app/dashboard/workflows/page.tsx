@@ -354,6 +354,7 @@ interface Workflow {
 
 interface ChatAttachment extends StoredWorkflowAttachmentFields {
   id: string;
+  stepId?: string;
   name: string;
   type: string;
   size: number;
@@ -1270,12 +1271,9 @@ const defaultContextSelection: WorkflowContextSelection = {
   disabledAutoInjectedStepIds: [],
 };
 
-const maxTextContextChars = 32_000;
 const maxPreviewImageBytes = 800_000;
 const maxWorkflowAttachmentBytes = 100 * 1024 * 1024;
 const maxWorkflowMessageAttachments = 50;
-const maxStepPromptContextChars = 12_000;
-const maxTotalStepPromptContextChars = 36_000;
 const maxChatRequestMessages = 12;
 const maxChatRequestMessageChars = 12_000;
 const maxTotalChatRequestMessageChars = 48_000;
@@ -1358,11 +1356,15 @@ function buildPromptChatMessages(messages: ChatMessage[]) {
 }
 
 function isReadableTextFile(file: File) {
-  return file.type.startsWith('text/') || /\.(txt|md|markdown)$/i.test(file.name);
+  return file.type.startsWith('text/') || /\.(txt|md|markdown|csv|json)$/i.test(file.name);
 }
 
 function isServerExtractableWorkflowFile(file: File) {
   return /\.(doc|docx|pdf|xlsx)$/i.test(file.name);
+}
+
+function isKnowledgeUploadFile(file: File) {
+  return isReadableTextFile(file) || isServerExtractableWorkflowFile(file);
 }
 
 function readFileAsDataUrl(file: File) {
@@ -1464,43 +1466,6 @@ async function extractWorkflowFileText(file: File) {
   };
 }
 
-async function buildWorkflowFilePayload(file: File) {
-  if (isReadableTextFile(file)) {
-    const rawText = await file.text();
-    const truncated = rawText.length > maxTextContextChars;
-    const content = truncated ? rawText.slice(0, maxTextContextChars) : rawText;
-    return {
-      contentKind: 'text' as const,
-      content,
-      note: truncated ? `文件正文已截断到 ${maxTextContextChars} 字符。` : undefined,
-      previewUrl: undefined,
-    };
-  }
-
-  if (isServerExtractableWorkflowFile(file)) {
-    return extractWorkflowFileText(file);
-  }
-
-  if (file.type.startsWith('image/') && file.size <= maxPreviewImageBytes) {
-    const dataUrl = await readFileAsDataUrl(file);
-    return {
-      contentKind: 'image_data_url' as const,
-      content: dataUrl,
-      note: '图片已保存为 data URL，本轮发送时会作为图片附件交给运行时读取。',
-      previewUrl: dataUrl,
-    };
-  }
-
-  return {
-    contentKind: 'metadata' as const,
-    content: undefined,
-    note: file.type.startsWith('image/')
-      ? `图片超过 ${Math.round(maxPreviewImageBytes / 1024)}KB，已保存元信息。`
-      : '该文件类型当前保存元信息，未读取正文。',
-    previewUrl: undefined,
-  };
-}
-
 export default function WorkflowsPage() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
@@ -1554,7 +1519,6 @@ export default function WorkflowsPage() {
   const [supplementalContextTab, setSupplementalContextTab] = useState<'knowledge' | 'materials'>('knowledge');
   const [rightPanelTab, setRightPanelTab] = useState<'outputs' | 'review' | 'context' | 'demo'>('outputs');
   const [rightPanelVisible, setRightPanelVisible] = useState(true);
-  const [expandedOutputIds, setExpandedOutputIds] = useState<Record<string, boolean>>({});
   const [showChatScrollToBottom, setShowChatScrollToBottom] = useState(false);
   const [copiedChatMessageKey, setCopiedChatMessageKey] = useState<string | null>(null);
   const [imagePreview, setImagePreview] = useState<ImagePreviewTarget | null>(null);
@@ -2343,20 +2307,37 @@ export default function WorkflowsPage() {
   }, [activeStepIndex, activeWorkflow, pendingChatFilesByStepId, updateActiveWorkflow]);
 
   const buildReviewedOutputFiles = useCallback(async (
+    workflow: Workflow,
+    step: WorkflowStep,
     files: File[],
-    stepId: string,
     createdAt: string,
   ): Promise<ReviewedOutputFile[]> => (
     Promise.all(files.map(async (file) => {
-      const payload = await buildWorkflowFilePayload(file);
+      const persistedFile = await persistWorkflowAttachmentFile(
+        workflow,
+        step,
+        file,
+        `reviewed-output-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      );
       return {
-        id: `reviewed-${Date.now()}-${file.name}-${Math.random().toString(16).slice(2)}`,
-        stepId,
-        name: file.name,
-        type: file.type || 'unknown',
-        size: file.size,
+        id: persistedFile.id,
+        stepId: step.id,
+        name: persistedFile.name,
+        type: persistedFile.type,
+        size: persistedFile.size,
+        contentKind: 'metadata' as const,
+        note: persistedFile.note,
         created_at: createdAt,
-        ...payload,
+        messageId: persistedFile.messageId,
+        storedName: persistedFile.storedName,
+        relativePath: persistedFile.relativePath,
+        absolutePath: persistedFile.absolutePath,
+        contentUrl: persistedFile.contentUrl,
+        sha256: persistedFile.sha256,
+        sourceType: persistedFile.sourceType,
+        extension: persistedFile.extension,
+        extractedTextRelativePath: persistedFile.extractedTextRelativePath,
+        extractedTextPath: persistedFile.extractedTextPath,
       };
     }))
   ), []);
@@ -2385,16 +2366,24 @@ export default function WorkflowsPage() {
     return `${(size / 1024 / 1024).toFixed(1)}MB`;
   };
 
-  const summarizeWorkflowFile = (file: UploadedContextFile | ReviewedOutputFile, maxChars = 1200) => {
+  const summarizeWorkflowFile = (file: UploadedContextFile | ReviewedOutputFile) => {
     const metadata = `${file.name}（${file.type || 'unknown'}，${formatFileSize(file.size)}）`;
-    if (file.contentKind === 'text' && file.content) {
-      return `${metadata}\n${file.content.slice(0, maxChars)}${file.content.length > maxChars ? '\n...（已截断）' : ''}`;
-    }
-    return file.note ? `${metadata}\n${file.note}` : metadata;
+    const reference = file.extractedTextRelativePath
+      || file.relativePath
+      || file.extractedTextPath
+      || file.absolutePath
+      || file.contentUrl
+      || '';
+    return [
+      metadata,
+      reference ? `文件引用：${reference}` : '',
+      file.note ? `说明：${file.note}` : '',
+    ].filter(Boolean).join('\n');
   };
 
   const toChatAttachment = (file: UploadedContextFile): ChatAttachment => ({
     id: file.id,
+    stepId: file.stepId,
     name: file.name,
     type: file.type,
     size: file.size,
@@ -2694,69 +2683,69 @@ export default function WorkflowsPage() {
       : `# ${workflow.name}\n\n## ${step.name}\n\n${output}`;
   };
 
-  const buildStepOutputPromptContext = (
-    workflow: Workflow,
-    step: WorkflowStep,
-    maxChars = maxStepPromptContextChars,
-  ) => {
-    const output = buildStepOutputMarkdown(workflow, step);
-    const sliced = sliceTextWithMiddleOmission(output, maxChars);
-
-    if (!sliced.truncated) return sliced.text;
-
-    return [
-      sliced.text,
-      '',
-      `注：该前序步骤产物原始长度为 ${output.length.toLocaleString('zh-CN')} 字符，本轮上下文已按 ${maxChars.toLocaleString('zh-CN')} 字符预算截取。`,
-    ].join('\n');
-  };
-
   const getEffectiveSkillForStep = useCallback((workflow?: Workflow | null, step?: WorkflowStep): Skill | undefined => {
     if (!workflow || !step) return undefined;
     return skills.find((skill) => skill.id === step.skill_id);
   }, [skills]);
 
-  const downloadReviewedOutputFile = (file: ReviewedOutputFile) => {
-    const content = file.content || file.note || file.name;
-    const blob = new Blob([content], { type: `${file.type || 'text/plain'};charset=utf-8` });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = file.name.replace(/[\\/:*?"<>|]/g, '-');
-    link.click();
-    URL.revokeObjectURL(url);
+  const downloadReviewedOutputFile = async (file: ReviewedOutputFile) => {
+    if (file.contentUrl) {
+      try {
+        const response = await fetch(file.contentUrl, {
+          cache: 'no-store',
+          credentials: 'same-origin',
+        });
+        if (!response.ok) {
+          const message = await response.text().catch(() => '');
+          throw new Error(message || `Download failed with ${response.status}`);
+        }
+        const blob = await response.blob();
+        triggerBlobDownload(blob, file.name);
+        return;
+      } catch (error) {
+        console.warn('Failed to download reviewed output file', error);
+        toast.error('下载失败，请稍后重试');
+        return;
+      }
+    }
+
+    if (file.content) {
+      const blob = new Blob([file.content], { type: `${file.type || 'text/plain'};charset=utf-8` });
+      triggerBlobDownload(blob, file.name);
+      return;
+    }
+
+    toast.error('附件下载地址缺失');
   };
 
-  const getKnowledgeSavableReviewedOutputFiles = (files: ReviewedOutputFile[]) => (
-    files.filter((file) => file.contentKind === 'text' && Boolean(file.content?.trim()))
-  );
-
-  const saveReviewedOutputFilesToKnowledge = async (
+  const saveReviewedUploadFilesToKnowledge = async (
     workflow: Workflow,
     step: WorkflowStep,
     knowledgeBaseId: string,
-    files: ReviewedOutputFile[],
+    files: File[],
   ) => {
-    const documents = getKnowledgeSavableReviewedOutputFiles(files).map((file) => ({
-      title: file.name,
-      sourceType: 'reviewed_output',
-      source: `${workflow.name} / ${step.name} / ${file.name}`,
-      content: file.content || '',
-      metadata: {
-        workflowId: workflow.id,
-        workflowName: workflow.name,
-        stepId: step.id,
-        stepName: step.name,
-        reviewedOutputId: file.id,
-        fileName: file.name,
-        fileType: file.type,
-        fileSize: file.size,
-        createdAt: file.created_at,
-      },
+    const documents = await Promise.all(files.map(async (file) => {
+      const extracted = await extractWorkflowFileText(file);
+      return {
+        title: file.name,
+        sourceType: 'reviewed_output',
+        source: `${workflow.name} / ${step.name} / ${file.name}`,
+        content: extracted.content,
+        metadata: {
+          workflowId: workflow.id,
+          workflowName: workflow.name,
+          stepId: step.id,
+          stepName: step.name,
+          fileName: file.name,
+          fileType: file.type,
+          fileSize: file.size,
+          importedAt: new Date().toISOString(),
+        },
+      };
     }));
 
     if (documents.length === 0) {
-      throw new Error('没有可保存到知识库的文本或 Markdown 产物');
+      throw new Error('没有可保存到知识库的文档产物');
     }
 
     const response = await fetch('/api/knowledge', {
@@ -2828,16 +2817,13 @@ export default function WorkflowsPage() {
       .map((kb) => `知识库：${kb.name}（${kb.description}）`);
     const stepContextFiles = (workflow.contextFiles || [])
       .filter((file) => file.stepId === step.id && !file.isImage)
-      .map((file) => summarizeWorkflowFile(file, 800));
+      .map((file) => summarizeWorkflowFile(file));
     const autoInjectedStepMaterials = priorSteps
       .filter((item) => item.output && !disabledAutoIds.has(item.id))
-      .map((item) => {
-        const markdown = buildStepOutputMarkdown(workflow, item);
-        return `默认注入：${item.name} Markdown 产物\n${markdown.slice(0, 1200)}${markdown.length > 1200 ? '\n...（已截断）' : ''}`;
-      });
+      .map((item) => `前序产物引用：${item.name}（请通过工作流附件读取正文）`);
     const currentStepReviewedFiles = (workflow.reviewedOutputFiles || [])
       .filter((file) => file.stepId === step.id)
-      .map((file) => summarizeWorkflowFile(file, 800));
+      .map((file) => summarizeWorkflowFile(file));
     const reviewComment = workflow.reviewComments?.[step.id]?.trim() || reviewComments[step.id]?.trim() || '';
 
     return {
@@ -2876,40 +2862,31 @@ export default function WorkflowsPage() {
     ));
     const selectedKnowledgeBases = knowledgeBases.filter((kb) => currentStepKnowledgeBaseIds.includes(kb.id));
     const disabledAutoInjectedStepIds = new Set(contextSelection.disabledAutoInjectedStepIds || []);
-    const autoInjectedStepOutputs: Array<{ id: string; name: string; output: string }> = [];
-    let remainingStepContextChars = maxTotalStepPromptContextChars;
-    for (const step of getPriorWorkflowSteps(workflow, currentStep)) {
-      if (!step.output || disabledAutoInjectedStepIds.has(step.id)) {
-        continue;
-      }
-
-      if (remainingStepContextChars <= 0) {
-        autoInjectedStepOutputs.push({
-          id: step.id,
-          name: step.name,
-          output: `注：该前序步骤产物未注入正文，因为本轮前序产物上下文已达到 ${maxTotalStepPromptContextChars.toLocaleString('zh-CN')} 字符预算。`,
-        });
-        continue;
-      }
-
-      const output = buildStepOutputPromptContext(
-        workflow,
-        step,
-        Math.min(maxStepPromptContextChars, remainingStepContextChars),
-      );
-      remainingStepContextChars -= output.length;
-      autoInjectedStepOutputs.push({
-        id: step.id,
-        name: step.name,
-        output,
-      });
-    }
+    const hasReadableAttachmentForStep = (stepId: string) => (
+      (workflow.stepChats?.[stepId] || []).some((message) => (
+        (message.attachments || []).some((attachment) => (
+          Boolean(
+            attachment.extractedTextPath
+            || attachment.extractedTextRelativePath
+            || attachment.absolutePath
+            || attachment.relativePath
+            || attachment.contentUrl,
+          )
+        ))
+      ))
+    );
+    const referencedPreviousSteps = getPriorWorkflowSteps(workflow, currentStep)
+      .filter((step) => (
+        step.output
+        && !disabledAutoInjectedStepIds.has(step.id)
+        && hasReadableAttachmentForStep(step.id)
+      ));
     const contextSummary = [
       currentTurnUploadedFiles.length > 0
         ? `本轮用户消息附带文件：${currentTurnUploadedFiles.map((file) => file.name || '未命名附件').join('、')}。如果用户提到“这份文档”“这个文件”或“附件”，优先指这些本轮消息附件；不要把默认注入的前序产物当成本轮附件。`
         : '',
-      autoInjectedStepOutputs.length > 0
-        ? `系统另行注入了前序步骤 Markdown 产物作为背景参考：${autoInjectedStepOutputs.map((step) => step.name).join('、')}。这些不是本轮用户上传的文件。`
+      referencedPreviousSteps.length > 0
+        ? `系统已提供前序步骤产物的可读取文件引用：${referencedPreviousSteps.map((step) => step.name).join('、')}。这些不是本轮用户上传的文件；需要查看内容时请读取对应附件路径。`
         : '',
       selectedKnowledgeBases.length > 0
         ? `选中的知识库：${selectedKnowledgeBases.map((kb) => `${kb.name}（${kb.description || '无描述'}）`).join('；')}。发送时将按本轮问题检索相关片段。`
@@ -2998,14 +2975,10 @@ export default function WorkflowsPage() {
             package_assets: skillDef.package_assets || [],
             tuning_request: 'tuning_request' in skillDef ? skillDef.tuning_request : undefined,
           } : undefined,
-          step_context: autoInjectedStepOutputs.map((step) => ({
-            step_name: step.name,
-            step_output: step.output,
-          })),
+          disabled_auto_injected_step_ids: Array.from(disabledAutoInjectedStepIds),
           knowledge_base_ids: currentStepKnowledgeBaseIds,
           selected_knowledge_bases: selectedKnowledgeBases,
           knowledge_query: userMessage,
-          selected_review_materials: [],
           current_turn_uploaded_files: currentTurnUploadedFiles.map(({ previewUrl, ...file }) => file),
           uploaded_files: requestUploadedFiles.map(({ previewUrl, ...file }) => file),
         }),
@@ -5145,7 +5118,7 @@ export default function WorkflowsPage() {
       ),
   );
   const reviewedOutputPromptSavableFileCount = reviewedOutputSavePrompt
-    ? reviewedOutputSavePrompt.files.filter((file) => isReadableTextFile(file) || isServerExtractableWorkflowFile(file)).length
+    ? reviewedOutputSavePrompt.files.filter(isKnowledgeUploadFile).length
     : 0;
   const reviewedOutputPromptStep = reviewedOutputSavePrompt
     ? visibleWorkflowSteps.find((step) => step.id === reviewedOutputSavePrompt.stepId)
@@ -5344,18 +5317,23 @@ export default function WorkflowsPage() {
 
     try {
       const createdAt = new Date().toISOString();
-      const filesToPersist = await buildReviewedOutputFiles(reviewedOutputSavePrompt.files, targetStep.id, createdAt);
+      const filesToPersist = await buildReviewedOutputFiles(
+        activeWorkflow,
+        targetStep,
+        reviewedOutputSavePrompt.files,
+        createdAt,
+      );
 
-      const savableFiles = getKnowledgeSavableReviewedOutputFiles(filesToPersist);
+      const savableUploadFiles = reviewedOutputSavePrompt.files.filter(isKnowledgeUploadFile);
       if (reviewedOutputSavePrompt.saveToKnowledge) {
-        if (savableFiles.length === 0) {
-          throw new Error('没有可保存到知识库的文本或 Markdown 产物');
+        if (savableUploadFiles.length === 0) {
+          throw new Error('没有可保存到知识库的文档产物');
         }
-        const insertedCount = await saveReviewedOutputFilesToKnowledge(
+        const insertedCount = await saveReviewedUploadFilesToKnowledge(
           activeWorkflow,
           targetStep,
           reviewedOutputSavePrompt.knowledgeBaseId,
-          savableFiles,
+          savableUploadFiles,
         );
         toast.success('已保存到知识库', {
           description: `写入 ${insertedCount} 个文档。`,
@@ -5366,9 +5344,9 @@ export default function WorkflowsPage() {
 
       if (!reviewedOutputSavePrompt.saveToKnowledge) {
         toast.success('已保存审核产物', { description: '本次未写入知识库。' });
-      } else if (filesToPersist.length > savableFiles.length) {
+      } else if (filesToPersist.length > savableUploadFiles.length) {
         toast.warning('部分产物未入库', {
-          description: '仅文本或 Markdown 内容已写入知识库，其他文件保留为工作流材料。',
+          description: '仅支持的文档内容已写入知识库，其他文件保留为工作流材料。',
         });
       }
 
@@ -5380,16 +5358,8 @@ export default function WorkflowsPage() {
     }
   };
   const workflowStepGroups = getWorkflowExecutionGroups(visibleWorkflowSteps);
-  const toggleOutputExpanded = (stepId: string) => {
-    setExpandedOutputIds((prev) => ({
-      ...prev,
-      [stepId]: !prev[stepId],
-    }));
-  };
-  const renderStepOutputPreview = (step: WorkflowStep, options: { label?: string } = {}) => {
+  const renderStepOutputPreview = (step: WorkflowStep) => {
     const output = step.output || '';
-    const isExpanded = Boolean(expandedOutputIds[step.id]);
-    const outputMarkdownPreview = getRenderedMarkdownPreview(output);
 
     return (
       <Card key={step.id} className="mb-2 border-border/60 bg-card/75 shadow-none">
@@ -5402,9 +5372,6 @@ export default function WorkflowsPage() {
               <div className="flex min-w-0 items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="min-w-0 truncate text-xs font-semibold">{step.name}</p>
-                  <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                    {options.label || '已确认产物'} · {output.length.toLocaleString('zh-CN')} 字符
-                  </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
                   {output && (
@@ -5418,36 +5385,9 @@ export default function WorkflowsPage() {
                       <Download className="h-3.5 w-3.5" />
                     </Button>
                   )}
-                  {output && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 gap-1 px-1.5 text-[11px]"
-                      onClick={() => toggleOutputExpanded(step.id)}
-                    >
-                      {isExpanded ? '收起' : '展开'}
-                      <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
-                    </Button>
-                  )}
                 </div>
               </div>
-              {output ? (
-                <>
-                  {isExpanded && (
-                    <div className="mt-3 max-h-72 min-w-0 overflow-y-auto rounded-lg border border-border/60 bg-background/80 p-3">
-                      <CompactMarkdown
-                        content={outputMarkdownPreview.content}
-                        className="text-xs leading-5 [&_blockquote]:my-2 [&_h2]:text-sm [&_h3]:text-xs [&_li]:text-xs [&_p]:text-xs [&_table]:text-[11px]"
-                      />
-                      {outputMarkdownPreview.truncated && (
-                        <p className="mt-3 rounded-md border border-border/60 bg-muted/35 px-3 py-2 text-xs text-muted-foreground">
-                          预览已省略 {outputMarkdownPreview.omittedChars.toLocaleString('zh-CN')} 字符，下载可获取完整 Markdown。
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </>
-              ) : (
+              {!output && (
                 <p className="mt-2 break-words text-xs text-muted-foreground">暂无产物。</p>
               )}
             </div>
@@ -5623,7 +5563,7 @@ export default function WorkflowsPage() {
                   <div className="min-w-0">
                     <p className="text-xs font-medium">默认注入前序步骤产物</p>
                     <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
-                      前序 Skill 输出的 Markdown 文档默认会进入当前步骤上下文，可按步骤关闭。
+                      前序 Skill 输出会以可读取文件路径引用进入当前步骤上下文，可按步骤关闭。
                     </p>
                   </div>
                   <Badge variant="outline" className="shrink-0 text-[11px]">
@@ -5807,7 +5747,7 @@ export default function WorkflowsPage() {
                     </Select>
                     {reviewedOutputPromptSavableFileCount === 0 && (
                       <p className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning">
-                        当前选择中没有可保存到知识库的文本或 Markdown 内容。
+                        当前选择中没有可保存到知识库的文档内容。
                       </p>
                     )}
                     {knowledgeBases.length === 0 && (
@@ -6533,7 +6473,7 @@ export default function WorkflowsPage() {
                           <div>
                             <p className="text-xs font-medium">默认注入前序步骤产物</p>
                             <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
-                              前序 Skill 输出的 Markdown 文档默认会进入当前步骤上下文，可按步骤关闭。
+                              前序 Skill 输出会以可读取文件路径引用进入当前步骤上下文，可按步骤关闭。
                             </p>
                           </div>
                           <Badge variant="outline" className="shrink-0 text-[11px]">
@@ -6810,7 +6750,7 @@ export default function WorkflowsPage() {
                     </Badge>
                   </div>
                   {currentStep?.output ? (
-                    renderStepOutputPreview(currentStep, { label: '当前步骤' })
+                    renderStepOutputPreview(currentStep)
                   ) : (
                     <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
                       当前步骤验证通过后，会在这里展示本步骤产出。
@@ -6824,7 +6764,7 @@ export default function WorkflowsPage() {
                     <Badge variant="outline" className="shrink-0 text-[11px]">{previousSteps.length} 个</Badge>
                   </div>
                   {previousSteps.length > 0 ? (
-                    previousSteps.map((step) => renderStepOutputPreview(step, { label: '前序步骤' }))
+                    previousSteps.map((step) => renderStepOutputPreview(step))
                   ) : (
                     <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
                       当前步骤暂无前序产出。
@@ -6838,7 +6778,7 @@ export default function WorkflowsPage() {
                       <h4 className="min-w-0 truncate text-xs font-medium text-muted-foreground">并行任务产出</h4>
                       <Badge variant="outline" className="shrink-0 text-[11px]">{parallelPeerSteps.length} 个</Badge>
                     </div>
-                    {parallelPeerSteps.map((step) => renderStepOutputPreview(step, { label: '并行步骤' }))}
+                    {parallelPeerSteps.map((step) => renderStepOutputPreview(step))}
                   </div>
                 )}
 
@@ -6865,7 +6805,7 @@ export default function WorkflowsPage() {
                           全部下载
                         </Button>
                       </div>
-                      {finalWorkflowOutputSteps.map((step) => renderStepOutputPreview(step, { label: '最终产物' }))}
+                      {finalWorkflowOutputSteps.map((step) => renderStepOutputPreview(step))}
                     </div>
                   ) : (
                     <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
@@ -6921,11 +6861,13 @@ export default function WorkflowsPage() {
                                   <p className="truncate font-medium">{file.name}</p>
                                   <p className="text-muted-foreground">{formatFileSize(file.size)}</p>
                                 </div>
-                                {file.content && (
+                                {(file.contentUrl || file.content) && (
                                   <button
                                     type="button"
                                     className="text-muted-foreground hover:text-foreground"
-                                    onClick={() => downloadReviewedOutputFile(file)}
+                                    onClick={() => {
+                                      void downloadReviewedOutputFile(file);
+                                    }}
                                     aria-label={`下载 ${file.name}`}
                                   >
                                     <Download className="h-3.5 w-3.5" />
