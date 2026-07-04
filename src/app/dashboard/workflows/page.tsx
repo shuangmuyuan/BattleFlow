@@ -351,6 +351,11 @@ interface ChatAttachment {
   created_at?: string;
 }
 
+interface ImagePreviewTarget {
+  src: string;
+  alt: string;
+}
+
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -1474,6 +1479,7 @@ export default function WorkflowsPage() {
   const [expandedOutputIds, setExpandedOutputIds] = useState<Record<string, boolean>>({});
   const [showChatScrollToBottom, setShowChatScrollToBottom] = useState(false);
   const [copiedChatMessageKey, setCopiedChatMessageKey] = useState<string | null>(null);
+  const [imagePreview, setImagePreview] = useState<ImagePreviewTarget | null>(null);
   const [workflowRouteState, setWorkflowRouteState] = useState<WorkflowRouteState>(emptyWorkflowRouteState);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
@@ -2470,6 +2476,10 @@ export default function WorkflowsPage() {
     }
   }, []);
 
+  const openImagePreview = useCallback((src: string, alt: string) => {
+    setImagePreview({ src, alt: alt.trim() || '对话图片' });
+  }, []);
+
   const getMarkdownDocumentTitle = (content: string, fallback: string) => {
     const sample = content.length > maxDocumentTitleScanChars ? content.slice(0, maxDocumentTitleScanChars) : content;
     const heading = sample.match(/^\s*#{1,3}\s+(.+)$/m)?.[1]?.trim();
@@ -2965,10 +2975,15 @@ export default function WorkflowsPage() {
           }));
         }
         if (data.error) throw new Error(data.error);
-        if (data.content) {
-          assistantContent = data.replace || data.event === 'assistant_final'
+        if (typeof data.content === 'string') {
+          const shouldReplaceAssistantContent = data.replace || data.event === 'assistant_final';
+          const nextAssistantContent = shouldReplaceAssistantContent
             ? data.content
             : assistantContent + data.content;
+          if (shouldReplaceAssistantContent && !nextAssistantContent.trim() && assistantContent.trim()) {
+            return false;
+          }
+          assistantContent = nextAssistantContent;
           updateVisibleChatMessagesForStep(currentStep.id, [
             ...visibleMessages,
             { role: 'assistant', content: assistantContent, created_at: assistantMessageCreatedAt },
@@ -3006,6 +3021,9 @@ export default function WorkflowsPage() {
 
       if (!receivedDone) {
         throw new Error('Chat stream ended before the completion signal was received');
+      }
+      if (!assistantContent.trim()) {
+        throw new Error('Chat completed without assistant content');
       }
 
       const assistantMessage: ChatMessage = shouldStoreAssistantReplyAsDocument(userMessage, assistantContent)
@@ -6080,7 +6098,8 @@ export default function WorkflowsPage() {
                     && !msg.content.trim();
                   const renderProcessingTimer = isStreaming
                     && idx === lastAssistantMessageIndex
-                    && msg.role === 'assistant';
+                    && msg.role === 'assistant'
+                    && Boolean(msg.content.trim());
                   const messageCreatedAt = msg.created_at
                     || chatMessages[idx + 1]?.created_at
                     || chatMessages[idx - 1]?.created_at
@@ -6136,19 +6155,29 @@ export default function WorkflowsPage() {
                                     }`}
                                   >
                                     {msg.role === 'assistant' ? (
-                                      <CompactMarkdown content={msg.content} />
+                                      <CompactMarkdown
+                                        content={msg.content}
+                                        onImageClick={(image) => openImagePreview(image.src, image.alt)}
+                                      />
                                     ) : (
                                       <div className="flex min-w-0 max-w-full flex-col gap-2">
                                         {msg.attachments && msg.attachments.length > 0 && (
                                           <div className="flex max-w-full flex-wrap justify-end gap-2">
                                             {msg.attachments.map((attachment) => (
                                               attachment.isImage && attachment.previewUrl ? (
-                                                <img
+                                                <button
                                                   key={attachment.id}
-                                                  src={attachment.previewUrl}
-                                                  alt={attachment.name}
-                                                  className="max-h-64 max-w-full rounded-md border border-primary-foreground/20 object-contain"
-                                                />
+                                                  type="button"
+                                                  className="max-w-full cursor-zoom-in rounded-md border border-primary-foreground/20 transition hover:border-primary-foreground/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-foreground/70"
+                                                  onClick={() => openImagePreview(attachment.previewUrl || '', attachment.name)}
+                                                  aria-label={`查看图片：${attachment.name}`}
+                                                >
+                                                  <img
+                                                    src={attachment.previewUrl}
+                                                    alt={attachment.name}
+                                                    className="max-h-64 max-w-full rounded-md object-contain"
+                                                  />
+                                                </button>
                                               ) : (
                                                 <div
                                                   key={attachment.id}
@@ -6874,6 +6903,29 @@ export default function WorkflowsPage() {
           </div>
         )}
       </div>
+
+      <Dialog
+        open={Boolean(imagePreview)}
+        onOpenChange={(open) => {
+          if (!open) setImagePreview(null);
+        }}
+      >
+        <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-[calc(100vw-2rem)] gap-3 overflow-hidden bg-background/95 p-3 sm:max-w-[92vw] lg:max-w-6xl">
+          <DialogHeader className="sr-only">
+            <DialogTitle>{imagePreview?.alt || '图片预览'}</DialogTitle>
+            <DialogDescription>查看对话中的图片大图</DialogDescription>
+          </DialogHeader>
+          <div className="flex max-h-[calc(100dvh-5rem)] min-h-0 items-center justify-center overflow-auto rounded-lg bg-black/50">
+            {imagePreview && (
+              <img
+                src={imagePreview.src}
+                alt={imagePreview.alt}
+                className="max-h-[calc(100dvh-6rem)] max-w-full object-contain"
+              />
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
     </div>
   );

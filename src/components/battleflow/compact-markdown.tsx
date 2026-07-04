@@ -1,6 +1,8 @@
 import { useMemo, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
+type MarkdownImageClickHandler = (image: { src: string; alt: string }) => void;
+
 type MarkdownBlock =
   | { type: 'heading'; level: number; text: string }
   | { type: 'paragraph'; lines: string[] }
@@ -169,9 +171,24 @@ function getSafeMarkdownHref(value: string) {
   }
 }
 
-function renderInline(text: string): ReactNode[] {
+function getSafeMarkdownImageSrc(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.startsWith('/')) return trimmed;
+  if (/^data:image\/[a-z0-9.+-]+;base64,/i.test(trimmed)) return trimmed;
+  if (trimmed.startsWith('blob:')) return trimmed;
+
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? trimmed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function renderInline(text: string, onImageClick?: MarkdownImageClickHandler): ReactNode[] {
   const nodes: ReactNode[] = [];
-  const pattern = /(\[[^\]]+\]\([^)]+\)|`[^`]+`|\*\*[^*]+\*\*|__[^_]+__)/g;
+  const pattern = /(!\[[^\]]*]\([^)]+\)|\[[^\]]+\]\([^)]+\)|`[^`]+`|\*\*[^*]+\*\*|__[^_]+__)/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -181,8 +198,38 @@ function renderInline(text: string): ReactNode[] {
     }
 
     const token = match[0];
-    const link = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
-    if (link) {
+    const image = token.match(/^!\[([^\]]*)]\(([^)]+)\)$/);
+    const link = token.match(/^\[([^\]]+)]\(([^)]+)\)$/);
+    if (image) {
+      const alt = image[1].trim() || '图片';
+      const safeSrc = getSafeMarkdownImageSrc(image[2]);
+      if (safeSrc) {
+        nodes.push(onImageClick ? (
+          <button
+            key={`${token}-${match.index}`}
+            type="button"
+            className="my-2 block max-w-full cursor-zoom-in rounded-md border border-border/50 bg-background/40 p-0.5 text-left transition hover:border-primary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => onImageClick({ src: safeSrc, alt })}
+            aria-label={`查看图片：${alt}`}
+          >
+            <img
+              src={safeSrc}
+              alt={alt}
+              className="max-h-72 max-w-full rounded object-contain"
+            />
+          </button>
+        ) : (
+          <img
+            key={`${token}-${match.index}`}
+            src={safeSrc}
+            alt={alt}
+            className="my-2 max-h-72 max-w-full rounded-md border border-border/50 object-contain"
+          />
+        ));
+      } else {
+        nodes.push(alt);
+      }
+    } else if (link) {
       const safeHref = getSafeMarkdownHref(link[2]);
       nodes.push(safeHref ? (
         <a
@@ -222,11 +269,11 @@ function renderInline(text: string): ReactNode[] {
   return nodes;
 }
 
-function renderMultiline(lines: string[]) {
+function renderMultiline(lines: string[], onImageClick?: MarkdownImageClickHandler) {
   return lines.map((line, index) => (
     <span key={`${line}-${index}`}>
       {index > 0 && <br />}
-      {renderInline(line)}
+      {renderInline(line, onImageClick)}
     </span>
   ));
 }
@@ -234,9 +281,11 @@ function renderMultiline(lines: string[]) {
 export function CompactMarkdown({
   content,
   className,
+  onImageClick,
 }: {
   content: string;
   className?: string;
+  onImageClick?: MarkdownImageClickHandler;
 }) {
   const blocks = useMemo(() => parseMarkdown(content), [content]);
 
@@ -253,7 +302,7 @@ export function CompactMarkdown({
               key={`heading-${index}`}
               className="mt-4 min-w-0 max-w-full break-words first:mt-0 rounded-md bg-muted/45 px-3 py-2 text-sm font-semibold text-foreground [overflow-wrap:anywhere]"
             >
-              {renderInline(block.text)}
+              {renderInline(block.text, onImageClick)}
             </div>
           );
         }
@@ -261,7 +310,7 @@ export function CompactMarkdown({
         if (block.type === 'paragraph') {
           return (
             <p key={`paragraph-${index}`} className="whitespace-normal break-words text-sm text-foreground/90 [overflow-wrap:anywhere]">
-              {renderMultiline(block.lines)}
+              {renderMultiline(block.lines, onImageClick)}
             </p>
           );
         }
@@ -278,7 +327,7 @@ export function CompactMarkdown({
             >
               {block.items.map((item, itemIndex) => (
                 <li key={`${item}-${itemIndex}`} className="min-w-0 break-words pl-1 [overflow-wrap:anywhere]">
-                  {renderInline(item)}
+                  {renderInline(item, onImageClick)}
                 </li>
               ))}
             </ListTag>
@@ -291,7 +340,7 @@ export function CompactMarkdown({
               key={`quote-${index}`}
               className="min-w-0 max-w-full break-words border-l-2 border-brand/60 bg-muted/30 px-3 py-2 text-sm text-muted-foreground [overflow-wrap:anywhere]"
             >
-              {renderMultiline(block.lines)}
+              {renderMultiline(block.lines, onImageClick)}
             </blockquote>
           );
         }
@@ -316,7 +365,7 @@ export function CompactMarkdown({
                   <tr>
                     {header.map((cell, cellIndex) => (
                       <th key={`${cell}-${cellIndex}`} className="break-words border-b border-border/60 px-3 py-2 font-semibold">
-                        {renderInline(cell)}
+                        {renderInline(cell, onImageClick)}
                       </th>
                     ))}
                   </tr>
@@ -326,7 +375,7 @@ export function CompactMarkdown({
                     <tr key={`row-${rowIndex}`} className="border-t border-border/40">
                       {row.map((cell, cellIndex) => (
                         <td key={`${cell}-${cellIndex}`} className="break-words px-3 py-2 align-top text-foreground/85">
-                          {renderInline(cell)}
+                          {renderInline(cell, onImageClick)}
                         </td>
                       ))}
                     </tr>

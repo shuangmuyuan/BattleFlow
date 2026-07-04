@@ -103,6 +103,10 @@ interface ChatRunRecord {
   abortController: AbortController;
 }
 
+function mergeAssistantFinalContent(currentContent: string, finalContent: string) {
+  return finalContent.trim() ? finalContent : currentContent;
+}
+
 interface SkillPackageAssetContext {
   path?: string;
   kind?: string;
@@ -123,6 +127,27 @@ const CLAUDE_RUNTIME_SKILL_MISFIRE_MARKERS = [
   '可用的 Skill',
   '已注册的可用 Skill',
   '没有看到任何已注册',
+  '没有任何 skill 被激活',
+  '没有任何 Skill 被激活',
+  '没有任何 skill 激活',
+  '没有任何 Skill 激活',
+  '没有任何 skill 被调用',
+  '没有任何 Skill 被调用',
+  '没有加载skill',
+  '没有加载Skill',
+  '没有加载 skill',
+  '没有加载 Skill',
+  '未加载skill',
+  '未加载Skill',
+  '未加载 skill',
+  '未加载 Skill',
+  '无法识别当前使用的是哪个 skill',
+  '无法识别当前使用的是哪个 Skill',
+  '无法判断当前使用的是哪个 skill',
+  '无法判断当前使用的是哪个 Skill',
+  '系统没有提供',
+  '这个 skill 的定义',
+  '这个 Skill 的定义',
   '无法猜测或自行发明技能名称',
 ];
 
@@ -356,7 +381,9 @@ async function appendWorkflowAssistantMessage(
 
 async function persistCompletedChatRun(run: ChatRunRecord) {
   const content = run.assistantContent.trim();
-  if (!content) return;
+  if (!content) {
+    throw new Error('Chat completed without assistant content');
+  }
 
   const message: WorkflowChatMessageRecord = {
     role: 'assistant',
@@ -751,6 +778,7 @@ function buildSystemPrompt(body: Record<string, unknown>) {
       'Do not interpret those references as a request to activate, list, or choose Claude Code or Codex runtime capabilities.',
       'Do not ask the user to provide a slash command or a capability name. Do not mention registered runtime capability lists or unavailable runtime capabilities.',
       'When the user asks to follow the current method package requirements, directly apply the SKILL.md instructions below.',
+      'When the user asks which Skill, method package, or current capability is active, answer with this active BattleFlow method package name and its declared planning capabilities. Never say that no runtime Skill is loaded while this binding exists.',
       'If an earlier assistant message asked the user to choose a runtime capability, treat it as an obsolete misinterpretation and continue with this active BattleFlow method package.',
     ].map((item) => `- ${item}`).join('\n')}\n`;
 
@@ -884,6 +912,9 @@ async function consumeChatRunForPersistence(run: ChatRunRecord, agentStream: Rea
       if (value.type === 'assistant_message') {
         run.assistantContent += value.text;
         run.updatedAt = nowIso();
+      } else if (value.type === 'assistant_final') {
+        run.assistantContent = mergeAssistantFinalContent(run.assistantContent, value.text);
+        run.updatedAt = nowIso();
       } else if (value.type === 'session_status' && value.status === 'aborted') {
         canceledByRuntime = true;
         break;
@@ -893,27 +924,28 @@ async function consumeChatRunForPersistence(run: ChatRunRecord, agentStream: Rea
     }
 
     if (run.abortController.signal.aborted || canceledByRuntime || run.status === 'canceled') {
+      await persistCanceledChatRun(run);
       run.status = 'canceled';
       run.updatedAt = nowIso();
-      await persistCanceledChatRun(run);
       return;
     }
 
+    await persistCompletedChatRun(run);
     run.status = 'succeeded';
     run.updatedAt = nowIso();
-    await persistCompletedChatRun(run);
   } catch (error) {
     if (run.abortController.signal.aborted || run.status === 'canceled') {
+      await persistCanceledChatRun(run);
       run.status = 'canceled';
       run.updatedAt = nowIso();
-      await persistCanceledChatRun(run);
       return;
     }
 
+    const safeError = getSafeChatErrorMessage(error);
+    run.error = safeError;
+    await persistFailedChatRun(run, safeError);
     run.status = 'failed';
-    run.error = getSafeChatErrorMessage(error);
     run.updatedAt = nowIso();
-    await persistFailedChatRun(run, error);
   } finally {
     reader.releaseLock();
     pruneChatRuns();
