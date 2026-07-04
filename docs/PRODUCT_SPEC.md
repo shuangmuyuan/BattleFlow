@@ -28,7 +28,7 @@ BattleFlow is a workspace for AI-native product planning. It helps teams turn re
 - File-backed workflow registry under `data/workflows/` by default.
 - Dashboard pages for Skills, workflows, knowledge, demos, and workspace overview.
 - Chat route that uses the Claude Code CLI adapter for AI collaboration.
-- Supabase configuration injection for browser auth and server-side data access.
+- First-party account, organization, and resource authorization backed by direct Postgres.
 - UI validation scripts that enforce overlay and responsive layout contracts.
 
 ## Success Criteria

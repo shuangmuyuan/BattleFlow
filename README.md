@@ -19,7 +19,7 @@ BattleFlow 是一个面向 AI Native 产品规划的 Skill 编排和工作流平
 - TypeScript
 - Tailwind CSS v4
 - shadcn/ui
-- Supabase JS Client
+- Direct Postgres through `pg`
 - pnpm
 
 ## 快速开始
@@ -60,12 +60,11 @@ DEPLOY_RUN_PORT=5000
 HOSTNAME=localhost
 ```
 
-Supabase：
+Postgres:
 
 ```bash
-BATTLEFLOW_SUPABASE_URL=
-BATTLEFLOW_SUPABASE_ANON_KEY=
-BATTLEFLOW_SUPABASE_SERVICE_ROLE_KEY=
+BATTLEFLOW_DATABASE_URL=
+BATTLEFLOW_DATABASE_SSL=false
 ```
 
 Skill registry：
@@ -89,7 +88,7 @@ src/
     dashboard/workflows/ 工作流页面
   lib/
     skill-registry.ts    文件型 Skill registry 实现
-  storage/database/      Supabase 客户端封装
+  storage/database/      Direct Postgres client boundary
 
 skills/
   official/              官方 Skill seed

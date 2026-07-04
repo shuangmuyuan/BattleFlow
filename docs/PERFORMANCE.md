@@ -9,7 +9,7 @@
 - Chat streaming through `/api/chat`.
 - Claude CLI Skill tuning through `/api/skills/tune`.
 - File-backed registry read/write paths.
-- Supabase config injection and browser client initialization.
+- Direct Postgres pool usage in server routes and repositories.
 
 ## UI Budgets
 

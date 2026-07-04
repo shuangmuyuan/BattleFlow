@@ -18,8 +18,8 @@ The repository is an individual application repo, not a monorepo and not an orch
 | `src/app` | App Router entry points, layouts, dashboard pages, login page, API route handlers, metadata, robots. |
 | `src/components/ui` | shadcn/ui primitives and bounded Radix wrappers. |
 | `src/components/battleflow` | Product-level UI helpers such as page headers, cards, empty states, and compact Markdown rendering. |
-| `src/lib` | File-backed registries, workflow registry, agent adapters, Skill tuning, Supabase config injection, utilities. |
-| `src/storage` | Supabase client creation, direct Postgres knowledge-store access, and Drizzle schema definitions. |
+| `src/lib` | File-backed registries, workflow registry, agent adapters, Skill tuning, knowledge repositories, and utilities. |
+| `src/storage` | Direct Postgres client creation and database access boundaries. |
 | `skills/official` | Seeded product-planning Skills used to initialize the Skill registry. |
 | `scripts` | Development, build, production start, and static layout validation. |
 
@@ -31,12 +31,10 @@ BattleFlow currently has two storage styles:
    - `SKILL_REGISTRY_DIR` defaults to `data/skill-registry`.
    - `WORKFLOW_REGISTRY_DIR` defaults to `data/workflows`.
    - Both directories are gitignored runtime state.
-2. Supabase-backed data model and direct Postgres knowledge store:
-   - `src/storage/database/shared/schema.ts` defines organizations, members, Skills, workflows, steps, snapshots, milestones, knowledge bases, and PRD documents.
-   - `src/storage/database/supabase-client.ts` creates server clients with anon or service-role keys depending on available env.
-   - `src/storage/database/postgres-client.ts` creates a server-only Postgres pool from `BATTLEFLOW_DATABASE_URL` for knowledge-store operations when a full Supabase REST/Auth stack is not available.
+2. Direct Postgres data model and resource metadata:
+   - `src/storage/database/postgres-client.ts` creates a server-only Postgres pool from `BATTLEFLOW_DATABASE_URL`.
    - `scripts/database/001_knowledge_store.sql` bootstraps organizations, knowledge bases, knowledge documents, and lexical/trigram search indexes.
-   - Browser auth uses injected public Supabase config from `src/lib/supabase-config-inject.tsx` and `src/lib/supabase-browser.ts`.
+   - `scripts/database/002_account_org_permissions.sql` bootstraps first-party accounts, sessions, organizations, resource grants, snapshots, milestones, and PRD documents.
 
 Agents must preserve the distinction between source files and runtime registry data.
 
@@ -52,8 +50,7 @@ All API handlers use App Router route handlers under `src/app/api`.
 - `/api/chat` streams product-planning chat responses with knowledge and workflow context.
 - `/api/demos/handoffs` creates and reads node-level Demo handoff records after workflow authorization. `POST` requires `workflow.update`, sends the current completed step's durable `step.output` to the external Demo platform, and stores the returned link in `workflow.demoHandoffs`; `GET` requires `workflow.read`.
 - `/api/agent-runtime` reports Claude Code CLI adapter availability.
-- `/api/supabase-config` exposes browser-safe Supabase config.
-- `/api/prd` reads and writes PRD documents through Supabase.
+- `/api/prd` reads and writes PRD documents through direct Postgres.
 - `/api/knowledge` handles knowledge data for the dashboard. Knowledge document indexing/search uses direct Postgres when `BATTLEFLOW_DATABASE_URL` is configured.
 
 Route handlers that access the file system or spawn CLI processes must keep `runtime = 'nodejs'`.
@@ -123,6 +120,6 @@ The dashboard has a fixed viewport shell in `src/app/dashboard/layout.tsx`:
 - mobile horizontal navigation;
 - bounded main scroll regions;
 - theme toggle using `useTheme`;
-- optional Supabase auth user display.
+- first-party account and organization display.
 
 Pages must own their scroll regions and avoid body-level layout drift. The static validation scripts enforce required class tokens for this.

@@ -48,13 +48,21 @@ BATTLEFLOW_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start
 
 `scripts/start.sh` runs `node dist/server.js`, so `pnpm build` must run first. Production start defaults `BATTLEFLOW_CLAUDE_TOOLS` to `WebSearch,WebFetch`; override the variable only when the deployment needs to disable or restrict Claude Code web tools.
 
+## Docker Compose
+
+```bash
+docker compose up -d --build
+```
+
+The Docker image starts through `pnpm start`, not `node dist/server.js`, so the same production defaults from `scripts/start.sh` are applied. `docker-compose.yml` also passes `BATTLEFLOW_CLAUDE_TOOLS` explicitly as `WebSearch,WebFetch` by default. After deployment, verify `GET /api/agent-runtime` reports `toolsEnabled: true` and includes both `WebSearch` and `WebFetch`.
+
 ## Database Bootstrap
 
 ```bash
 BATTLEFLOW_DATABASE_URL=postgresql://... pnpm db:knowledge:init
 ```
 
-This applies the direct Postgres knowledge-store bootstrap in `scripts/database/001_knowledge_store.sql`. It is intended for runtimes that expose Postgres but do not expose the Supabase REST/Auth API stack.
+This applies the direct Postgres knowledge-store bootstrap in `scripts/database/001_knowledge_store.sql`.
 
 ## Demo Handoff Integration
 
@@ -74,10 +82,7 @@ The local route is `POST /api/demos/handoffs` with `{ workflowId, stepId }`. It 
 | `BATTLEFLOW_PROJECT_ENV` | `DEV` for development, `PROD` for production mode. |
 | `DEPLOY_RUN_PORT` | HTTP port used by scripts. |
 | `HOSTNAME` | Server hostname, defaults to `localhost`. |
-| `BATTLEFLOW_SUPABASE_URL` | Supabase project URL. |
-| `BATTLEFLOW_SUPABASE_ANON_KEY` | Browser-safe Supabase anon key. |
-| `BATTLEFLOW_SUPABASE_SERVICE_ROLE_KEY` | Server-only privileged Supabase key. |
-| `BATTLEFLOW_DATABASE_URL` | Server-only direct Postgres connection string for knowledge-store operations. |
+| `BATTLEFLOW_DATABASE_URL` | Server-only direct Postgres connection string for account, authorization, knowledge, PRD, and resource metadata operations. |
 | `BATTLEFLOW_DEFAULT_ORGANIZATION_ID` | Default organization used by single-tenant knowledge operations. |
 | `BATTLEFLOW_DATABASE_POOL_MAX` | Optional Postgres pool size, defaults to `5`. |
 | `BATTLEFLOW_DATABASE_SSL` | Optional Postgres SSL mode. Use `true` or `require` to enable SSL. |

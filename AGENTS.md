@@ -35,8 +35,8 @@ BattleFlow is a Next.js product-planning workspace for AI-native teams. It turns
 │   │   ├── battleflow/         # Product-specific UI primitives and markdown rendering
 │   │   └── ui/                 # shadcn/ui components based on Radix UI
 │   ├── hooks/                  # Client hooks such as theme and mobile detection
-│   ├── lib/                    # File-backed registries, agent adapters, knowledge repository, Supabase config helpers
-│   ├── storage/                # Supabase/Postgres clients and Drizzle schema definitions
+│   ├── lib/                    # File-backed registries, agent adapters, knowledge repositories, auth helpers
+│   ├── storage/                # Direct Postgres client boundary
 │   └── server.ts               # Custom Node HTTP entrypoint for Next.js
 ├── skills/official/            # Seeded BattleFlow product-planning Skills
 ├── scripts/                    # Build, dev, start, and validation scripts
@@ -97,9 +97,11 @@ Required flow:
 
 Remote deployment is no longer the default verification path. Use `ssh boxhub-r` and `/root/data/BattleFlow` only when the user explicitly asks to deploy or verify on the shared remote Linux host.
 
-Remote production deployments that use `pnpm start` do not need a manual web-tool environment edit: `scripts/start.sh` defaults `BATTLEFLOW_CLAUDE_TOOLS` to `WebSearch,WebFetch`. Codex still needs to ensure the remote host has Claude Code CLI installed/authenticated, outbound network access from the host, and the repository `.agents/settings.json` with `skipWebFetchPreflight: true`.
+Remote production deployments that use `pnpm start` do not need a manual web-tool environment edit: `scripts/start.sh` defaults `BATTLEFLOW_CLAUDE_TOOLS` to `WebSearch,WebFetch`. Docker deployments must also keep `Dockerfile` pointed at `pnpm start` and keep `docker-compose.yml` passing `BATTLEFLOW_CLAUDE_TOOLS: "${BATTLEFLOW_CLAUDE_TOOLS:-WebSearch,WebFetch}"`. Codex still needs to ensure the remote host has Claude Code CLI installed/authenticated, outbound network access from the host, and the repository `.agents/settings.json` with `skipWebFetchPreflight: true`.
 
-Never commit `.env*`, direct Postgres connection strings, Claude credentials, `FRIEREN_DEMO_HMAC_SECRET`, Supabase service-role keys, imported private Skill packages, or runtime registry data under `data/`.
+After any production or Docker deployment, verify `GET /api/agent-runtime` returns `toolsEnabled: true` and `tools: ["WebSearch", "WebFetch"]`. This catches cases where the image or compose entrypoint bypasses `scripts/start.sh`.
+
+Never commit `.env*`, direct Postgres connection strings, Claude credentials, `FRIEREN_DEMO_HMAC_SECRET`, imported private Skill packages, or runtime registry data under `data/`.
 
 ## Mandatory Rules
 
@@ -115,7 +117,7 @@ Never commit `.env*`, direct Postgres connection strings, Claude credentials, `F
 - Overlay safety: business code must not import raw Radix overlay primitives directly. Use the bounded components in `src/components/ui/`.
 - Validation: run `pnpm validate` before considering a code or UI change complete. Run `pnpm build` for server/runtime, dependency, or deployment-impacting changes.
 - Testing gap: this repo currently has validation scripts but no unit/component/e2e test runner. Behavior changes should either add focused tests if a runner is introduced or document the manual verification performed.
-- Secrets: never commit `.env*`, Supabase service role keys, direct Postgres connection strings/passwords, Anthropic/Claude credentials, imported private Skill packages, or runtime registry data under `data/`.
+- Secrets: never commit `.env*`, direct Postgres connection strings/passwords, Anthropic/Claude credentials, imported private Skill packages, or runtime registry data under `data/`.
 - Runtime data: `data/skill-registry/`, `data/workflows/`, `.dwp/`, and `tmp/` are working state, not product source.
 - Repository boundaries: this is an individual repository. Do not treat it as an orchestrator hub and do not commit unrelated sibling repository changes from here.
 - Progress reporting: for multi-step work, keep the user informed after significant phases. Do not block engineering work on status reporting if the reporting channel is unavailable.
