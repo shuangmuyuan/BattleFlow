@@ -212,6 +212,82 @@ describe('Chat API route', () => {
     ]);
   });
 
+  it('streams and persists structured tool results beyond the short preview', async () => {
+    const fullContent = [
+      '1|export function first() {',
+      '2|  return "完整工具结果";',
+      '3|}',
+      '4|',
+      '5|export function second() {',
+      '6|  return "preview 之外的内容";',
+      '7|}',
+    ].join('\n');
+    const toolResult = {
+      content: fullContent,
+      file: {
+        filePath: '/tmp/battleflow/src/example.ts',
+        numLines: 7,
+      },
+    };
+
+    mocks.streamClaudeCodeCliTurn.mockReturnValue(streamAgentEvents([
+      {
+        type: 'tool_call',
+        id: 'tool-read-1',
+        name: 'Read',
+        status: 'running',
+        input: { file_path: '/tmp/battleflow/src/example.ts' },
+        timestamp: '2026-07-06T02:00:00.000Z',
+      },
+      {
+        type: 'tool_call',
+        id: 'tool-read-1',
+        name: 'Read',
+        status: 'completed',
+        result: toolResult,
+        resultPreview: 'export function first() {',
+        timestamp: '2026-07-06T02:00:01.000Z',
+      },
+      { type: 'assistant_final', text: '已读取文件。' },
+      { type: 'session_status', status: 'done' },
+    ]));
+
+    const response = await POST(postRequest({
+      workflowId: 'workflow-1',
+      workflow_step_id: 'step-1',
+      messages: [{ role: 'user', content: '读取文件' }],
+    }));
+    const events = parseSse(await response.text());
+
+    expect(response.status).toBe(200);
+    expect(events).toContainEqual(expect.objectContaining({
+      event: 'tool_call',
+      tool_call: expect.objectContaining({
+        id: 'tool-read-1',
+        name: 'Read',
+        status: 'completed',
+        result: toolResult,
+        resultPreview: 'export function first() {',
+      }),
+    }));
+
+    const persistedWorkflow = mocks.upsertWorkflow.mock.calls.at(-1)?.[0] as WorkflowRecord;
+    expect(persistedWorkflow.stepChats['step-1']).toEqual([
+      expect.objectContaining({
+        role: 'assistant',
+        toolCalls: [
+          expect.objectContaining({
+            id: 'tool-read-1',
+            name: 'Read',
+            status: 'completed',
+            result: toolResult,
+            resultPreview: 'export function first() {',
+          }),
+        ],
+      }),
+    ]);
+  });
+
   it('passes workflow files as readable references instead of inlining previous-step output', async () => {
     mocks.getWorkflow.mockResolvedValue(workflow({
       steps: [

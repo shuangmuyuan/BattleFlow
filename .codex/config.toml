@@ -1,0 +1,3 @@
+[mcp_servers.assistant-ui-docs]
+command = "npx"
+args = [ "-y", "@assistant-ui/mcp-docs-server" ]

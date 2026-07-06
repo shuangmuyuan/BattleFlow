@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { NextRequest } from 'next/server';
 import { streamClaudeCodeCliTurn } from '@/lib/agent-adapters/claude-code-cli';
-import type { AgentEvent, AgentInputAttachment } from '@/lib/agent-adapters/types';
+import type { AgentEvent, AgentInputAttachment, AgentToolCallEvent } from '@/lib/agent-adapters/types';
 import { requireOrganizationContext, requirePermission } from '@/lib/auth/server';
 import { AuthError, ForbiddenError } from '@/lib/auth/types';
 import {
@@ -29,6 +29,7 @@ import {
   getWorkflow,
   upsertWorkflow,
   type WorkflowChatMessageRecord,
+  type WorkflowChatToolCallRecord,
   type WorkflowRecord,
 } from '@/lib/workflow-registry';
 import { cleanExecutableSkillText } from '@/lib/workflow-skill-draft';
@@ -107,6 +108,7 @@ interface ChatRunRecord {
   status: ChatRunStatus;
   userMessage: string;
   assistantContent: string;
+  toolCalls: WorkflowChatToolCallRecord[];
   startedAt: string;
   updatedAt: string;
   error?: string;
@@ -549,6 +551,72 @@ function serializeChatRun(run: ChatRunRecord) {
   };
 }
 
+function parseToolCallInputText(inputText?: string): Record<string, unknown> | undefined {
+  if (!inputText?.trim()) return undefined;
+
+  try {
+    const parsed = JSON.parse(inputText) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+function mergeToolCallEvent(
+  toolCalls: WorkflowChatToolCallRecord[],
+  event: AgentToolCallEvent,
+): WorkflowChatToolCallRecord[] {
+  const timestamp = event.timestamp || nowIso();
+  const existingIndex = toolCalls.findIndex((toolCall) => toolCall.id === event.id);
+  const existing = existingIndex >= 0 ? toolCalls[existingIndex] : undefined;
+  const nextInputText = event.inputJsonDelta
+    ? `${existing?.inputText || ''}${event.inputJsonDelta}`.slice(-4000)
+    : existing?.inputText;
+  const nextInput = event.input
+    || existing?.input
+    || parseToolCallInputText(nextInputText);
+  const nextToolCall: WorkflowChatToolCallRecord = {
+    id: event.id,
+    name: event.name || existing?.name || 'Tool',
+    status: event.status,
+    ...(nextInput ? { input: nextInput } : {}),
+    ...(nextInputText ? { inputText: nextInputText } : {}),
+    ...(event.result !== undefined || existing?.result !== undefined
+      ? { result: event.result !== undefined ? event.result : existing?.result }
+      : {}),
+    ...(event.resultPreview || existing?.resultPreview
+      ? { resultPreview: event.resultPreview || existing?.resultPreview }
+      : {}),
+    ...(event.error || existing?.error ? { error: event.error || existing?.error } : {}),
+    started_at: existing?.started_at || timestamp,
+    ...(event.status === 'completed' || event.status === 'failed' || event.status === 'canceled'
+      ? { completed_at: timestamp }
+      : existing?.completed_at ? { completed_at: existing.completed_at } : {}),
+  };
+
+  if (existingIndex < 0) return [...toolCalls, nextToolCall].slice(-50);
+
+  return toolCalls.map((toolCall, index) => (index === existingIndex ? nextToolCall : toolCall));
+}
+
+function finalizeRunningToolCalls(
+  toolCalls: WorkflowChatToolCallRecord[],
+  status: 'failed' | 'canceled',
+) {
+  if (toolCalls.length === 0) return toolCalls;
+  const completedAt = nowIso();
+  return toolCalls.map((toolCall) => (
+    toolCall.status === 'running'
+      ? { ...toolCall, status, completed_at: completedAt }
+      : toolCall
+  ));
+}
+
+function getPersistedToolCalls(run: ChatRunRecord) {
+  return run.toolCalls.length > 0 ? { toolCalls: run.toolCalls } : {};
+}
+
 function getChatCancelledContent(run: ChatRunRecord) {
   const displaySeconds = Math.max(1, Math.round((Date.now() - Date.parse(run.startedAt)) / 1000));
   return `你在 ${displaySeconds}s 后停止了`;
@@ -578,6 +646,7 @@ async function appendWorkflowAssistantMessage(
     && lastMessage.content === message.content
     && lastMessage.kind === message.kind
     && JSON.stringify(lastMessage.attachments || []) === JSON.stringify(message.attachments || [])
+    && JSON.stringify(lastMessage.toolCalls || []) === JSON.stringify(message.toolCalls || [])
   ) {
     return;
   }
@@ -601,26 +670,31 @@ async function persistCompletedChatRun(run: ChatRunRecord): Promise<WorkflowChat
     role: 'assistant',
     content,
     created_at: nowIso(),
+    ...getPersistedToolCalls(run),
   };
   await appendWorkflowAssistantMessage(run, message);
   return message;
 }
 
 async function persistCanceledChatRun(run: ChatRunRecord): Promise<WorkflowChatMessageRecord> {
+  run.toolCalls = finalizeRunningToolCalls(run.toolCalls, 'canceled');
   const message: WorkflowChatMessageRecord = {
     role: 'assistant',
     content: getChatCancelledContent(run),
     created_at: nowIso(),
+    ...getPersistedToolCalls(run),
   };
   await appendWorkflowAssistantMessage(run, message);
   return message;
 }
 
 async function persistFailedChatRun(run: ChatRunRecord, error: unknown): Promise<WorkflowChatMessageRecord> {
+  run.toolCalls = finalizeRunningToolCalls(run.toolCalls, 'failed');
   const message: WorkflowChatMessageRecord = {
     role: 'assistant',
     content: getChatErrorContent(error),
     created_at: nowIso(),
+    ...getPersistedToolCalls(run),
   };
   await appendWorkflowAssistantMessage(run, message);
   return message;
@@ -1203,6 +1277,25 @@ function streamAgentEventsAsSse(agentStream: ReadableStream<AgentEvent>, run?: C
               content: assistantContent,
               replace: true,
             });
+          } else if (value.type === 'tool_call') {
+            let toolCall: WorkflowChatToolCallRecord | undefined;
+            if (run) {
+              run.toolCalls = mergeToolCallEvent(run.toolCalls, value);
+              toolCall = run.toolCalls.find((item) => item.id === value.id);
+            }
+            emit({
+              event: 'tool_call',
+              tool_call: toolCall || {
+                id: value.id,
+                name: value.name,
+                status: value.status,
+                ...(value.input ? { input: value.input } : {}),
+                ...(value.inputText ? { inputText: value.inputText } : {}),
+                ...(value.result !== undefined ? { result: value.result } : {}),
+                ...(value.resultPreview ? { resultPreview: value.resultPreview } : {}),
+                ...(value.error ? { error: value.error } : {}),
+              },
+            });
           } else if (value.type === 'session_status') {
             if (value.status === 'done') {
               let message: WorkflowChatMessageRecord | null = null;
@@ -1514,6 +1607,7 @@ export async function POST(request: NextRequest) {
       status: 'running',
       userMessage: getString(body.visible_user_message, getLastUserMessage(messages)),
       assistantContent: '',
+      toolCalls: [],
       startedAt,
       updatedAt: startedAt,
       abortController: new AbortController(),

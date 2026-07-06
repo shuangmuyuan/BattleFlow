@@ -215,8 +215,24 @@ export interface WorkflowChatMessageRecord {
   role: 'user' | 'assistant';
   content: string;
   attachments?: WorkflowChatAttachmentRecord[];
+  toolCalls?: WorkflowChatToolCallRecord[];
   kind?: 'document';
   created_at?: string;
+}
+
+export type WorkflowChatToolCallStatus = 'running' | 'completed' | 'failed' | 'canceled';
+
+export interface WorkflowChatToolCallRecord {
+  id: string;
+  name: string;
+  status: WorkflowChatToolCallStatus;
+  input?: Record<string, unknown>;
+  inputText?: string;
+  result?: unknown;
+  resultPreview?: string;
+  error?: string;
+  started_at?: string;
+  completed_at?: string;
 }
 
 const CLAUDE_RUNTIME_SKILL_MISFIRE_MARKERS = [
@@ -663,6 +679,105 @@ function normalizeChatAttachments(value: unknown): WorkflowChatAttachmentRecord[
   });
 }
 
+function normalizeToolCallStatus(value: unknown): WorkflowChatToolCallStatus {
+  if (value === 'completed' || value === 'failed' || value === 'canceled') return value;
+  return 'running';
+}
+
+function normalizeToolCallInput(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([key]) => key.trim().length > 0)
+    .slice(0, 50);
+
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+const MAX_TOOL_RESULT_STRING_CHARS = 24_000;
+const MAX_TOOL_RESULT_ARRAY_ITEMS = 200;
+const MAX_TOOL_RESULT_OBJECT_KEYS = 100;
+const MAX_TOOL_RESULT_DEPTH = 6;
+
+function truncateToolResultString(value: string, maxLength = MAX_TOOL_RESULT_STRING_CHARS) {
+  const trimmed = value.trim();
+  if (trimmed.length <= maxLength) return trimmed;
+  return `${trimmed.slice(0, maxLength)}\n...`;
+}
+
+function normalizeToolCallResult(value: unknown, depth = 0): unknown | undefined {
+  if (value == null) return value;
+  if (typeof value === 'string') return truncateToolResultString(value);
+  if (typeof value === 'number') return Number.isFinite(value) ? value : String(value);
+  if (typeof value === 'boolean') return value;
+  if (depth >= MAX_TOOL_RESULT_DEPTH) return truncateToolResultString(String(value), 2000);
+
+  if (Array.isArray(value)) {
+    const items = value
+      .slice(0, MAX_TOOL_RESULT_ARRAY_ITEMS)
+      .map((item) => normalizeToolCallResult(item, depth + 1));
+    if (value.length > MAX_TOOL_RESULT_ARRAY_ITEMS) {
+      items.push(`... ${value.length - MAX_TOOL_RESULT_ARRAY_ITEMS} more items`);
+    }
+    return items;
+  }
+
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record);
+    const entries = keys
+      .filter((key) => key.trim().length > 0)
+      .slice(0, MAX_TOOL_RESULT_OBJECT_KEYS)
+      .map((key) => [key, normalizeToolCallResult(record[key], depth + 1)] as const);
+    if (keys.length > MAX_TOOL_RESULT_OBJECT_KEYS) {
+      entries.push(['__truncated', `${keys.length - MAX_TOOL_RESULT_OBJECT_KEYS} more keys`]);
+    }
+    return Object.fromEntries(entries);
+  }
+
+  return truncateToolResultString(String(value), 2000);
+}
+
+function normalizeChatToolCalls(value: unknown): WorkflowChatToolCallRecord[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((item): WorkflowChatToolCallRecord[] => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const record = item as Partial<WorkflowChatToolCallRecord>;
+    const id = typeof record.id === 'string' ? record.id.trim() : '';
+    const name = typeof record.name === 'string' ? record.name.trim() : '';
+    if (!id || !name) return [];
+
+    const toolCall: WorkflowChatToolCallRecord = {
+      id,
+      name,
+      status: normalizeToolCallStatus(record.status),
+    };
+    const input = normalizeToolCallInput(record.input);
+    if (input) toolCall.input = input;
+    if (typeof record.inputText === 'string' && record.inputText.trim()) {
+      toolCall.inputText = record.inputText.trim().slice(0, 4000);
+    }
+    if (record.result !== undefined) {
+      toolCall.result = normalizeToolCallResult(record.result);
+    }
+    if (typeof record.resultPreview === 'string' && record.resultPreview.trim()) {
+      toolCall.resultPreview = record.resultPreview.trim().slice(0, 4000);
+    }
+    if (typeof record.error === 'string' && record.error.trim()) {
+      toolCall.error = record.error.trim().slice(0, 1000);
+    }
+    if (typeof record.started_at === 'string' && record.started_at.trim()) {
+      toolCall.started_at = record.started_at;
+    }
+    if (typeof record.completed_at === 'string' && record.completed_at.trim()) {
+      toolCall.completed_at = record.completed_at;
+    }
+
+    return [toolCall];
+  }).slice(0, 50);
+}
+
 function normalizeStepChats(value: unknown): Record<string, WorkflowChatMessageRecord[]> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return Object.fromEntries(
@@ -688,6 +803,10 @@ function normalizeStepChats(value: unknown): Record<string, WorkflowChatMessageR
             ...(() => {
               const attachments = normalizeChatAttachments(message.attachments);
               return attachments.length > 0 ? { attachments } : {};
+            })(),
+            ...(() => {
+              const toolCalls = normalizeChatToolCalls(message.toolCalls);
+              return toolCalls.length > 0 ? { toolCalls } : {};
             })(),
           }))
         : [],
