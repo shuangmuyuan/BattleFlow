@@ -120,7 +120,7 @@ function getStepName(workflow: Workflow, stepId: string) {
 }
 
 function getDemoUrl(handoff?: WorkflowDemoHandoff | null) {
-  return handoff?.directStudioUrl || handoff?.studioUrl || '';
+  return handoff?.studioUrl || '';
 }
 
 function getReusableHandoff(workflow?: Workflow, stepId?: string) {
