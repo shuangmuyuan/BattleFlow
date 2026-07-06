@@ -3,7 +3,18 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { buildClaudeToolsArgs, getConfiguredClaudeTools } from './claude-code-tools';
-import type { AgentEvent, AgentInputAttachment, AgentRunResult, AgentRuntimeStatus, AgentTurnInput } from './types';
+import type { AgentEvent, AgentInputAttachment, AgentRunResult, AgentRuntimeStatus, AgentToolCallEvent, AgentTurnInput } from './types';
+
+interface ClaudeCodeStreamInnerEvent {
+  type?: string;
+  index?: number;
+  content_block?: unknown;
+  delta?: {
+    type?: string;
+    text?: string;
+    partial_json?: string;
+  };
+}
 
 interface ClaudeCodeStreamEvent {
   type?: string;
@@ -18,13 +29,13 @@ interface ClaudeCodeStreamEvent {
     outputTokens?: number;
     costUSD?: number;
   }>;
-  event?: {
-    type?: string;
-    delta?: {
-      type?: string;
-      text?: string;
-    };
+  event?: ClaudeCodeStreamInnerEvent;
+  message?: {
+    content?: unknown;
   };
+  parent_tool_use_id?: string | null;
+  timestamp?: string;
+  tool_use_result?: unknown;
 }
 
 function getClaudeCommand() {
@@ -232,6 +243,145 @@ function trimDiagnosticText(value: string, maxChars = 4000) {
   const trimmed = value.trim();
   if (trimmed.length <= maxChars) return trimmed;
   return `${trimmed.slice(0, maxChars)}\n...`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function getString(value: unknown) {
+  return typeof value === 'string' ? value : '';
+}
+
+function normalizeToolInput(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  const entries = Object.entries(value)
+    .filter(([key]) => key.trim().length > 0)
+    .slice(0, 50);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+const MAX_TOOL_RESULT_STRING_CHARS = 24_000;
+const MAX_TOOL_RESULT_ARRAY_ITEMS = 200;
+const MAX_TOOL_RESULT_OBJECT_KEYS = 100;
+const MAX_TOOL_RESULT_DEPTH = 6;
+
+function normalizeToolResultValue(value: unknown, depth = 0): unknown {
+  if (value == null) return value;
+  if (typeof value === 'string') return trimDiagnosticText(value, MAX_TOOL_RESULT_STRING_CHARS);
+  if (typeof value === 'number') return Number.isFinite(value) ? value : String(value);
+  if (typeof value === 'boolean') return value;
+  if (depth >= MAX_TOOL_RESULT_DEPTH) return trimDiagnosticText(String(value), 2000);
+
+  if (Array.isArray(value)) {
+    const items = value
+      .slice(0, MAX_TOOL_RESULT_ARRAY_ITEMS)
+      .map((item) => normalizeToolResultValue(item, depth + 1));
+    if (value.length > MAX_TOOL_RESULT_ARRAY_ITEMS) {
+      items.push(`... ${value.length - MAX_TOOL_RESULT_ARRAY_ITEMS} more items`);
+    }
+    return items;
+  }
+
+  if (isRecord(value)) {
+    const entries = Object.entries(value)
+      .filter(([key]) => key.trim().length > 0)
+      .slice(0, MAX_TOOL_RESULT_OBJECT_KEYS)
+      .map(([key, item]) => [key, normalizeToolResultValue(item, depth + 1)] as const);
+    if (Object.keys(value).length > MAX_TOOL_RESULT_OBJECT_KEYS) {
+      entries.push(['__truncated', `${Object.keys(value).length - MAX_TOOL_RESULT_OBJECT_KEYS} more keys`]);
+    }
+    return Object.fromEntries(entries);
+  }
+
+  return trimDiagnosticText(String(value), 2000);
+}
+
+function normalizeToolResult(value: unknown, fallback?: unknown): unknown | undefined {
+  const source = value ?? fallback;
+  if (source === undefined) return undefined;
+  return normalizeToolResultValue(source);
+}
+
+function summarizeToolResult(value: unknown, fallback?: unknown): string | undefined {
+  const source = fallback ?? value;
+
+  if (typeof source === 'string') {
+    return trimDiagnosticText(source, 1200);
+  }
+
+  if (Array.isArray(source)) {
+    const textParts: string[] = source
+      .map((item) => summarizeToolResult(item))
+      .filter((item): item is string => Boolean(item));
+    return trimDiagnosticText(textParts.join('\n'), 1200);
+  }
+
+  if (!isRecord(source)) return undefined;
+
+  const summaryParts: string[] = [];
+  const type = getString(source.type);
+  if (type) summaryParts.push(`type=${type}`);
+
+  const file = isRecord(source.file) ? source.file : undefined;
+  if (file) {
+    const filePath = getString(file.filePath);
+    const totalLines = typeof file.totalLines === 'number' ? file.totalLines : undefined;
+    const numLines = typeof file.numLines === 'number' ? file.numLines : undefined;
+    if (filePath) summaryParts.push(`file=${filePath}`);
+    if (totalLines !== undefined || numLines !== undefined) {
+      summaryParts.push(`lines=${numLines ?? totalLines}`);
+    }
+  }
+
+  const content = getString(source.content);
+  if (content) summaryParts.push(content);
+
+  if (summaryParts.length > 0) {
+    return trimDiagnosticText(summaryParts.join('\n'), 1200);
+  }
+
+  try {
+    return trimDiagnosticText(JSON.stringify(source), 1200);
+  } catch {
+    return undefined;
+  }
+}
+
+function getToolUseFromContentBlock(value: unknown) {
+  if (!isRecord(value) || value.type !== 'tool_use') return null;
+  const id = getString(value.id).trim();
+  const name = getString(value.name).trim();
+  if (!id || !name) return null;
+
+  return {
+    id,
+    name,
+    input: normalizeToolInput(value.input),
+  };
+}
+
+function getToolResultFromContentBlock(value: unknown) {
+  if (!isRecord(value) || value.type !== 'tool_result') return null;
+  const id = getString(value.tool_use_id).trim();
+  if (!id) return null;
+  const isError = value.is_error === true;
+
+  return {
+    id,
+    isError,
+    result: normalizeToolResult(value.content),
+    resultPreview: summarizeToolResult(value.content),
+  };
+}
+
+function buildToolCallEvent(
+  event: Omit<AgentToolCallEvent, 'type'>,
+): AgentToolCallEvent {
+  return {
+    type: 'tool_call',
+    ...event,
+  };
 }
 
 export async function runClaudeCodeCliPrompt(input: AgentTurnInput, timeoutMs = 120_000): Promise<AgentRunResult> {
@@ -508,6 +658,8 @@ export function streamClaudeCodeCliTurn(input: AgentTurnInput) {
       let sawContentDelta = false;
       let streamedText = '';
       let finalResult = '';
+      const toolIdByBlockIndex = new Map<number, string>();
+      const toolNamesById = new Map<string, string>();
 
       const handleLine = (line: string) => {
         if (!line.trim()) return;
@@ -525,12 +677,88 @@ export function streamClaudeCodeCliTurn(input: AgentTurnInput) {
           }
 
           if (event.type === 'stream_event') {
-            const delta = event.event?.delta;
-            if (event.event?.type === 'content_block_delta' && typeof delta?.text === 'string') {
+            const streamEvent = event.event;
+            const delta = streamEvent?.delta;
+            if (streamEvent?.type === 'content_block_start') {
+              const toolUse = getToolUseFromContentBlock(streamEvent.content_block);
+              if (toolUse) {
+                if (typeof streamEvent.index === 'number') {
+                  toolIdByBlockIndex.set(streamEvent.index, toolUse.id);
+                }
+                toolNamesById.set(toolUse.id, toolUse.name);
+                emit(buildToolCallEvent({
+                  id: toolUse.id,
+                  name: toolUse.name,
+                  status: 'running',
+                  input: toolUse.input,
+                  parentId: event.parent_tool_use_id || undefined,
+                  timestamp: event.timestamp,
+                }));
+              }
+              return;
+            }
+
+            if (streamEvent?.type === 'content_block_delta' && typeof delta?.text === 'string') {
               sawContentDelta = true;
               streamedText += delta.text;
               emit({ type: 'assistant_message', text: delta.text });
+              return;
             }
+
+            if (streamEvent?.type === 'content_block_delta' && delta?.type === 'input_json_delta') {
+              const partialJson = getString(delta.partial_json);
+              const toolId = typeof streamEvent.index === 'number'
+                ? toolIdByBlockIndex.get(streamEvent.index)
+                : undefined;
+              if (toolId && partialJson) {
+                emit(buildToolCallEvent({
+                  id: toolId,
+                  name: toolNamesById.get(toolId) || 'Tool',
+                  status: 'running',
+                  inputJsonDelta: partialJson,
+                  parentId: event.parent_tool_use_id || undefined,
+                  timestamp: event.timestamp,
+                }));
+              }
+            }
+            return;
+          }
+
+          if (event.type === 'assistant' && Array.isArray(event.message?.content)) {
+            event.message.content.forEach((contentBlock) => {
+              const toolUse = getToolUseFromContentBlock(contentBlock);
+              if (!toolUse) return;
+              toolNamesById.set(toolUse.id, toolUse.name);
+              emit(buildToolCallEvent({
+                id: toolUse.id,
+                name: toolUse.name,
+                status: 'running',
+                input: toolUse.input,
+                parentId: event.parent_tool_use_id || undefined,
+                timestamp: event.timestamp,
+              }));
+            });
+            return;
+          }
+
+          if (event.type === 'user' && Array.isArray(event.message?.content)) {
+            event.message.content.forEach((contentBlock) => {
+              const toolResult = getToolResultFromContentBlock(contentBlock);
+              if (!toolResult) return;
+              const resultPreview = summarizeToolResult(event.tool_use_result, toolResult.resultPreview)
+                || toolResult.resultPreview;
+              const result = normalizeToolResult(event.tool_use_result, toolResult.result);
+              emit(buildToolCallEvent({
+                id: toolResult.id,
+                name: toolNamesById.get(toolResult.id) || 'Tool',
+                status: toolResult.isError ? 'failed' : 'completed',
+                ...(result !== undefined ? { result } : {}),
+                resultPreview,
+                error: toolResult.isError ? resultPreview || 'Tool call failed' : undefined,
+                parentId: event.parent_tool_use_id || undefined,
+                timestamp: event.timestamp,
+              }));
+            });
             return;
           }
 
