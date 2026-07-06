@@ -14,11 +14,28 @@ export interface AgentInputAttachment {
 }
 
 export type AgentSessionStatus = 'starting' | 'requesting' | 'running' | 'done' | 'aborted' | 'error';
+export type AgentToolCallStatus = 'running' | 'completed' | 'failed' | 'canceled';
+
+export interface AgentToolCallEvent {
+  type: 'tool_call';
+  id: string;
+  name: string;
+  status: AgentToolCallStatus;
+  input?: Record<string, unknown>;
+  inputText?: string;
+  inputJsonDelta?: string;
+  result?: unknown;
+  resultPreview?: string;
+  error?: string;
+  parentId?: string;
+  timestamp?: string;
+}
 
 export type AgentEvent =
   | { type: 'session_status'; status: AgentSessionStatus; sessionId?: string }
   | { type: 'assistant_message'; text: string }
   | { type: 'assistant_final'; text: string }
+  | AgentToolCallEvent
   | { type: 'terminal_output'; stream: 'stdout' | 'stderr'; text: string }
   | { type: 'usage'; inputTokens?: number; outputTokens?: number; costUsd?: number; model?: string }
   | { type: 'error'; error: string };

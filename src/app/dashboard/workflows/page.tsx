@@ -19,7 +19,6 @@ import {
 } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
-import { AnimatedShinyText } from '@/components/ui/animated-shiny-text';
 import {
   PromptInput,
   PromptInputAction,
@@ -32,10 +31,8 @@ import {
   StatusBadge,
   appCardClassName,
 } from '@/components/battleflow/ui';
-import {
-  CompactMarkdown,
-  compactMarkdownPreview,
-} from '@/components/battleflow/compact-markdown';
+import { compactMarkdownPreview } from '@/components/battleflow/compact-markdown';
+import { WorkflowAssistantThread } from '@/components/battleflow/workflow-assistant-thread';
 import { BentoCard, BentoGrid } from '@/registry/magicui/bento-grid';
 import { cn } from '@/lib/utils';
 import {
@@ -59,10 +56,8 @@ import {
   Plus,
   Play,
   ArrowLeft,
-  ArrowDown,
   ArrowUp,
   Boxes,
-  Check,
   CheckCircle2,
   Circle,
   Clock,
@@ -365,6 +360,21 @@ interface ChatAttachment extends StoredWorkflowAttachmentFields {
   created_at?: string;
 }
 
+type ChatToolCallStatus = 'running' | 'completed' | 'failed' | 'canceled';
+
+interface ChatToolCall {
+  id: string;
+  name: string;
+  status: ChatToolCallStatus;
+  input?: Record<string, unknown>;
+  inputText?: string;
+  result?: unknown;
+  resultPreview?: string;
+  error?: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
 interface ImagePreviewTarget {
   src: string;
   alt: string;
@@ -374,6 +384,7 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   attachments?: ChatAttachment[];
+  toolCalls?: ChatToolCall[];
   kind?: 'document';
   created_at?: string;
 }
@@ -534,20 +545,6 @@ function getCreatorDisplayName(record: {
     || '未知创建人';
 }
 
-function AssistantThinkingIndicator() {
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      className="w-fit text-sm font-medium text-muted-foreground"
-    >
-      <AnimatedShinyText className="items-center justify-center">
-        正在思考
-      </AnimatedShinyText>
-    </div>
-  );
-}
-
 function formatElapsedDuration(seconds: number) {
   const normalizedSeconds = Math.max(0, Math.round(seconds));
   if (normalizedSeconds < 60) return `${normalizedSeconds}s`;
@@ -556,22 +553,6 @@ function formatElapsedDuration(seconds: number) {
   if (minutes < 60) return `${minutes}m`;
 
   return `${Math.floor(minutes / 60)}h`;
-}
-
-function AssistantProcessingTimer({ seconds }: { seconds: number }) {
-  return (
-    <div className="w-fit text-sm font-medium text-muted-foreground" aria-live="polite">
-      已处理 {formatElapsedDuration(seconds)}
-    </div>
-  );
-}
-
-function AssistantStoppedMessage({ content }: { content: string }) {
-  return (
-    <div className="w-full border-b border-border/60 pb-4 pt-1" aria-live="polite">
-      <p className="text-lg font-semibold text-muted-foreground sm:text-xl">{content}</p>
-    </div>
-  );
 }
 
 const builtInWorkflowTemplates: WorkflowTemplate[] = [
@@ -781,14 +762,115 @@ function sanitizeChatAttachments(attachments?: ChatAttachment[]) {
   });
 }
 
+function sanitizeToolCallStatus(value: unknown): ChatToolCallStatus {
+  if (value === 'completed' || value === 'failed' || value === 'canceled') return value;
+  return 'running';
+}
+
+function sanitizeToolCallInput(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([key]) => key.trim().length > 0)
+    .slice(0, 50);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+const MAX_TOOL_RESULT_STRING_CHARS = 24_000;
+const MAX_TOOL_RESULT_ARRAY_ITEMS = 200;
+const MAX_TOOL_RESULT_OBJECT_KEYS = 100;
+const MAX_TOOL_RESULT_DEPTH = 6;
+
+function sanitizeToolCallResultString(value: string, maxLength = MAX_TOOL_RESULT_STRING_CHARS) {
+  const trimmed = value.trim();
+  if (trimmed.length <= maxLength) return trimmed;
+  return `${trimmed.slice(0, maxLength)}\n...`;
+}
+
+function sanitizeToolCallResult(value: unknown, depth = 0): unknown | undefined {
+  if (value == null) return value;
+  if (typeof value === 'string') return sanitizeToolCallResultString(value);
+  if (typeof value === 'number') return Number.isFinite(value) ? value : String(value);
+  if (typeof value === 'boolean') return value;
+  if (depth >= MAX_TOOL_RESULT_DEPTH) return sanitizeToolCallResultString(String(value), 2000);
+
+  if (Array.isArray(value)) {
+    const items = value
+      .slice(0, MAX_TOOL_RESULT_ARRAY_ITEMS)
+      .map((item) => sanitizeToolCallResult(item, depth + 1));
+    if (value.length > MAX_TOOL_RESULT_ARRAY_ITEMS) {
+      items.push(`... ${value.length - MAX_TOOL_RESULT_ARRAY_ITEMS} more items`);
+    }
+    return items;
+  }
+
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record);
+    const entries = keys
+      .filter((key) => key.trim().length > 0)
+      .slice(0, MAX_TOOL_RESULT_OBJECT_KEYS)
+      .map((key) => [key, sanitizeToolCallResult(record[key], depth + 1)] as const);
+    if (keys.length > MAX_TOOL_RESULT_OBJECT_KEYS) {
+      entries.push(['__truncated', `${keys.length - MAX_TOOL_RESULT_OBJECT_KEYS} more keys`]);
+    }
+    return Object.fromEntries(entries);
+  }
+
+  return sanitizeToolCallResultString(String(value), 2000);
+}
+
+function sanitizeChatToolCalls(toolCalls?: unknown) {
+  if (!Array.isArray(toolCalls)) return [];
+
+  return toolCalls.flatMap((toolCall): ChatToolCall[] => {
+    if (!toolCall || typeof toolCall !== 'object') return [];
+    const record = toolCall as Partial<ChatToolCall>;
+    const id = typeof record.id === 'string' ? record.id.trim() : '';
+    const name = typeof record.name === 'string' ? record.name.trim() : '';
+    if (!id || !name) return [];
+
+    const sanitized: ChatToolCall = {
+      id,
+      name,
+      status: sanitizeToolCallStatus(record.status),
+    };
+    const input = sanitizeToolCallInput(record.input);
+    if (input) sanitized.input = input;
+    if (typeof record.inputText === 'string' && record.inputText.trim()) {
+      sanitized.inputText = record.inputText.trim().slice(0, 4000);
+    }
+    if (record.result !== undefined) {
+      sanitized.result = sanitizeToolCallResult(record.result);
+    }
+    if (typeof record.resultPreview === 'string' && record.resultPreview.trim()) {
+      sanitized.resultPreview = record.resultPreview.trim().slice(0, 4000);
+    }
+    if (typeof record.error === 'string' && record.error.trim()) {
+      sanitized.error = record.error.trim().slice(0, 1000);
+    }
+    if (typeof record.started_at === 'string' && record.started_at.trim()) {
+      sanitized.started_at = record.started_at;
+    }
+    if (typeof record.completed_at === 'string' && record.completed_at.trim()) {
+      sanitized.completed_at = record.completed_at;
+    }
+
+    return [sanitized];
+  }).slice(0, 50);
+}
+
 function sanitizeChatMessages(messages: ChatMessage[]) {
   return messages
     .filter((message) => !isClaudeRuntimeSkillMisfireMessage(message))
     .map((message) => {
       const attachments = sanitizeChatAttachments(message.attachments);
+      const toolCalls = sanitizeChatToolCalls(message.toolCalls);
       const normalized: ChatMessage = { role: message.role, content: message.content };
       if (attachments.length > 0) {
         normalized.attachments = attachments;
+      }
+      if (toolCalls.length > 0) {
+        normalized.toolCalls = toolCalls;
       }
       if (message.kind === 'document') {
         normalized.kind = 'document';
@@ -817,16 +899,6 @@ function getChatCancelledDisplayContent(content: string) {
   if (chatCancelledContentPattern.test(text)) return text;
   if (text === chatCancelledLegacyContent) return '你已停止生成';
   return null;
-}
-
-function formatChatMessageTime(value?: string) {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleTimeString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
 }
 
 function isImeComposing(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -1151,6 +1223,7 @@ interface ChatStreamPayload {
   error?: string;
   replace?: boolean;
   message?: ChatMessage;
+  tool_call?: ChatToolCall;
   run_id?: string;
   status?: ChatRunStatus;
   started_at?: string;
@@ -1172,10 +1245,12 @@ function parseChatStreamPayload(line: string): ChatStreamPayload | null {
       role: rawMessage.role,
       content: rawMessage.content,
       attachments: sanitizeChatAttachments(rawMessage.attachments),
+      toolCalls: sanitizeChatToolCalls(rawMessage.toolCalls),
       ...(rawMessage.kind === 'document' ? { kind: 'document' as const } : {}),
       ...(typeof rawMessage.created_at === 'string' ? { created_at: rawMessage.created_at } : {}),
     }
     : undefined;
+  const [toolCall] = sanitizeChatToolCalls(record.tool_call ? [record.tool_call] : []);
 
   return {
     event: typeof record.event === 'string' ? record.event : undefined,
@@ -1184,6 +1259,7 @@ function parseChatStreamPayload(line: string): ChatStreamPayload | null {
     error: typeof record.error === 'string' ? record.error : undefined,
     replace: record.replace === true,
     message,
+    tool_call: toolCall,
     run_id: typeof record.run_id === 'string' ? record.run_id : undefined,
     status: record.status === 'running'
       || record.status === 'succeeded'
@@ -1193,6 +1269,40 @@ function parseChatStreamPayload(line: string): ChatStreamPayload | null {
       : undefined,
     started_at: typeof record.started_at === 'string' ? record.started_at : undefined,
     updated_at: typeof record.updated_at === 'string' ? record.updated_at : undefined,
+  };
+}
+
+function mergeChatToolCall(toolCalls: ChatToolCall[], nextToolCall: ChatToolCall) {
+  const existingIndex = toolCalls.findIndex((toolCall) => toolCall.id === nextToolCall.id);
+  if (existingIndex < 0) return [...toolCalls, nextToolCall].slice(-50);
+
+  return toolCalls.map((toolCall, index) => (
+    index === existingIndex
+      ? {
+        ...toolCall,
+        ...nextToolCall,
+        input: nextToolCall.input || toolCall.input,
+        inputText: nextToolCall.inputText || toolCall.inputText,
+        result: nextToolCall.result !== undefined ? nextToolCall.result : toolCall.result,
+        resultPreview: nextToolCall.resultPreview || toolCall.resultPreview,
+        error: nextToolCall.error || toolCall.error,
+        started_at: toolCall.started_at || nextToolCall.started_at,
+        completed_at: nextToolCall.completed_at || toolCall.completed_at,
+      }
+      : toolCall
+  ));
+}
+
+function buildAssistantChatMessage(
+  content: string,
+  createdAt: string,
+  toolCalls: ChatToolCall[] = [],
+): ChatMessage {
+  return {
+    role: 'assistant',
+    content,
+    created_at: createdAt,
+    ...(toolCalls.length > 0 ? { toolCalls } : {}),
   };
 }
 
@@ -1295,7 +1405,6 @@ const maxWorkflowMessageAttachments = 50;
 const maxChatRequestMessages = 12;
 const maxChatRequestMessageChars = 12_000;
 const maxTotalChatRequestMessageChars = 48_000;
-const maxRenderedMarkdownPreviewChars = 24_000;
 const maxDocumentTitleScanChars = 16_000;
 
 function sliceTextWithMiddleOmission(value: string, maxChars: number) {
@@ -1317,15 +1426,6 @@ function sliceTextWithMiddleOmission(value: string, maxChars: number) {
     ].filter(Boolean).join('\n'),
     truncated: true,
     omittedChars,
-  };
-}
-
-function getRenderedMarkdownPreview(content: string, maxChars = maxRenderedMarkdownPreviewChars) {
-  const sliced = sliceTextWithMiddleOmission(content.trim(), maxChars);
-  return {
-    content: sliced.text,
-    truncated: sliced.truncated,
-    omittedChars: sliced.omittedChars,
   };
 }
 
@@ -2955,6 +3055,7 @@ export default function WorkflowsPage() {
     let activeRunId = '';
     let keepRunTrackingAfterStreamReadError = false;
     let assistantContent = '';
+    let activeToolCalls: ChatToolCall[] = [];
     let persistedAssistantMessage: ChatMessage | null = null;
     const requestStartedAt = Date.now();
     const assistantMessageCreatedAt = new Date(requestStartedAt).toISOString();
@@ -3014,7 +3115,7 @@ export default function WorkflowsPage() {
 
       updateVisibleChatMessagesForStep(currentStep.id, [
         ...visibleMessages,
-        { role: 'assistant', content: '', created_at: assistantMessageCreatedAt },
+        buildAssistantChatMessage('', assistantMessageCreatedAt),
       ]);
 
       const handleChatStreamPayload = (data: ChatStreamPayload | null) => {
@@ -3042,6 +3143,13 @@ export default function WorkflowsPage() {
         if (data.message?.role === 'assistant') {
           persistedAssistantMessage = data.message;
         }
+        if (data.tool_call) {
+          activeToolCalls = mergeChatToolCall(activeToolCalls, data.tool_call);
+          updateVisibleChatMessagesForStep(currentStep.id, [
+            ...visibleMessages,
+            buildAssistantChatMessage(assistantContent, assistantMessageCreatedAt, activeToolCalls),
+          ]);
+        }
         if (typeof data.content === 'string') {
           const shouldReplaceAssistantContent = data.replace || data.event === 'assistant_final';
           const nextAssistantContent = shouldReplaceAssistantContent
@@ -3053,7 +3161,7 @@ export default function WorkflowsPage() {
           assistantContent = nextAssistantContent;
           updateVisibleChatMessagesForStep(currentStep.id, [
             ...visibleMessages,
-            { role: 'assistant', content: assistantContent, created_at: assistantMessageCreatedAt },
+            buildAssistantChatMessage(assistantContent, assistantMessageCreatedAt, activeToolCalls),
           ]);
         }
         if (data.done) {
@@ -3097,6 +3205,7 @@ export default function WorkflowsPage() {
         role: 'assistant',
         content: assistantContent,
         created_at: assistantMessageCreatedAt,
+        ...(activeToolCalls.length > 0 ? { toolCalls: activeToolCalls } : {}),
       };
       const finalMessages: ChatMessage[] = [
         ...visibleMessages,
@@ -3131,6 +3240,13 @@ export default function WorkflowsPage() {
             role: 'assistant',
             content: getChatCancelledContent(elapsedSeconds),
             created_at: new Date().toISOString(),
+            ...(activeToolCalls.length > 0 ? {
+              toolCalls: activeToolCalls.map((toolCall) => (
+                toolCall.status === 'running'
+                  ? { ...toolCall, status: 'canceled' as const, completed_at: new Date().toISOString() }
+                  : toolCall
+              )),
+            } : {}),
           },
         ];
         updateVisibleChatMessagesForStep(currentStep.id, cancelledMessages);
@@ -3167,7 +3283,18 @@ export default function WorkflowsPage() {
       console.error('Chat error:', error);
       const errorMessages: ChatMessage[] = [
         ...visibleMessages,
-        { role: 'assistant', content: getChatErrorContent(error), created_at: new Date().toISOString() },
+        {
+          role: 'assistant',
+          content: getChatErrorContent(error),
+          created_at: new Date().toISOString(),
+          ...(activeToolCalls.length > 0 ? {
+            toolCalls: activeToolCalls.map((toolCall) => (
+              toolCall.status === 'running'
+                ? { ...toolCall, status: 'failed' as const, completed_at: new Date().toISOString() }
+                : toolCall
+            )),
+          } : {}),
+        },
       ];
       updateVisibleChatMessagesForStep(currentStep.id, errorMessages);
       if (activeRunId) {
@@ -5069,16 +5196,6 @@ export default function WorkflowsPage() {
     if (!currentStep.output?.trim()) return '当前节点暂无产物';
     return '当前节点产物可生成 Demo';
   })();
-  const lastAssistantMessageIndex = chatMessages.reduce(
-    (latestIndex, message, index) => (message.role === 'assistant' ? index : latestIndex),
-    -1,
-  );
-  const hasStreamingAssistantPlaceholder = Boolean(
-    isStreaming
-    && lastAssistantMessageIndex >= 0
-    && chatMessages[lastAssistantMessageIndex]?.role === 'assistant'
-    && !chatMessages[lastAssistantMessageIndex]?.content.trim(),
-  );
   const currentSkill = getEffectiveSkillForStep(activeWorkflow, currentStep);
   const previousSteps = currentStep
     ? getPriorWorkflowSteps(activeWorkflow, currentStep).filter((step) => step.output)
@@ -6052,273 +6169,25 @@ export default function WorkflowsPage() {
 
         {/* Chat Messages */}
         <div ref={chatScrollAreaRef} className="relative min-h-0 min-w-0 flex-1">
-          <ScrollArea className="h-full min-w-0 overflow-hidden p-4 [&_[data-slot=scroll-area-viewport]]:min-w-0 [&_[data-slot=scroll-area-viewport]]:overflow-x-hidden">
-            {currentStep?.status === 'completed' && currentStep.output && chatMessages.length === 0 ? (
-              /* Show completed step output */
-              <div className="min-w-0 max-w-full space-y-4 overflow-hidden">
-                <div className="flex items-center gap-2 mb-4">
-                  <CheckCircle2 className="h-5 w-5 text-success" />
-                  <h3 className="font-semibold">本步骤已完成</h3>
-                </div>
-                <div className="min-w-0 max-w-full overflow-hidden rounded-lg border border-border/40 bg-muted/50 p-4">
-                  <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
-                    <h4 className="min-w-0 truncate text-sm font-medium text-primary">{currentStep.name} — 产出物</h4>
-                    <div className="flex shrink-0 items-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 gap-1 text-xs"
-                        onClick={() => copyMarkdownToClipboard(currentStep.output || '', `${currentStep.name}产物`)}
-                      >
-                        复制
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 gap-1 text-xs"
-                        onClick={() => currentStep.output && downloadStepOutput(currentStep.name, currentStep.output)}
-                      >
-                        <Download className="h-3.5 w-3.5" />
-                        下载
-                      </Button>
-                    </div>
-                  </div>
-                  {(() => {
-                    const outputPreview = getRenderedMarkdownPreview(currentStep.output || '');
-                    return (
-                      <>
-                        <CompactMarkdown content={outputPreview.content} />
-                        {outputPreview.truncated && (
-                          <p className="mt-3 rounded-md border border-border/60 bg-muted/35 px-3 py-2 text-xs text-muted-foreground">
-                            预览已省略 {outputPreview.omittedChars.toLocaleString('zh-CN')} 字符，下载可获取完整 Markdown。
-                          </p>
-                        )}
-                      </>
-                    );
-                  })()}
-                </div>
-                {currentSkill?.checklist && currentSkill.checklist.length > 0 && (
-                  <div className="bg-muted/30 border border-border/30 rounded-lg p-4">
-                    <p className="font-medium text-sm mb-2">质量 Checklist</p>
-                    <ul className="space-y-1">
-                      {currentSkill.checklist.map((item, idx) => (
-                        <li key={idx} className="text-sm text-muted-foreground flex items-start gap-2">
-                          <CheckCircle2 className="h-3.5 w-3.5 text-success mt-0.5 shrink-0" />
-                          {item}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            ) : chatMessages.length === 0 && currentSkill ? (
-              /* Show step start guide */
-              <div className="flex flex-col items-center justify-center h-full text-center py-10">
-                <Sparkles className="h-8 w-8 text-primary/50 mb-4" />
-                <h3 className="font-semibold text-lg mb-2">开始「{currentStep?.name}」步骤</h3>
-                <p className="text-sm text-muted-foreground max-w-md mb-4">
-                  AI 将基于「{currentSkill.name}」Skill 的方法论框架，与你协作完成本步骤。
-                </p>
-                <div className="max-w-lg rounded-lg bg-muted/50 p-4 text-left text-sm">
-                  <p className="font-medium mb-2">方法论框架：</p>
-                  <pre className="whitespace-pre-wrap font-sans text-muted-foreground">{currentSkill.methodology}</pre>
-                </div>
-                {currentSkill.checklist.length > 0 && (
-                  <div className="mt-4 max-w-lg w-full">
-                    <p className="font-medium text-sm mb-2">质量 Checklist：</p>
-                    <ul className="space-y-1">
-                      {currentSkill.checklist.map((item, idx) => (
-                        <li key={idx} className="text-sm text-muted-foreground flex items-start gap-2">
-                          <span>☐</span> {item}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="w-full min-w-0 max-w-full space-y-4 overflow-x-hidden">
-                {chatMessages.map((msg, idx) => {
-                  const stoppedMessageContent = msg.role === 'assistant'
-                    ? getChatCancelledDisplayContent(msg.content)
-                    : null;
-                  const renderDocumentCard = msg.role === 'assistant'
-                    && !stoppedMessageContent
-                    && shouldRenderAssistantDocumentCard(msg);
-                  const renderThinkingIndicator = isStreaming
-                    && idx === lastAssistantMessageIndex
-                    && msg.role === 'assistant'
-                    && !msg.content.trim();
-                  const renderProcessingTimer = isStreaming
-                    && idx === lastAssistantMessageIndex
-                    && msg.role === 'assistant'
-                    && Boolean(msg.content.trim());
-                  const messageCreatedAt = msg.created_at
-                    || chatMessages[idx + 1]?.created_at
-                    || chatMessages[idx - 1]?.created_at
-                    || currentStep?.updated_at
-                    || activeWorkflow?.updated_at;
-                  const messageKey = `${msg.role}-${messageCreatedAt || 'legacy'}-${idx}`;
-                  const messageTime = formatChatMessageTime(messageCreatedAt);
-                  const canCopyMessage = Boolean(msg.content.trim());
-                  const isMessageCopied = copiedChatMessageKey === messageKey;
-                  return (
-                    <div
-                      key={idx}
-                      className={cn(
-                        'group flex w-full min-w-0 max-w-full',
-                        msg.role === 'user' ? 'justify-end pl-6 sm:pl-10' : 'justify-start',
-                        msg.role !== 'user' && !stoppedMessageContent ? 'pr-6 sm:pr-10' : '',
-                      )}
-                    >
-                      {renderDocumentCard ? (
-                        <div className="flex min-w-0 max-w-full flex-col gap-2 items-start md:max-w-[80%] xl:max-w-2xl">
-                          {renderProcessingTimer && (
-                            <AssistantProcessingTimer seconds={currentProcessingElapsedSeconds} />
-                          )}
-                          {renderAssistantDocumentCard(msg, idx)}
-                        </div>
-                      ) : (
-                        <div
-                          className={cn(
-                            'flex min-w-0 max-w-full flex-col gap-1',
-                            msg.role === 'user'
-                              ? 'items-end md:max-w-[80%] xl:max-w-2xl'
-                              : stoppedMessageContent
-                                ? 'w-full items-stretch'
-                                : 'items-start md:max-w-[80%] xl:max-w-2xl',
-                          )}
-                        >
-                          {stoppedMessageContent ? (
-                            <AssistantStoppedMessage content={stoppedMessageContent} />
-                          ) : (
-                            <>
-                              {renderProcessingTimer && (
-                                <AssistantProcessingTimer seconds={currentProcessingElapsedSeconds} />
-                              )}
-                              {renderThinkingIndicator ? (
-                                <AssistantThinkingIndicator />
-                              ) : (
-                                <>
-                                  <div
-                                    className={`w-fit min-w-0 max-w-full overflow-hidden break-words rounded-lg p-3 text-sm [overflow-wrap:anywhere] ${
-                                      msg.role === 'user'
-                                        ? 'bg-primary text-primary-foreground'
-                                        : 'bg-muted/50 border border-border/40'
-                                    }`}
-                                  >
-                                    {msg.role === 'assistant' ? (
-                                      <CompactMarkdown
-                                        content={msg.content}
-                                        onImageClick={(image) => openImagePreview(image.src, image.alt)}
-                                      />
-                                    ) : (
-                                      <div className="flex min-w-0 max-w-full flex-col gap-2">
-                                        {msg.attachments && msg.attachments.length > 0 && (
-                                          <div className="flex max-w-full flex-wrap justify-end gap-2">
-                                            {msg.attachments.map((attachment) => (
-                                              attachment.isImage && attachment.previewUrl ? (
-                                                <button
-                                                  key={attachment.id}
-                                                  type="button"
-                                                  className="max-w-full cursor-zoom-in rounded-md border border-primary-foreground/20 transition hover:border-primary-foreground/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-foreground/70"
-                                                  onClick={() => openImagePreview(attachment.previewUrl || '', attachment.name)}
-                                                  aria-label={`查看图片：${attachment.name}`}
-                                                >
-                                                  <img
-                                                    src={attachment.previewUrl}
-                                                    alt={attachment.name}
-                                                    className="max-h-64 max-w-full rounded-md object-contain"
-                                                  />
-                                                </button>
-                                              ) : (
-                                                <div
-                                                  key={attachment.id}
-                                                  className="flex max-w-full items-center gap-1.5 rounded-md bg-primary-foreground/10 px-2 py-1 text-xs"
-                                                >
-                                                  {attachment.isImage ? (
-                                                    <ImageIcon className="size-3.5 shrink-0" />
-                                                  ) : (
-                                                    <Paperclip className="size-3.5 shrink-0" />
-                                                  )}
-                                                  <span className="max-w-44 truncate">{attachment.name}</span>
-                                                  <span className="shrink-0 opacity-80">{formatFileSize(attachment.size)}</span>
-                                                </div>
-                                              )
-                                            ))}
-                                          </div>
-                                        )}
-                                        {msg.content.trim() && (
-                                          <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{msg.content}</div>
-                                        )}
-                                      </div>
-                                    )}
-                                  </div>
-                                  <div
-                                    className={cn(
-                                      'flex h-6 items-center gap-2 text-xs text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100',
-                                      msg.role === 'user' ? 'self-end' : 'self-start',
-                                    )}
-                                  >
-                                    {messageTime && (
-                                      <time className="leading-none" dateTime={messageCreatedAt}>{messageTime}</time>
-                                    )}
-                                    {canCopyMessage && (
-                                      <button
-                                        type="button"
-                                        className={cn(
-                                          'group/copy relative flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground',
-                                          isMessageCopied && 'bg-success/10 text-success hover:bg-success/10 hover:text-success',
-                                        )}
-                                        onClick={() => {
-                                          void copyChatMessageToClipboard(msg.content, messageKey);
-                                        }}
-                                        aria-label={isMessageCopied ? '消息已复制' : '复制消息'}
-                                      >
-                                        <span className="pointer-events-none absolute bottom-full left-1/2 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded-md border border-border/60 bg-popover px-2 py-1 text-xs font-medium text-popover-foreground opacity-0 shadow-md transition-opacity delay-0 duration-150 group-hover/copy:delay-[1000ms] group-hover/copy:opacity-100 group-focus-visible/copy:delay-[1000ms] group-focus-visible/copy:opacity-100">
-                                          {isMessageCopied ? '已复制' : '复制'}
-                                        </span>
-                                        {isMessageCopied ? (
-                                          <Check className="size-4" />
-                                        ) : (
-                                          <Copy className="size-4" />
-                                        )}
-                                      </button>
-                                    )}
-                                  </div>
-                                </>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-                {isStreaming && !hasStreamingAssistantPlaceholder && (
-                  <div className="flex justify-start">
-                    <div className="flex flex-col items-start gap-2">
-                      <AssistantThinkingIndicator />
-                    </div>
-                  </div>
-                )}
-                <div ref={chatEndRef} />
-              </div>
-            )}
-          </ScrollArea>
-
-          {showChatScrollToBottom && (
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              className="absolute bottom-4 left-1/2 z-20 size-9 -translate-x-1/2 rounded-full border-border/70 bg-background/95 text-muted-foreground shadow-lg backdrop-blur hover:text-foreground"
-              onClick={() => scrollChatToBottom('smooth')}
-              aria-label="滚动到底部"
-            >
-              <ArrowDown className="size-4" />
-            </Button>
-          )}
+          <WorkflowAssistantThread
+            messages={chatMessages}
+            currentStep={currentStep}
+            currentSkill={currentSkill}
+            workflowUpdatedAt={activeWorkflow.updated_at}
+            isStreaming={isStreaming}
+            currentProcessingElapsedSeconds={currentProcessingElapsedSeconds}
+            copiedChatMessageKey={copiedChatMessageKey}
+            showScrollToBottom={showChatScrollToBottom}
+            chatEndRef={chatEndRef}
+            onScrollToBottom={scrollChatToBottom}
+            onCopyMarkdown={copyMarkdownToClipboard}
+            onCopyMessage={copyChatMessageToClipboard}
+            onDownloadStepOutput={downloadStepOutput}
+            onOpenImagePreview={openImagePreview}
+            shouldRenderDocumentCard={shouldRenderAssistantDocumentCard}
+            renderDocumentCard={renderAssistantDocumentCard}
+            formatFileSize={formatFileSize}
+          />
         </div>
 
         {/* Chat Input */}
