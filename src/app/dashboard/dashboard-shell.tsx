@@ -138,6 +138,15 @@ function normalizeUnreadCount(value: unknown): number {
   return Number.isFinite(count) ? Math.max(0, count) : 0;
 }
 
+function canAccessAdmin(authState: DashboardAuthState | null): boolean {
+  return Boolean(
+    authState?.isSuperAdmin
+    || authState?.capabilities.manageOrganization
+    || authState?.capabilities.managePlatformAdmins
+    || authState?.capabilities.viewPlatformUsers,
+  );
+}
+
 function formatNotificationTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
@@ -328,7 +337,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      if ((pathname === '/dashboard/admin' || pathname.startsWith('/dashboard/admin/')) && !data.isSuperAdmin) {
+      if ((pathname === '/dashboard/admin' || pathname.startsWith('/dashboard/admin/')) && !canAccessAdmin(data)) {
         router.replace('/dashboard');
         return;
       }
@@ -444,7 +453,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   const visibleNavItems = useMemo(() => (
-    navItems.filter((item) => !item.requiresAdmin || authState?.isSuperAdmin)
+    navItems.filter((item) => !item.requiresAdmin || canAccessAdmin(authState))
   ), [authState]);
 
   const activeOrganization = authState?.organizations.find((organization) => (

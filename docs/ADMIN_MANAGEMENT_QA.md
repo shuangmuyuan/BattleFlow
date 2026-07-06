@@ -56,6 +56,13 @@ Use this checklist when validating `/dashboard/admin` after account, organizatio
 6. Confirm the last enabled super admin cannot be revoked from the UI.
 7. Confirm an organization admin that is not a super admin cannot see the Platform admins tab and receives 403 from `/api/admin/super-admins`.
 
+## Platform User Admins
+
+1. Sign in as a platform super admin and open the Members list tab.
+2. Set a platform user as an admin.
+3. Sign in as that user, refresh `/dashboard/admin`, and confirm the Admin navigation entry and Members list tab are available.
+4. Confirm the user cannot see the Platform admins tab and receives 403 from `/api/admin/super-admins`.
+
 ## Responsive Checks
 
 1. Validate desktop width around 1440 px.

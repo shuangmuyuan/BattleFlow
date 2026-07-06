@@ -18,6 +18,7 @@ export async function GET(request: NextRequest) {
       ?? (context.isSuperAdmin && requestedOrganizationId ? await fetchOrganizationById(requestedOrganizationId) : null);
     const activeRole = activeMembership?.role ?? null;
     const canManageOrganization = context.isSuperAdmin || activeRole === 'org_owner' || activeRole === 'org_admin';
+    const canViewPlatformUsers = context.isSuperAdmin || context.isPlatformUserAdmin;
 
     return NextResponse.json({
       user: {
@@ -34,7 +35,7 @@ export async function GET(request: NextRequest) {
         manageDepartments: canManageOrganization,
         manageTeams: canManageOrganization,
         managePlatformAdmins: context.isSuperAdmin,
-        viewPlatformUsers: context.isSuperAdmin,
+        viewPlatformUsers: canViewPlatformUsers,
       },
       organizations: memberships.map((membership) => ({
         id: membership.organization.id,

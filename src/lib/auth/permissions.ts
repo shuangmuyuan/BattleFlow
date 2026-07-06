@@ -244,7 +244,16 @@ export function canAccessPlatform(
     return false;
   }
 
-  return context.isSuperAdmin && action.startsWith('platform.');
+  if (!action.startsWith('platform.')) {
+    return false;
+  }
+
+  if (context.isSuperAdmin) {
+    return true;
+  }
+
+  return Boolean(context.isPlatformUserAdmin)
+    && (action === 'platform.users.list' || action === 'platform.users.manage');
 }
 
 export function requirePlatformPermission(

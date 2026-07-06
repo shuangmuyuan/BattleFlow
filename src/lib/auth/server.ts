@@ -3,6 +3,7 @@ import {
   fetchDepartmentMemberships,
   fetchDepartments,
   fetchFirstOrganization,
+  fetchIsPlatformUserAdmin,
   fetchIsSuperAdmin,
   fetchOrganizationById,
   fetchOrganizationMemberships,
@@ -117,13 +118,17 @@ export async function requireUser(request: RequestWithCookies): Promise<AuthUser
   }
 
   await bootstrapConfiguredSuperAdminForUser(user);
-  const isSuperAdmin = await fetchIsSuperAdmin(user.id);
+  const [isSuperAdmin, isPlatformUserAdmin] = await Promise.all([
+    fetchIsSuperAdmin(user.id),
+    fetchIsPlatformUserAdmin(user.id),
+  ]);
   await updateSessionLastSeen(session.id);
 
   return {
     user,
     session,
     isSuperAdmin,
+    isPlatformUserAdmin,
   };
 }
 

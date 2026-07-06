@@ -8,7 +8,7 @@ import {
   type FC,
   type PropsWithChildren,
 } from "react";
-import { ChevronDownIcon, LoaderIcon } from "lucide-react";
+import { ChevronDownIcon } from "lucide-react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { useScrollLock } from "@assistant-ui/react";
 import {
@@ -106,6 +106,7 @@ function ToolGroupTrigger({
   return (
     <CollapsibleTrigger
       data-slot="tool-group-trigger"
+      aria-busy={active || undefined}
       className={cn(
         "aui-tool-group-trigger group/trigger flex origin-left items-center gap-2 text-sm transition-[color,scale] active:scale-[0.98]",
         "group-data-[variant=ghost]/tool-group-root:text-muted-foreground group-data-[variant=ghost]/tool-group-root:hover:text-foreground group-data-[variant=ghost]/tool-group-root:py-1.5",
@@ -115,12 +116,6 @@ function ToolGroupTrigger({
       )}
       {...props}
     >
-      {active && (
-        <LoaderIcon
-          data-slot="tool-group-trigger-loader"
-          className="aui-tool-group-trigger-loader size-3 shrink-0 animate-spin [animation-duration:0.6s]"
-        />
-      )}
       <span
         data-slot="tool-group-trigger-label"
         className={cn(
@@ -131,15 +126,6 @@ function ToolGroupTrigger({
         )}
       >
         <span className="text-xs">{label}</span>
-        {active && (
-          <span
-            aria-hidden
-            data-slot="tool-group-trigger-shimmer"
-            className="aui-tool-group-trigger-shimmer shimmer pointer-events-none absolute inset-0 text-xs motion-reduce:animate-none"
-          >
-            {label}
-          </span>
-        )}
       </span>
       <ChevronDownIcon
         data-slot="tool-group-trigger-chevron"

@@ -190,6 +190,32 @@ export async function fetchIsSuperAdmin(userId: string): Promise<boolean> {
   return Boolean(result.rows[0]?.exists);
 }
 
+export async function fetchIsPlatformUserAdmin(userId: string): Promise<boolean> {
+  assertAuthDatabaseConfigured();
+
+  try {
+    const result = await queryPostgres<{ exists: boolean }>(
+      `
+        SELECT EXISTS (
+          SELECT 1
+          FROM battleflow_users
+          WHERE (id = $1 OR sso_id = $1 OR username = $1)
+            AND is_active = true
+            AND is_admin = true
+        ) AS exists
+      `,
+      [userId],
+    );
+
+    return Boolean(result.rows[0]?.exists);
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === '42P01') {
+      return false;
+    }
+    throw error;
+  }
+}
+
 export async function fetchOrganizationMemberships(userId: string): Promise<OrganizationMembership[]> {
   assertAuthDatabaseConfigured();
 

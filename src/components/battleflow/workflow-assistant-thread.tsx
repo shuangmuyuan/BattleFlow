@@ -5,7 +5,9 @@ import {
   AssistantRuntimeProvider,
   groupPartByType,
   MessagePrimitive,
+  Tools,
   ThreadPrimitive,
+  useAui,
   useExternalStoreRuntime,
   type MessageState,
   type ThreadMessageLike,
@@ -28,7 +30,13 @@ import {
 import { AnimatedShinyText } from '@/components/ui/animated-shiny-text';
 import { Button } from '@/components/ui/button';
 import { CompactMarkdown } from '@/components/battleflow/compact-markdown';
+import { SourceCitationList } from '@/components/battleflow/source-citations';
+import {
+  extractSourceCitationsFromToolCalls,
+  removeGeneratedSourcesFooter,
+} from '@/components/battleflow/source-citation-utils';
 import { ToolCallRenderer } from '@/components/battleflow/tool-calls/tool-call-renderer';
+import { toolkit as toolUiToolkit } from '@/components/tool-ui/toolkit';
 import { cn } from '@/lib/utils';
 
 export interface WorkflowAssistantAttachment {
@@ -432,6 +440,9 @@ function getToolCallResult(toolCall: WorkflowAssistantToolCall) {
 
 function getWorkflowMessageContentParts(message: EnrichedWorkflowAssistantMessage): WorkflowThreadMessagePart[] {
   const content: WorkflowThreadMessagePart[] = [];
+  const sourceCitations = message.role === 'assistant'
+    ? extractSourceCitationsFromToolCalls(message.toolCalls)
+    : [];
 
   if (message.role === 'assistant') {
     for (const toolCall of message.toolCalls || []) {
@@ -453,8 +464,12 @@ function getWorkflowMessageContentParts(message: EnrichedWorkflowAssistantMessag
     }
   }
 
-  if (message.content.trim() || content.length === 0) {
-    content.push({ type: 'text', text: message.content });
+  const displayContent = sourceCitations.length > 0
+    ? removeGeneratedSourcesFooter(message.content)
+    : message.content;
+
+  if (displayContent.trim() || content.length === 0) {
+    content.push({ type: 'text', text: displayContent });
   }
 
   return content;
@@ -583,22 +598,28 @@ function WorkflowAssistantMessageRow({
   formatFileSize: (size: number) => string;
 }) {
   const toolCalls = message.role === 'assistant' ? message.toolCalls || [] : [];
+  const sourceCitations = message.role === 'assistant'
+    ? extractSourceCitationsFromToolCalls(toolCalls)
+    : [];
+  const displayMessageContent = sourceCitations.length > 0
+    ? removeGeneratedSourcesFooter(message.content)
+    : message.content;
+  const isRunningAssistantMessage = isStreaming
+    && message.index === lastAssistantMessageIndex
+    && message.role === 'assistant';
+  const visibleSourceCitations = isRunningAssistantMessage ? [] : sourceCitations;
   const stoppedMessageContent = message.role === 'assistant'
     ? getChatCancelledDisplayContent(message.content)
     : null;
   const shouldShowDocumentCard = message.role === 'assistant'
     && !stoppedMessageContent
     && shouldRenderDocumentCard(message);
-  const renderThinkingIndicator = isStreaming
-    && message.index === lastAssistantMessageIndex
-    && message.role === 'assistant'
+  const renderThinkingIndicator = isRunningAssistantMessage
     && !message.content.trim()
     && toolCalls.length === 0;
-  const renderProcessingTimer = isStreaming
-    && message.index === lastAssistantMessageIndex
-    && message.role === 'assistant'
+  const renderProcessingTimer = isRunningAssistantMessage
     && Boolean(message.content.trim());
-  const canCopyMessage = Boolean(message.content.trim());
+  const canCopyMessage = Boolean(displayMessageContent.trim());
   const isMessageCopied = copiedChatMessageKey === message.id;
 
   return (
@@ -616,6 +637,7 @@ function WorkflowAssistantMessageRow({
             <AssistantProcessingTimer seconds={currentProcessingElapsedSeconds} />
           )}
           <AssistantMessageParts onOpenImagePreview={onOpenImagePreview} />
+          <SourceCitationList id={`${message.id}-sources`} citations={visibleSourceCitations} />
           {renderDocumentCard(message, message.index)}
         </div>
       ) : (
@@ -646,7 +668,10 @@ function WorkflowAssistantMessageRow({
               ) : (
                 <>
                   {message.role === 'assistant' ? (
-                    <AssistantMessageParts onOpenImagePreview={onOpenImagePreview} />
+                    <>
+                      <AssistantMessageParts onOpenImagePreview={onOpenImagePreview} />
+                      <SourceCitationList id={`${message.id}-sources`} citations={visibleSourceCitations} />
+                    </>
                   ) : (
                     <div
                       className="w-fit min-w-0 max-w-full overflow-hidden break-words rounded-lg bg-primary p-3 text-sm text-primary-foreground [overflow-wrap:anywhere]"
@@ -686,7 +711,7 @@ function WorkflowAssistantMessageRow({
                           isMessageCopied && 'bg-success/10 text-success hover:bg-success/10 hover:text-success',
                         )}
                         onClick={() => {
-                          void onCopyMessage(message.content, message.id);
+                          void onCopyMessage(displayMessageContent, message.id);
                         }}
                         aria-label={isMessageCopied ? '消息已复制' : '复制消息'}
                       >
@@ -781,9 +806,10 @@ export function WorkflowAssistantThread({
     isRunning: isStreaming,
     onNew: async () => {},
   });
+  const aui = useAui({ tools: Tools({ toolkit: toolUiToolkit }) });
 
   return (
-    <AssistantRuntimeProvider runtime={runtime}>
+    <AssistantRuntimeProvider runtime={runtime} aui={aui}>
       <ThreadPrimitive.Root className="relative h-full min-h-0 min-w-0 flex-1">
         <ThreadPrimitive.Viewport
           autoScroll={false}

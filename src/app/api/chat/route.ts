@@ -1208,6 +1208,7 @@ function buildSystemPrompt(body: Record<string, unknown>) {
   }
 
   systemPrompt += '\n\n## Instructions\n- Provide structured, professional output\n- If this is a methodology-driven workflow capability, follow the methodology steps\n- When previous-step or uploaded file context is relevant, inspect the attachment references with Claude Code Read, Grep, or Glob instead of assuming their contents from filenames\n- Be thorough but concise\n- Use markdown formatting for better readability';
+  systemPrompt += '\n- Do not append a standalone Sources or References section for web/tool search results unless the user explicitly asks for that section. BattleFlow renders structured citation UI separately from tool results.';
   systemPrompt += '\n- Never ask the user to choose a Claude Code or Codex runtime capability. The BattleFlow workflow step has already supplied the active method package when one is available.';
   systemPrompt += '\n- For ordinary Q&A, reply as a conversational assistant message. Do not package the answer as a workflow deliverable or markdown file unless the user explicitly asks to generate/export a document or is confirming the step output.';
   systemPrompt += '\n- When a step is ready to be confirmed, make the durable deliverable a standalone Markdown document that can be saved as this workflow step output. Avoid making the saved deliverable depend on conversational wording such as greetings or follow-up chatter.';

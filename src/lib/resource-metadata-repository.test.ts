@@ -36,6 +36,7 @@ function makeContext(overrides: Partial<AuthOrganizationContext> = {}): AuthOrga
       lastSeenAt: null,
     },
     isSuperAdmin: false,
+    isPlatformUserAdmin: false,
     activeOrganization: {
       id: 'org-1',
       name: 'Org One',

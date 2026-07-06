@@ -95,6 +95,31 @@ describe('tool-call-utils', () => {
     expect(fetch.content).toBe('# Title');
   });
 
+  it('parses Claude Code CLI nested web search results', () => {
+    const search = parseWebSearchResults({
+      query: 'official React documentation useState',
+      results: [
+        {
+          tool_use_id: 'srvtoolu_123',
+          content: [
+            { title: 'useState - React', url: 'https://react.dev/reference/react/useState' },
+            { title: 'Using the State Hook - React', url: 'https://legacy.reactjs.org/docs/hooks-state.html' },
+          ],
+        },
+      ],
+      durationSeconds: 1.1,
+      searchCount: 1,
+    });
+
+    expect(search.results).toHaveLength(2);
+    expect(search.results[0]).toMatchObject({
+      title: 'useState - React',
+      url: 'https://react.dev/reference/react/useState',
+      domain: 'react.dev',
+    });
+    expect(search.rawText).toBeUndefined();
+  });
+
   it('handles display helpers', () => {
     expect(inferLanguageFromPath('src/page.tsx')).toBe('tsx');
     expect(getDomainFromUrl('https://www.example.com/path')).toBe('example.com');

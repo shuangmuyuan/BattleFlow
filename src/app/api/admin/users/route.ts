@@ -17,13 +17,17 @@ import { battleflowAuthCookieName, getUserBySessionToken } from '@/lib/sso-auth'
 export const runtime = 'nodejs';
 
 const viewPlatformUsersAction = 'platform.users.list';
+const managePlatformUsersAction = 'platform.users.manage';
 
-async function requirePlatformUserListAccess(request: NextRequest): Promise<{ actorUserId: string | null }> {
+async function requirePlatformUserListAccess(
+  request: NextRequest,
+  action = viewPlatformUsersAction,
+): Promise<{ actorUserId: string | null }> {
   let firstPartyError: unknown;
 
   try {
     const context = await requireUser(request);
-    requirePlatformPermission(context, viewPlatformUsersAction);
+    requirePlatformPermission(context, action);
     return { actorUserId: context.user.id };
   } catch (error) {
     firstPartyError = error;
@@ -60,7 +64,7 @@ export async function GET(request: NextRequest) {
 
 export async function PATCH(request: NextRequest) {
   try {
-    const access = await requirePlatformUserListAccess(request);
+    const access = await requirePlatformUserListAccess(request, managePlatformUsersAction);
     const body = await readRequiredJsonBody(request);
     const isAdmin = typeof body.isAdmin === 'boolean' ? body.isAdmin : null;
     if (isAdmin === null) {

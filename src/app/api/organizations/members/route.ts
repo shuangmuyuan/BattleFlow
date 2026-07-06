@@ -1,6 +1,5 @@
 import { NextRequest } from 'next/server';
 import { requireOrganizationContext, requirePermission } from '@/lib/auth/server';
-import { ForbiddenError } from '@/lib/auth/types';
 import {
   listOrganizationMembers,
   removeOrganizationMember,
@@ -21,18 +20,11 @@ function requestedOrganizationId(request: NextRequest): string | null {
   return request.nextUrl.searchParams.get('organizationId');
 }
 
-function requireSuperAdmin(context: Awaited<ReturnType<typeof requireOrganizationContext>>): void {
-  if (!context.isSuperAdmin) {
-    throw new ForbiddenError('Super administrator permission is required');
-  }
-}
-
 export async function GET(request: NextRequest) {
   try {
     const context = await requireOrganizationContext(request, {
       organizationId: requestedOrganizationId(request),
     });
-    requireSuperAdmin(context);
     requirePermission(context, 'organization.members.manage', {
       organizationId: context.activeOrganization.id,
     });
@@ -49,7 +41,6 @@ export async function PATCH(request: NextRequest) {
     const context = await requireOrganizationContext(request, {
       organizationId: requestedOrganizationId(request),
     });
-    requireSuperAdmin(context);
     requirePermission(context, 'organization.members.manage', {
       organizationId: context.activeOrganization.id,
     });
@@ -74,7 +65,6 @@ export async function DELETE(request: NextRequest) {
     const context = await requireOrganizationContext(request, {
       organizationId: requestedOrganizationId(request),
     });
-    requireSuperAdmin(context);
     requirePermission(context, 'organization.members.manage', {
       organizationId: context.activeOrganization.id,
     });

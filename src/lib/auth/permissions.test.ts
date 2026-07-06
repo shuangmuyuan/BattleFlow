@@ -19,6 +19,7 @@ function makeContext(overrides: Partial<AuthOrganizationContext> = {}): AuthOrga
       lastSeenAt: null,
     },
     isSuperAdmin: false,
+    isPlatformUserAdmin: false,
     activeOrganization: {
       id: 'org-1',
       name: 'Org One',
@@ -67,6 +68,7 @@ function makeUserContext(overrides: Partial<AuthUserContext> = {}): AuthUserCont
       lastSeenAt: null,
     },
     isSuperAdmin: false,
+    isPlatformUserAdmin: false,
     ...overrides,
   };
 }
@@ -312,6 +314,14 @@ describe('permission engine', () => {
     expect(canAccessPlatform(makeUserContext(), 'platform.super_admins.manage')).toBe(false);
     expect(canAccessPlatform(makeUserContext({ isSuperAdmin: true }), 'platform.super_admins.manage')).toBe(true);
     expect(canAccessPlatform(makeUserContext({ isSuperAdmin: true }), 'organization.members.manage')).toBe(false);
+  });
+
+  it('allows platform user admins to manage users but not super admins', () => {
+    const context = makeUserContext({ isPlatformUserAdmin: true });
+
+    expect(canAccessPlatform(context, 'platform.users.list')).toBe(true);
+    expect(canAccessPlatform(context, 'platform.users.manage')).toBe(true);
+    expect(canAccessPlatform(context, 'platform.super_admins.manage')).toBe(false);
   });
 
   it('blocks platform management against secret material', () => {

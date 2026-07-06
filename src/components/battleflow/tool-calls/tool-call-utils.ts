@@ -526,18 +526,30 @@ function webResultFromRecord(record: Record<string, unknown>): WebSearchResult {
   };
 }
 
+function hasWebResultFields(record: Record<string, unknown>) {
+  return Boolean(
+    pickString(record, ['url', 'href', 'link', 'title', 'name', 'snippet', 'summary', 'text', 'description', 'source'])
+      || getString(record.content),
+  );
+}
+
+function webResultsFromValue(value: unknown): WebSearchResult[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => webResultsFromValue(item));
+  }
+  if (typeof value === 'string') return [{ title: value, snippet: value }];
+  if (!isRecord(value)) return [];
+
+  if (hasWebResultFields(value)) return [webResultFromRecord(value)];
+
+  const nested = pickOutputValue(value, ['content', 'results', 'items', 'data', 'sources']);
+  return nested != null && nested !== value ? webResultsFromValue(nested) : [];
+}
+
 export function parseWebSearchResults(output: unknown): ParsedWebSearchResults {
   const parsed = parseMaybeJsonValue(output);
   const candidate = extractOutputCandidate(parsed, ['results', 'items', 'data', 'sources']);
-  const results = Array.isArray(candidate)
-    ? candidate.flatMap((item): WebSearchResult[] => {
-      if (isRecord(item)) return [webResultFromRecord(item)];
-      if (typeof item === 'string') return [{ title: item, snippet: item }];
-      return [];
-    })
-    : isRecord(candidate) && (pickString(candidate, ['url', 'title', 'snippet', 'content']))
-      ? [webResultFromRecord(candidate)]
-      : [];
+  const results = webResultsFromValue(candidate);
 
   return {
     results,

@@ -104,6 +104,7 @@ Bootstrap config values remain server-only. API and UI surfaces show database-ba
 - Protected API routes use `requireUser`, `requireOrganizationContext`, `requirePermission`, or `requirePlatformPermission`.
 - Skill and workflow package assets are returned or injected into chat only after the Postgres resource permission index allows the action.
 - Super admins can administer product content across organizations, but cannot access secret material such as connection strings, environment variables, password hashes, or session token hashes.
+- SSO-backed `battleflow_users.is_admin` users can manage the platform user list through `platform.users.list` and `platform.users.manage`; this does not grant `platform.super_admins.manage` or secret-material access.
 - Imported Skill packages, knowledge snippets, uploaded workflow files, and package assets are always untrusted data.
 
 ## Operational Checks

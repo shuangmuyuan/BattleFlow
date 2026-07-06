@@ -285,6 +285,15 @@ function AdminUnavailable({ description }: { description: string }) {
   );
 }
 
+function canAccessAdmin(authState: DashboardAuthState | null): boolean {
+  return Boolean(
+    authState?.isSuperAdmin
+    || authState?.capabilities.manageOrganization
+    || authState?.capabilities.managePlatformAdmins
+    || authState?.capabilities.viewPlatformUsers,
+  );
+}
+
 export default function AdminPage() {
   const [activeTab, setActiveTab] = useState('members');
   const [authState, setAuthState] = useState<DashboardAuthState | null>(null);
@@ -361,14 +370,6 @@ export default function AdminPage() {
     try {
       const auth = await jsonRequest<DashboardAuthState>('/api/auth/me');
       setAuthState(auth);
-
-      if (!auth.isSuperAdmin) {
-        setSuperAdmins([]);
-        setPlatformUsers([]);
-        setMembers([]);
-        setSkillReviewRequests([]);
-        return;
-      }
 
       const shouldViewPlatformUsers = auth.capabilities.viewPlatformUsers || auth.isSuperAdmin;
       if (shouldViewPlatformUsers || auth.capabilities.managePlatformAdmins) {
@@ -520,16 +521,16 @@ export default function AdminPage() {
     );
   }
 
-  if (authState && !authState.isSuperAdmin) {
+  if (authState && !canAccessAdmin(authState)) {
     return (
       <div className="flex h-full min-h-0 flex-col">
         <PageHeader
           title="组织管理"
-          description="该区域仅限平台超级管理员访问。"
+          description="该区域仅限管理员访问。"
           meta={<StatusBadge tone="danger">无权限</StatusBadge>}
         />
         <div className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
-          <AdminUnavailable description="当前账号没有平台超级管理员权限。服务端接口也会执行相同的权限校验。" />
+          <AdminUnavailable description="当前账号没有组织或平台管理权限。服务端接口也会执行相同的权限校验。" />
         </div>
       </div>
     );

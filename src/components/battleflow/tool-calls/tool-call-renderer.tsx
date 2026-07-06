@@ -13,13 +13,13 @@ import {
   FileText,
   Globe,
   HelpCircle,
-  Loader2,
   Search,
   Terminal,
   XCircle,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { AnimatedShinyText } from '@/components/ui/animated-shiny-text';
 import {
   Collapsible,
   CollapsibleContent,
@@ -87,7 +87,7 @@ const statusConfig: Record<DisplayToolStatus, { label: string; className: string
   running: {
     label: 'Running',
     className: 'border-border/60 bg-muted/25 text-muted-foreground',
-    icon: <Loader2 className="size-3 animate-spin" />,
+    icon: null,
   },
   success: {
     label: 'Done',
@@ -178,6 +178,7 @@ export function ToolCallCard({
   const [open, setOpen] = useState(defaultOpen);
   const statusDetails = statusConfig[status];
   const showDuration = duration && status !== 'success';
+  const showStatusBadge = status !== 'running';
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -203,7 +204,13 @@ export function ToolCallCard({
                 <span className="shrink-0 text-sm font-medium text-foreground">{title}</span>
                 {summary && (
                   <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
-                    {summary}
+                    {status === 'running' ? (
+                      <AnimatedShinyText className="max-w-full truncate align-baseline font-mono text-xs">
+                        {summary}
+                      </AnimatedShinyText>
+                    ) : (
+                      summary
+                    )}
                   </span>
                 )}
               </span>
@@ -214,17 +221,19 @@ export function ToolCallCard({
               {duration}
             </span>
           )}
-          <Badge
-            variant="outline"
-            className={cn(
-              'h-5 shrink-0 gap-1 rounded-md px-1.5 text-[10px]',
-              status === 'success' && 'px-1',
-              statusDetails.className,
-            )}
-          >
-            {statusDetails.icon}
-            {status !== 'success' && statusDetails.label}
-          </Badge>
+          {showStatusBadge && (
+            <Badge
+              variant="outline"
+              className={cn(
+                'h-5 shrink-0 gap-1 rounded-md px-1.5 text-[10px]',
+                status === 'success' && 'px-1',
+                statusDetails.className,
+              )}
+            >
+              {statusDetails.icon}
+              {status !== 'success' && statusDetails.label}
+            </Badge>
+          )}
         </div>
 
         <CollapsibleContent>

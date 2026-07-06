@@ -30,6 +30,7 @@ export interface AuthUserContext {
   user: AuthUser;
   session: AuthSession;
   isSuperAdmin: boolean;
+  isPlatformUserAdmin: boolean;
 }
 
 export interface AuthOrganization {
