@@ -172,7 +172,7 @@ export function ToolCallCard({
   summary,
   status,
   duration,
-  defaultOpen = true,
+  defaultOpen = false,
   children,
 }: ToolCallCardProps) {
   const [open, setOpen] = useState(defaultOpen);
@@ -708,7 +708,6 @@ export function GenericToolCard(props: ToolCallRendererProps) {
       status={status}
       duration={duration}
       error={error}
-      defaultOpen={status !== 'success'}
     >
       {error ? (
         <ErrorNotice error={error} />
