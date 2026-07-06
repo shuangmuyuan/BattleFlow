@@ -51,8 +51,8 @@ export const builtInSuperAdminPrincipal = {
   displayName: 'Built-in Super Admin',
 } as const;
 
-export const defaultSuperAdminEmails = ['94399@sangfor.com', builtInSuperAdminPrincipal.email] as const;
-export const defaultSuperAdminUserIds = ['94399', builtInSuperAdminPrincipal.userId] as const;
+export const defaultSuperAdminEmails = [builtInSuperAdminPrincipal.email] as const;
+export const defaultSuperAdminUserIds = [builtInSuperAdminPrincipal.userId] as const;
 
 function splitEnvList(value: string | undefined): string[] {
   return [...new Set((value ?? '')
@@ -120,6 +120,20 @@ export function canRevokeSuperAdmin(input: {
   targetEnabled: boolean;
 }): boolean {
   return !(input.targetEnabled && input.enabledSuperAdminCount <= 1);
+}
+
+export function shouldBootstrapConfiguredSuperAdmin(
+  current: { enabled: boolean; revoked_at: Date | string | null } | null,
+): boolean {
+  if (!current) {
+    return true;
+  }
+
+  if (current.revoked_at) {
+    return false;
+  }
+
+  return !current.enabled;
 }
 
 function mapPlatformAdmin(row: PlatformAdminRow) {
@@ -204,7 +218,7 @@ export async function bootstrapConfiguredSuperAdminForUser(user: AuthUser): Prom
       [user.id],
     );
     const current = existing.rows[0];
-    if (current?.enabled && !current.revoked_at) {
+    if (!shouldBootstrapConfiguredSuperAdmin(current ?? null)) {
       await client.query('COMMIT');
       return;
     }

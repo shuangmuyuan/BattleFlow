@@ -1126,6 +1126,24 @@ function isAbortError(error: unknown) {
   return maybeError.name === 'AbortError';
 }
 
+class ChatServerStreamError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ChatServerStreamError';
+  }
+}
+
+function isRecoverableChatStreamReadError(error: unknown, activeRunId: string) {
+  if (!activeRunId || error instanceof ChatServerStreamError) return false;
+  const message = error instanceof Error ? error.message.trim() : '';
+  return (
+    message === 'Load failed'
+    || message === 'Failed to fetch'
+    || message === 'NetworkError when attempting to fetch resource.'
+    || message === 'Chat stream ended before the completion signal was received'
+  );
+}
+
 interface ChatStreamPayload {
   event?: string;
   content?: string;
@@ -2935,6 +2953,7 @@ export default function WorkflowsPage() {
     const controller = new AbortController();
     activeChatRequestByStepIdRef.current[currentStep.id] = controller;
     let activeRunId = '';
+    let keepRunTrackingAfterStreamReadError = false;
     let assistantContent = '';
     let persistedAssistantMessage: ChatMessage | null = null;
     const requestStartedAt = Date.now();
@@ -3019,7 +3038,7 @@ export default function WorkflowsPage() {
             },
           }));
         }
-        if (data.error) throw new Error(data.error);
+        if (data.error) throw new ChatServerStreamError(data.error);
         if (data.message?.role === 'assistant') {
           persistedAssistantMessage = data.message;
         }
@@ -3137,6 +3156,14 @@ export default function WorkflowsPage() {
         return;
       }
 
+      if (isRecoverableChatStreamReadError(error, activeRunId)) {
+        keepRunTrackingAfterStreamReadError = true;
+        activeChatRunIdByStepIdRef.current[currentStep.id] = activeRunId;
+        setStreamingByStepId((prev) => ({ ...prev, [currentStep.id]: true }));
+        setStepChatPersistenceStatus(currentStep.id, 'streaming');
+        return;
+      }
+
       console.error('Chat error:', error);
       const errorMessages: ChatMessage[] = [
         ...visibleMessages,
@@ -3166,7 +3193,11 @@ export default function WorkflowsPage() {
       if (activeChatRequestByStepIdRef.current[currentStep.id] === controller) {
         delete activeChatRequestByStepIdRef.current[currentStep.id];
       }
-      if (activeRunId && activeChatRunIdByStepIdRef.current[currentStep.id] === activeRunId) {
+      if (
+        activeRunId
+        && !keepRunTrackingAfterStreamReadError
+        && activeChatRunIdByStepIdRef.current[currentStep.id] === activeRunId
+      ) {
         delete activeChatRunIdByStepIdRef.current[currentStep.id];
       }
       if (!activeRunId) {
@@ -4312,7 +4343,7 @@ export default function WorkflowsPage() {
                               className="shrink-0 text-xs text-muted-foreground"
                               dateTime={latestUpdatedAt}
                             >
-                              {formatSnapshotTime(latestUpdatedAt)}
+                              {formatWorkflowCardDate(latestUpdatedAt)}
                             </time>
                           </div>
 

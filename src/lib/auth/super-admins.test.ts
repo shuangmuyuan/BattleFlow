@@ -3,6 +3,7 @@ import {
   canRevokeSuperAdmin,
   isConfiguredSuperAdminPrincipal,
   parseConfiguredSuperAdmins,
+  shouldBootstrapConfiguredSuperAdmin,
   userMatchesConfiguredSuperAdmin,
 } from './super-admins';
 
@@ -18,17 +19,17 @@ describe('super admin management helpers', () => {
     });
 
     expect(config).toEqual({
-      emails: ['94399@sangfor.com', 'superadmin@battleflow.local', 'owner@example.com', 'platform@example.com'],
-      userIds: ['94399', 'superadmin', 'user-1', 'user-2'],
+      emails: ['superadmin@battleflow.local', 'owner@example.com', 'platform@example.com'],
+      userIds: ['superadmin', 'user-1', 'user-2'],
     });
   });
 
-  it('includes the production SSO and built-in super admin principals', () => {
+  it('includes only the built-in super admin principal by default', () => {
     const config = parseConfiguredSuperAdmins({});
 
     expect(config).toEqual({
-      emails: ['94399@sangfor.com', 'superadmin@battleflow.local'],
-      userIds: ['94399', 'superadmin'],
+      emails: ['superadmin@battleflow.local'],
+      userIds: ['superadmin'],
     });
   });
 
@@ -55,16 +56,23 @@ describe('super admin management helpers', () => {
     });
   });
 
-  it('matches SSO principals by the default email, username, or SSO ID', () => {
-    vi.stubEnv('BATTLEFLOW_SUPER_ADMIN_EMAILS', '');
-    vi.stubEnv('BATTLEFLOW_SUPER_ADMIN_USER_IDS', '');
+  it('matches configured SSO principals by email, username, or SSO ID', () => {
+    vi.stubEnv('BATTLEFLOW_SUPER_ADMIN_EMAILS', '94399@sangfor.com');
+    vi.stubEnv('BATTLEFLOW_SUPER_ADMIN_USER_IDS', '94399');
 
     expect(isConfiguredSuperAdminPrincipal({ email: '94399@SANGFOR.com' })).toBe(true);
     expect(isConfiguredSuperAdminPrincipal({ username: '94399' })).toBe(true);
     expect(isConfiguredSuperAdminPrincipal({ ssoId: '94399' })).toBe(true);
+    expect(isConfiguredSuperAdminPrincipal({ email: 'member@sangfor.com', username: '10001' })).toBe(false);
+  });
+
+  it('matches the built-in super admin principal by default', () => {
+    vi.stubEnv('BATTLEFLOW_SUPER_ADMIN_EMAILS', '');
+    vi.stubEnv('BATTLEFLOW_SUPER_ADMIN_USER_IDS', '');
+
     expect(isConfiguredSuperAdminPrincipal({ username: 'superadmin' })).toBe(true);
     expect(isConfiguredSuperAdminPrincipal({ email: 'superadmin@battleflow.local' })).toBe(true);
-    expect(isConfiguredSuperAdminPrincipal({ email: 'member@sangfor.com', username: '10001' })).toBe(false);
+    expect(isConfiguredSuperAdminPrincipal({ username: '94399' })).toBe(false);
   });
 
   it('prevents revoking the last enabled super admin', () => {
@@ -82,5 +90,12 @@ describe('super admin management helpers', () => {
       enabledSuperAdminCount: 1,
       targetEnabled: false,
     })).toBe(true);
+  });
+
+  it('does not bootstrap a configured super admin after explicit revoke', () => {
+    expect(shouldBootstrapConfiguredSuperAdmin(null)).toBe(true);
+    expect(shouldBootstrapConfiguredSuperAdmin({ enabled: true, revoked_at: null })).toBe(false);
+    expect(shouldBootstrapConfiguredSuperAdmin({ enabled: false, revoked_at: null })).toBe(true);
+    expect(shouldBootstrapConfiguredSuperAdmin({ enabled: false, revoked_at: new Date() })).toBe(false);
   });
 });
