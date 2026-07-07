@@ -3075,7 +3075,6 @@ export default function WorkflowsPage() {
             content: m.content,
           })),
           agent_provider: 'claude-code-cli',
-          model_id: 'doubao-seed-2-0-pro-260215',
           workflow_id: workflow.id,
           workflow_step_id: currentStep.id,
           visible_user_message: userMessage,

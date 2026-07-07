@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { NextRequest } from 'next/server';
-import { streamClaudeCodeCliTurn } from '@/lib/agent-adapters/claude-code-cli';
+import { streamClaudeAgentSdkTurn } from '@/lib/agent-adapters/claude-agent-sdk';
 import type { AgentEvent, AgentInputAttachment, AgentToolCallEvent } from '@/lib/agent-adapters/types';
 import { requireOrganizationContext, requirePermission } from '@/lib/auth/server';
 import { AuthError, ForbiddenError } from '@/lib/auth/types';
@@ -1422,14 +1422,14 @@ function streamAgentEventsAsSse(agentStream: ReadableStream<AgentEvent>, run?: C
   });
 }
 
-function streamClaudeCodeCli(
+function streamClaudeAgentSdk(
   run: ChatRunRecord,
   messages: ChatMessage[],
   systemPrompt: string,
   attachments: AgentInputAttachment[],
   readableDirectories: string[],
 ) {
-  const agentStream = streamClaudeCodeCliTurn({
+  const agentStream = streamClaudeAgentSdkTurn({
     messages,
     systemPrompt,
     attachments,
@@ -1600,8 +1600,8 @@ export async function POST(request: NextRequest) {
       current_turn_uploaded_files: currentTurnUploadedFiles,
       workflow_attachment_files: workflowAttachmentFiles,
     });
-    const provider = String(body.agent_provider || process.env.CHAT_AGENT_PROVIDER || 'claude-code-cli');
-    if (provider !== 'claude-code-cli' && provider !== 'claude-cli') {
+    const provider = String(body.agent_provider || process.env.CHAT_AGENT_PROVIDER || 'claude-agent-sdk');
+    if (provider !== 'claude-agent-sdk' && provider !== 'claude-code-cli' && provider !== 'claude-cli') {
       return new Response(JSON.stringify({ error: `Unsupported agent provider: ${provider}` }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' },
@@ -1634,7 +1634,7 @@ export async function POST(request: NextRequest) {
     chatRuns.set(run.id, run);
     pruneChatRuns();
 
-    return streamClaudeCodeCli(
+    return streamClaudeAgentSdk(
       run,
       claudeMessages,
       systemPrompt,

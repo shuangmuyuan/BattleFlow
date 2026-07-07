@@ -4,7 +4,7 @@ import type { AgentEvent } from '@/lib/agent-adapters/types';
 import type { WorkflowRecord } from '@/lib/workflow-registry';
 
 const mocks = vi.hoisted(() => ({
-  streamClaudeCodeCliTurn: vi.fn(),
+  streamClaudeAgentSdkTurn: vi.fn(),
   requireOrganizationContext: vi.fn(),
   requirePermission: vi.fn(),
   normalizeChatKnowledgeBaseContexts: vi.fn(),
@@ -20,8 +20,8 @@ const mocks = vi.hoisted(() => ({
   upsertWorkflow: vi.fn(),
 }));
 
-vi.mock('@/lib/agent-adapters/claude-code-cli', () => ({
-  streamClaudeCodeCliTurn: mocks.streamClaudeCodeCliTurn,
+vi.mock('@/lib/agent-adapters/claude-agent-sdk', () => ({
+  streamClaudeAgentSdkTurn: mocks.streamClaudeAgentSdkTurn,
 }));
 
 vi.mock('@/lib/auth/server', () => ({
@@ -173,7 +173,7 @@ beforeEach(() => {
 
 describe('Chat API route', () => {
   it('normalizes streamed assistant output and persisted messages to Simplified Chinese', async () => {
-    mocks.streamClaudeCodeCliTurn.mockReturnValue(streamAgentEvents([
+    mocks.streamClaudeAgentSdkTurn.mockReturnValue(streamAgentEvents([
       { type: 'assistant_message', text: '這是一段' },
       { type: 'assistant_message', text: '產品規劃。' },
       { type: 'assistant_final', text: '最終輸出：關鍵風險。' },
@@ -196,7 +196,7 @@ describe('Chat API route', () => {
       replace: true,
     }));
 
-    const agentInput = mocks.streamClaudeCodeCliTurn.mock.calls[0][0] as {
+    const agentInput = mocks.streamClaudeAgentSdkTurn.mock.calls[0][0] as {
       messages: Array<{ role: string; content: string }>;
       systemPrompt: string;
     };
@@ -230,7 +230,7 @@ describe('Chat API route', () => {
       },
     };
 
-    mocks.streamClaudeCodeCliTurn.mockReturnValue(streamAgentEvents([
+    mocks.streamClaudeAgentSdkTurn.mockReturnValue(streamAgentEvents([
       {
         type: 'tool_call',
         id: 'tool-read-1',
@@ -337,7 +337,7 @@ describe('Chat API route', () => {
         }],
       },
     }));
-    mocks.streamClaudeCodeCliTurn.mockReturnValue(streamAgentEvents([
+    mocks.streamClaudeAgentSdkTurn.mockReturnValue(streamAgentEvents([
       { type: 'assistant_final', text: 'ok' },
       { type: 'session_status', status: 'done' },
     ]));
@@ -354,7 +354,7 @@ describe('Chat API route', () => {
     await response.text();
 
     expect(response.status).toBe(200);
-    const agentInput = mocks.streamClaudeCodeCliTurn.mock.calls[0][0] as {
+    const agentInput = mocks.streamClaudeAgentSdkTurn.mock.calls[0][0] as {
       systemPrompt: string;
       readableDirectories: string[];
     };
@@ -477,7 +477,7 @@ describe('Chat API route', () => {
         }],
       },
     }));
-    mocks.streamClaudeCodeCliTurn.mockReturnValue(streamAgentEvents([
+    mocks.streamClaudeAgentSdkTurn.mockReturnValue(streamAgentEvents([
       { type: 'assistant_final', text: 'ok' },
       { type: 'session_status', status: 'done' },
     ]));
@@ -491,7 +491,7 @@ describe('Chat API route', () => {
     await response.text();
 
     expect(response.status).toBe(200);
-    const agentInput = mocks.streamClaudeCodeCliTurn.mock.calls[0][0] as {
+    const agentInput = mocks.streamClaudeAgentSdkTurn.mock.calls[0][0] as {
       systemPrompt: string;
       readableDirectories: string[];
     };
@@ -519,7 +519,7 @@ describe('Chat API route', () => {
         absolute_path: '/tmp/battleflow-skill-package/assets/templates/template.md',
       }],
     });
-    mocks.streamClaudeCodeCliTurn.mockReturnValue(streamAgentEvents([
+    mocks.streamClaudeAgentSdkTurn.mockReturnValue(streamAgentEvents([
       { type: 'assistant_final', text: 'ok' },
       { type: 'session_status', status: 'done' },
     ]));
@@ -546,7 +546,7 @@ describe('Chat API route', () => {
 
     expect(response.status).toBe(200);
     expect(mocks.requireSkillIdAccess).toHaveBeenCalledWith(authContext, 'skill-1', 'skill.run');
-    const agentInput = mocks.streamClaudeCodeCliTurn.mock.calls[0][0] as {
+    const agentInput = mocks.streamClaudeAgentSdkTurn.mock.calls[0][0] as {
       systemPrompt: string;
       readableDirectories: string[];
     };
@@ -580,7 +580,7 @@ describe('Chat API route', () => {
         content: 'TEMPLATE_CONTENT_SHOULD_NOT_BE_IN_PROMPT',
       }],
     });
-    mocks.streamClaudeCodeCliTurn.mockReturnValue(streamAgentEvents([
+    mocks.streamClaudeAgentSdkTurn.mockReturnValue(streamAgentEvents([
       { type: 'assistant_final', text: 'ok' },
       { type: 'session_status', status: 'done' },
     ]));
@@ -598,7 +598,7 @@ describe('Chat API route', () => {
     await response.text();
 
     expect(response.status).toBe(200);
-    const agentInput = mocks.streamClaudeCodeCliTurn.mock.calls[0][0] as {
+    const agentInput = mocks.streamClaudeAgentSdkTurn.mock.calls[0][0] as {
       systemPrompt: string;
       readableDirectories: string[];
     };
