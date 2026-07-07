@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { AgentEvent } from './types';
@@ -55,6 +58,11 @@ describe('streamClaudeAgentSdkTurn', () => {
     process.env.CLAUDE_MODEL = 'sonnet';
     process.env.CLAUDE_MAX_BUDGET_USD = '1.25';
     process.env.CLAUDE_WORKSPACE_DIR = '/tmp/battleflow-workspace';
+    process.env.BATTLEFLOW_CLAUDE_SETTINGS_PATH = path.join(tmpdir(), 'battleflow-missing-claude-settings.json');
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_AUTH_TOKEN;
+    delete process.env.ANTHROPIC_BASE_URL;
+    delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
     delete process.env.CLAUDE_COMMAND;
   });
 
@@ -312,5 +320,57 @@ describe('streamClaudeAgentSdkTurn', () => {
     expect(status.available).toBe(false);
     expect(status.auth.anthropicTokenConfigured).toBe(false);
     expect(status.error).toContain('CLAUDE_CODE_OAUTH_TOKEN');
+  });
+
+  it('loads Claude settings env for SDK subprocess credentials', async () => {
+    const settingsDir = mkdtempSync(path.join(tmpdir(), 'battleflow-claude-settings-'));
+    const settingsPath = path.join(settingsDir, 'settings.json');
+    writeFileSync(settingsPath, JSON.stringify({
+      env: {
+        ANTHROPIC_AUTH_TOKEN: 'settings-token',
+        ANTHROPIC_BASE_URL: 'https://claude.example.test',
+      },
+      permissions: {
+        allow: ['Write'],
+      },
+    }));
+    process.env.BATTLEFLOW_CLAUDE_SETTINGS_PATH = settingsPath;
+    mocks.query.mockReturnValue(createMockQuery([
+      sdkMessage({
+        type: 'result',
+        subtype: 'success',
+        duration_ms: 10,
+        duration_api_ms: 9,
+        is_error: false,
+        num_turns: 1,
+        result: 'OK',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        usage: {},
+        modelUsage: {},
+        permission_denials: [],
+        uuid: 'uuid-result',
+        session_id: 'session-1',
+      }),
+    ]));
+
+    try {
+      const stream = streamClaudeAgentSdkTurn({
+        messages: [{ role: 'user', content: 'Hi.' }],
+        systemPrompt: 'Test',
+      });
+      await readAgentStream(stream);
+      const call = mocks.query.mock.calls[0]?.[0] as { options?: { env?: Record<string, string> } };
+      const status = await checkClaudeAgentSdkRuntime();
+
+      expect(call.options?.env?.ANTHROPIC_AUTH_TOKEN).toBe('settings-token');
+      expect(call.options?.env?.ANTHROPIC_BASE_URL).toBe('https://claude.example.test');
+      expect(status.available).toBe(true);
+      expect(status.auth.anthropicBaseUrlConfigured).toBe(true);
+      expect(status.auth.anthropicTokenConfigured).toBe(true);
+      expect(status.error).toBeUndefined();
+    } finally {
+      rmSync(settingsDir, { recursive: true, force: true });
+    }
   });
 });

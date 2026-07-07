@@ -1,5 +1,5 @@
-import { promises as fs } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, promises as fs, readFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { query, type Options, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { getConfiguredClaudeTools } from './claude-code-tools';
@@ -99,11 +99,39 @@ function getThrownErrorText(error: unknown) {
   ) || 'Claude Agent SDK request failed';
 }
 
-function hasClaudeAgentSdkCredentials() {
+function getClaudeSettingsPath() {
+  return process.env.BATTLEFLOW_CLAUDE_SETTINGS_PATH?.trim()
+    || process.env.CLAUDE_SETTINGS_PATH?.trim()
+    || path.join(homedir(), '.claude', 'settings.json');
+}
+
+function getClaudeSettingsEnv(): Record<string, string> {
+  const settingsPath = getClaudeSettingsPath();
+  try {
+    if (!existsSync(settingsPath)) return {};
+    const parsed = JSON.parse(readFileSync(settingsPath, 'utf8')) as unknown;
+    if (!isRecord(parsed) || !isRecord(parsed.env)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed.env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function buildClaudeRuntimeEnv(): Record<string, string | undefined> {
+  return {
+    ...getClaudeSettingsEnv(),
+    ...process.env,
+    CI: '1',
+  };
+}
+
+function hasClaudeAgentSdkCredentials(env: NodeJS.ProcessEnv | Record<string, string | undefined>) {
   return Boolean(
-    process.env.ANTHROPIC_API_KEY
-    || process.env.ANTHROPIC_AUTH_TOKEN
-    || process.env.CLAUDE_CODE_OAUTH_TOKEN
+    env.ANTHROPIC_API_KEY
+    || env.ANTHROPIC_AUTH_TOKEN
+    || env.CLAUDE_CODE_OAUTH_TOKEN
   );
 }
 
@@ -114,6 +142,7 @@ function buildClaudeAgentSdkOptions(
   const configuredTools = getConfiguredClaudeTools();
   const executablePath = getClaudeSdkExecutablePath();
   const maxBudgetUsd = parseBudgetUsd(getClaudeMaxBudgetUsd());
+  const env = buildClaudeRuntimeEnv();
 
   return {
     abortController,
@@ -121,10 +150,7 @@ function buildClaudeAgentSdkOptions(
     allowedTools: configuredTools,
     cwd: getClaudeWorkspaceDir(),
     disallowedTools: PHASE_ZERO_DISALLOWED_TOOLS,
-    env: {
-      ...process.env,
-      CI: '1',
-    },
+    env,
     includePartialMessages: true,
     maxBudgetUsd,
     model: getClaudeModel(),
@@ -142,7 +168,8 @@ export async function checkClaudeAgentSdkRuntime(): Promise<AgentRuntimeStatus> 
   const cwd = getClaudeWorkspaceDir();
   const configuredTools = getConfiguredClaudeTools();
   const command = getClaudeSdkCommandLabel();
-  const hasCredentials = hasClaudeAgentSdkCredentials();
+  const env = buildClaudeRuntimeEnv();
+  const hasCredentials = hasClaudeAgentSdkCredentials(env);
   const readableDirectories = normalizeReadableDirectories(
     (process.env.BATTLEFLOW_CLAUDE_READABLE_DIRS || '')
       .split(path.delimiter)
@@ -163,7 +190,7 @@ export async function checkClaudeAgentSdkRuntime(): Promise<AgentRuntimeStatus> 
     toolsEnabled: configuredTools.length > 0,
     tools: configuredTools,
     auth: {
-      anthropicBaseUrlConfigured: Boolean(process.env.ANTHROPIC_BASE_URL),
+      anthropicBaseUrlConfigured: Boolean(env.ANTHROPIC_BASE_URL),
       anthropicTokenConfigured: hasCredentials,
     },
     ...(!hasCredentials ? {
