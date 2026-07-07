@@ -1,4 +1,4 @@
-export type AgentProvider = 'claude-code-cli' | 'claude-cli';
+export type AgentProvider = 'claude-agent-sdk' | 'claude-code-cli' | 'claude-cli';
 
 export type AgentChatRole = 'user' | 'assistant' | 'system';
 
@@ -48,8 +48,8 @@ export interface AgentRuntimeStatus {
   model?: string;
   cwd?: string;
   readableDirectories?: string[];
-  mode: 'structured-cli';
-  outputFormat: 'stream-json';
+  mode: 'agent-sdk' | 'structured-cli';
+  outputFormat: 'sdk-message' | 'stream-json';
   toolsEnabled: boolean;
   tools?: string[];
   auth: {

@@ -38,23 +38,23 @@ interface ClaudeCodeStreamEvent {
   tool_use_result?: unknown;
 }
 
-function getClaudeCommand() {
+export function getClaudeCommand() {
   return process.env.CLAUDE_COMMAND || 'claude';
 }
 
-function getClaudeModel() {
+export function getClaudeModel() {
   return process.env.CLAUDE_MODEL || 'sonnet';
 }
 
-function getClaudeMaxBudgetUsd() {
+export function getClaudeMaxBudgetUsd() {
   return process.env.CLAUDE_MAX_BUDGET_USD || '1.00';
 }
 
-function getClaudeWorkspaceDir() {
+export function getClaudeWorkspaceDir() {
   return process.env.CLAUDE_WORKSPACE_DIR || process.cwd();
 }
 
-function normalizeReadableDirectories(directories: string[] = []) {
+export function normalizeReadableDirectories(directories: string[] = []) {
   const seen = new Set<string>();
   const normalized: string[] = [];
 
@@ -69,7 +69,7 @@ function normalizeReadableDirectories(directories: string[] = []) {
   return normalized;
 }
 
-interface WrittenAttachment {
+export interface WrittenAttachment {
   name: string;
   path: string;
   mimeType: string;
@@ -110,7 +110,7 @@ function decodeDataUrlAttachment(attachment: AgentInputAttachment) {
   };
 }
 
-async function writeAttachments(rootDir: string, attachments: AgentInputAttachment[] = []): Promise<WrittenAttachment[]> {
+export async function writeAttachments(rootDir: string, attachments: AgentInputAttachment[] = []): Promise<WrittenAttachment[]> {
   if (attachments.length === 0) return [];
 
   const attachmentDir = path.join(rootDir, 'attachments');
@@ -141,7 +141,7 @@ function buildAttachmentPrompt(attachments: WrittenAttachment[]) {
   ].join('\n');
 }
 
-function buildConversationPrompt(
+export function buildConversationPrompt(
   messages: AgentTurnInput['messages'],
   attachments: WrittenAttachment[] = [],
 ) {
@@ -239,21 +239,21 @@ function runCommand(command: string, args: string[], timeoutMs: number) {
   });
 }
 
-function trimDiagnosticText(value: string, maxChars = 4000) {
+export function trimDiagnosticText(value: string, maxChars = 4000) {
   const trimmed = value.trim();
   if (trimmed.length <= maxChars) return trimmed;
   return `${trimmed.slice(0, maxChars)}\n...`;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function getString(value: unknown) {
+export function getString(value: unknown) {
   return typeof value === 'string' ? value : '';
 }
 
-function normalizeToolInput(value: unknown): Record<string, unknown> | undefined {
+export function normalizeToolInput(value: unknown): Record<string, unknown> | undefined {
   if (!isRecord(value)) return undefined;
   const entries = Object.entries(value)
     .filter(([key]) => key.trim().length > 0)
@@ -297,13 +297,13 @@ function normalizeToolResultValue(value: unknown, depth = 0): unknown {
   return trimDiagnosticText(String(value), 2000);
 }
 
-function normalizeToolResult(value: unknown, fallback?: unknown): unknown | undefined {
+export function normalizeToolResult(value: unknown, fallback?: unknown): unknown | undefined {
   const source = value ?? fallback;
   if (source === undefined) return undefined;
   return normalizeToolResultValue(source);
 }
 
-function summarizeToolResult(value: unknown, fallback?: unknown): string | undefined {
+export function summarizeToolResult(value: unknown, fallback?: unknown): string | undefined {
   const source = fallback ?? value;
 
   if (typeof source === 'string') {
@@ -348,7 +348,7 @@ function summarizeToolResult(value: unknown, fallback?: unknown): string | undef
   }
 }
 
-function getToolUseFromContentBlock(value: unknown) {
+export function getToolUseFromContentBlock(value: unknown) {
   if (!isRecord(value) || value.type !== 'tool_use') return null;
   const id = getString(value.id).trim();
   const name = getString(value.name).trim();
@@ -361,7 +361,7 @@ function getToolUseFromContentBlock(value: unknown) {
   };
 }
 
-function getToolResultFromContentBlock(value: unknown) {
+export function getToolResultFromContentBlock(value: unknown) {
   if (!isRecord(value) || value.type !== 'tool_result') return null;
   const id = getString(value.tool_use_id).trim();
   if (!id) return null;
@@ -375,7 +375,7 @@ function getToolResultFromContentBlock(value: unknown) {
   };
 }
 
-function buildToolCallEvent(
+export function buildToolCallEvent(
   event: Omit<AgentToolCallEvent, 'type'>,
 ): AgentToolCallEvent {
   return {
