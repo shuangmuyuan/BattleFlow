@@ -81,6 +81,55 @@ describe('tool-call-utils', () => {
     expect(parseGlobResults('src/a.ts\nsrc/b.ts').files).toEqual(['src/a.ts', 'src/b.ts']);
   });
 
+  it('parses structured Claude Code CLI glob results', () => {
+    const parsed = parseGlobResults({
+      numFiles: 1,
+      filenames: ['src/app/login/page.tsx'],
+      truncated: false,
+      durationMs: 265,
+      totalMatches: 1,
+      countIsComplete: true,
+    });
+
+    expect(parsed.files).toEqual(['src/app/login/page.tsx']);
+    expect(parsed.rawText).toBeUndefined();
+  });
+
+  it('does not expose raw JSON for structured empty glob results', () => {
+    const parsed = parseGlobResults({
+      numFiles: 0,
+      filenames: [],
+      truncated: false,
+      durationMs: 730,
+      totalMatches: 0,
+      countIsComplete: true,
+    });
+
+    expect(parsed.files).toEqual([]);
+    expect(parsed.rawText).toBeUndefined();
+  });
+
+  it('parses structured glob JSON strings', () => {
+    const parsed = parseGlobResults(JSON.stringify({
+      fileNames: ['src/app/dashboard/page.tsx', 'src/app/login/page.tsx'],
+      totalMatches: 2,
+    }));
+
+    expect(parsed.files).toEqual(['src/app/dashboard/page.tsx', 'src/app/login/page.tsx']);
+    expect(parsed.rawText).toBeUndefined();
+  });
+
+  it('does not expose raw JSON for structured empty glob JSON strings', () => {
+    const parsed = parseGlobResults(JSON.stringify({
+      fileNames: [],
+      totalMatches: 0,
+      countIsComplete: true,
+    }));
+
+    expect(parsed.files).toEqual([]);
+    expect(parsed.rawText).toBeUndefined();
+  });
+
   it('parses web search and web fetch object outputs', () => {
     const search = parseWebSearchResults({
       results: [{ title: 'Docs', url: 'https://www.assistant-ui.com/docs', snippet: 'Tool UI' }],

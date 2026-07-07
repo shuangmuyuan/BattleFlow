@@ -480,20 +480,65 @@ export function parseGrepResults(output: unknown): ParsedGrepResults {
   };
 }
 
+const globPathKeys = ['path', 'file', 'file_path', 'filePath', 'filename', 'fileName'];
+const globCollectionKeys = [
+  'files',
+  'filenames',
+  'fileNames',
+  'matchedFiles',
+  'matched_files',
+  'paths',
+  'results',
+  'matches',
+  'items',
+  'data',
+  'entries',
+];
+const globMetadataKeys = [
+  'numFiles',
+  'num_files',
+  'totalMatches',
+  'total_matches',
+  'countIsComplete',
+  'count_is_complete',
+  'durationMs',
+  'duration_ms',
+  'truncated',
+];
+
+function hasOwnKey(record: Record<string, unknown>, key: string) {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function isStructuredGlobOutput(value: unknown): boolean {
+  const parsed = parseMaybeJsonValue(value);
+  if (Array.isArray(parsed)) return true;
+  if (!isRecord(parsed)) return false;
+  if ([...globPathKeys, ...globCollectionKeys, ...globMetadataKeys].some((key) => hasOwnKey(parsed, key))) {
+    return true;
+  }
+
+  const candidate = pickOutputValue(parsed, globCollectionKeys);
+  return candidate != null && candidate !== parsed ? isStructuredGlobOutput(candidate) : false;
+}
+
 function parsePathList(value: unknown): string[] {
   const parsed = parseMaybeJsonValue(value);
   if (Array.isArray(parsed)) {
     return uniqueValues(parsed.flatMap((item) => {
       if (typeof item === 'string') return [item];
       if (isRecord(item)) {
-        const path = pickString(item, ['path', 'file', 'file_path', 'filePath', 'name']);
+        const path = pickString(item, [...globPathKeys, 'name']);
         return path ? [path] : [];
       }
       return [];
     }));
   }
   if (isRecord(parsed)) {
-    const candidate = extractOutputCandidate(parsed, ['files', 'paths', 'results', 'matches', 'items', 'data']);
+    const directPath = pickString(parsed, globPathKeys);
+    if (directPath) return [directPath];
+
+    const candidate = extractOutputCandidate(parsed, globCollectionKeys);
     if (candidate !== parsed) return parsePathList(candidate);
   }
   if (typeof parsed === 'string') {
@@ -509,7 +554,7 @@ export function parseGlobResults(output: unknown): ParsedGlobResults {
   const rawText = stringifyToolValue(output).trim();
   return {
     files,
-    rawText: files.length === 0 && rawText ? rawText : undefined,
+    rawText: files.length === 0 && rawText && !isStructuredGlobOutput(output) ? rawText : undefined,
   };
 }
 
