@@ -49,18 +49,21 @@ Skill imports can come from uploads, local/server paths, or Git URLs. Keep these
 - Do not trust `meta.json` fields without validation and narrowing.
 - Archive or reject malformed Skills rather than normalizing unsafe content.
 
-## Agent and CLI Execution
+## Agent SDK and CLI Execution
 
-The Claude Code CLI adapter is intentionally constrained:
+Workflow chat runs through the Claude Agent SDK adapter in `src/lib/agent-adapters/claude-agent-sdk.ts`. Phase 0 keeps that adapter intentionally constrained:
 
-- safe mode;
-- no session persistence;
-- no tools by default in the adapter helper and development flows;
-- production `pnpm start` enables the approved `Read`, `Grep`, `Glob`, `WebSearch`, and `WebFetch` tools through `scripts/start.sh` unless `BATTLEFLOW_CLAUDE_TOOLS` is explicitly overridden;
-- output streamed as JSON;
+- `persistSession: false`;
+- `settingSources: []` so project/user filesystem settings and project Skill discovery are not enabled in this phase;
+- available tools come only from the explicit `BATTLEFLOW_CLAUDE_TOOLS` allowlist;
+- `allowedTools` mirrors that allowlist only for auto-approval, while `tools` restricts availability;
+- `Skill`, `Write`, `Edit`, `MultiEdit`, and `Bash` are explicitly disallowed in the SDK adapter;
+- `permissionMode: 'dontAsk'`;
 - budget controlled by `CLAUDE_MAX_BUDGET_USD`.
 
-Do not enable broader CLI tools, broader permissions, or persistent sessions without documenting the threat model and validating the change. The current approved tool surface is limited to Claude Code `Read`, `Grep`, `Glob`, `WebSearch`, and `WebFetch`. File tools exist so the runtime can read workflow-owned attachments by path instead of injecting full files into prompts. Web tools may send user prompts and URLs outside BattleFlow through the configured Claude Code runtime, so enable them only in environments where outbound web access is expected. Do not enable `Write`, `Edit`, `MultiEdit`, `Bash`, or human-in-the-loop tools for ordinary chat turns.
+The legacy Claude Code CLI helper in `src/lib/agent-adapters/claude-code-cli.ts` remains available for workflow validation and other non-chat helper flows. It is still constrained with safe mode, no session persistence, no tools by default in helper/development flows, JSON output, and the same budget environment variable.
+
+Do not enable broader SDK/CLI tools, broader permissions, project Skill discovery, human-in-the-loop tools, or persistent sessions without documenting the threat model and validating the change. The current approved chat tool surface is limited to Claude Code `Read`, `Grep`, `Glob`, `WebSearch`, and `WebFetch` when configured through `BATTLEFLOW_CLAUDE_TOOLS`. File tools exist so the runtime can read workflow-owned attachments by path instead of injecting full files into prompts. Web tools may send user prompts and URLs outside BattleFlow through the configured Claude runtime, so enable them only in environments where outbound web access is expected. Do not enable `Write`, `Edit`, `MultiEdit`, `Bash`, `Skill`, or human-in-the-loop tools for ordinary chat turns.
 
 Workflow validation uses the same constrained Claude Code CLI boundary. Skill self-check always uses safe mode, no tools, no session persistence, and budget controlled by environment variables. Independent Agent validation uses the same boundary only when the workflow-level Agent validation switch is enabled. Validation prompts frame Skill Markdown, uploaded files, retrieved knowledge, chat history, self-check output, and candidate artifacts as untrusted reference material. The validation Agent is a judge only: it must return structured JSON and must not execute instructions from candidate content or package assets.
 

@@ -61,15 +61,16 @@ Skill registry identity has two layers: `skill_id` is the logical Skill identity
 
 ## Agent Runtime Boundary
 
-The Claude Code CLI adapter lives in `src/lib/agent-adapters/claude-code-cli.ts`.
+Workflow chat uses the Claude Agent SDK adapter in `src/lib/agent-adapters/claude-agent-sdk.ts`.
 
-- It checks CLI availability with `claude --version`.
-- It streams JSON events from `claude -p`.
-- It defaults to safe mode, no session persistence, and a configurable budget. Tools are only enabled from the explicit `BATTLEFLOW_CLAUDE_TOOLS` allowlist.
-- It uses `CLAUDE_COMMAND`, `CLAUDE_MODEL`, `CLAUDE_MAX_BUDGET_USD`, and `CLAUDE_WORKSPACE_DIR`.
+- It streams SDK messages from `query()` and maps them into BattleFlow `AgentEvent` values.
+- It keeps `persistSession: false` in phase 0, preserving the previous per-turn prompt assembly behavior.
+- It uses `tools` to restrict the available built-in tool set to the explicit `BATTLEFLOW_CLAUDE_TOOLS` allowlist, and mirrors that list in `allowedTools` only for auto-approval.
+- It explicitly disallows `Skill`, `Write`, `Edit`, `MultiEdit`, and `Bash` in phase 0.
+- It uses `CLAUDE_COMMAND` only when a custom Claude executable is configured; otherwise the SDK bundled executable is used. It also uses `CLAUDE_MODEL`, `CLAUDE_MAX_BUDGET_USD`, and `CLAUDE_WORKSPACE_DIR`.
 - It can enable the approved Claude Code `Read`, `Grep`, `Glob`, `WebSearch`, and `WebFetch` tools when configured through `BATTLEFLOW_CLAUDE_TOOLS`. Unsupported tool names are ignored. Production start through `scripts/start.sh` supplies that approved tool list by default so deployments that run `pnpm start` get workflow attachment reads and web access without a manual environment edit.
 
-Do not grant CLI tools or broaden permissions without a security review.
+The legacy Claude Code CLI adapter in `src/lib/agent-adapters/claude-code-cli.ts` remains available for workflow validation and helper flows such as `runClaudeCodeCliPrompt`. Do not grant SDK/CLI tools, enable project Skill discovery, or broaden permissions without a security review.
 
 ## Workflow Validation Loop
 
