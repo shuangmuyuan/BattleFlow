@@ -87,9 +87,24 @@ function getResultText(message: SDKMessage) {
 }
 
 function getErrorText(message: SDKMessage) {
-  if (message.type !== 'result' || message.subtype === 'success') return '';
+  if (message.type !== 'result' || (message.subtype === 'success' && !message.is_error)) return '';
   const errors = Array.isArray(message.errors) ? message.errors.filter(Boolean).join('\n') : '';
-  return trimDiagnosticText(errors || message.subtype || 'Claude Agent SDK request failed');
+  return trimDiagnosticText(errors || message.result || message.subtype || 'Claude Agent SDK request failed');
+}
+
+function getThrownErrorText(error: unknown) {
+  if (!(error instanceof Error)) return 'Claude Agent SDK request failed';
+  return trimDiagnosticText(
+    error.message.replace(/^Claude Code returned an error result:\s*/i, ''),
+  ) || 'Claude Agent SDK request failed';
+}
+
+function hasClaudeAgentSdkCredentials() {
+  return Boolean(
+    process.env.ANTHROPIC_API_KEY
+    || process.env.ANTHROPIC_AUTH_TOKEN
+    || process.env.CLAUDE_CODE_OAUTH_TOKEN
+  );
 }
 
 function buildClaudeAgentSdkOptions(
@@ -127,6 +142,7 @@ export async function checkClaudeAgentSdkRuntime(): Promise<AgentRuntimeStatus> 
   const cwd = getClaudeWorkspaceDir();
   const configuredTools = getConfiguredClaudeTools();
   const command = getClaudeSdkCommandLabel();
+  const hasCredentials = hasClaudeAgentSdkCredentials();
   const readableDirectories = normalizeReadableDirectories(
     (process.env.BATTLEFLOW_CLAUDE_READABLE_DIRS || '')
       .split(path.delimiter)
@@ -136,7 +152,7 @@ export async function checkClaudeAgentSdkRuntime(): Promise<AgentRuntimeStatus> 
 
   return {
     provider: 'claude-agent-sdk',
-    available: true,
+    available: hasCredentials,
     command,
     version: process.env.CLAUDE_COMMAND ? undefined : 'bundled',
     model,
@@ -148,8 +164,11 @@ export async function checkClaudeAgentSdkRuntime(): Promise<AgentRuntimeStatus> 
     tools: configuredTools,
     auth: {
       anthropicBaseUrlConfigured: Boolean(process.env.ANTHROPIC_BASE_URL),
-      anthropicTokenConfigured: Boolean(process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_API_KEY),
+      anthropicTokenConfigured: hasCredentials,
     },
+    ...(!hasCredentials ? {
+      error: 'Claude Agent SDK requires ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or CLAUDE_CODE_OAUTH_TOKEN in the server environment.',
+    } : {}),
   };
 }
 
@@ -380,7 +399,7 @@ export function streamClaudeAgentSdkTurn(input: AgentTurnInput) {
         }
         closeWith({
           type: 'error',
-          error: error instanceof Error ? error.message : 'Claude Agent SDK request failed',
+          error: getThrownErrorText(error),
         });
       } finally {
         input.signal?.removeEventListener('abort', abortHandler);

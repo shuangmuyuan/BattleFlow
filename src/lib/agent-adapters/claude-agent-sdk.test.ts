@@ -10,7 +10,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: mocks.query,
 }));
 
-import { streamClaudeAgentSdkTurn } from './claude-agent-sdk';
+import { checkClaudeAgentSdkRuntime, streamClaudeAgentSdkTurn } from './claude-agent-sdk';
 
 type MockQuery = AsyncGenerator<SDKMessage, void> & {
   close: ReturnType<typeof vi.fn>;
@@ -252,5 +252,65 @@ describe('streamClaudeAgentSdkTurn', () => {
     const events = await readAgentStream(stream);
 
     expect(events).toContainEqual({ type: 'error', error: 'Budget exceeded' });
+  });
+
+  it('uses result text when the SDK returns a success subtype with an error flag', async () => {
+    mocks.query.mockReturnValue(createMockQuery([
+      sdkMessage({
+        type: 'result',
+        subtype: 'success',
+        duration_ms: 10,
+        duration_api_ms: 0,
+        is_error: true,
+        num_turns: 1,
+        result: 'Not logged in · Please run /login',
+        stop_reason: 'stop_sequence',
+        total_cost_usd: 0,
+        usage: {},
+        modelUsage: {},
+        permission_denials: [],
+        uuid: 'uuid-result',
+        session_id: 'session-1',
+      }),
+    ]));
+
+    const stream = streamClaudeAgentSdkTurn({
+      messages: [{ role: 'user', content: 'Hi.' }],
+      systemPrompt: 'Test',
+    });
+
+    const events = await readAgentStream(stream);
+
+    expect(events).toContainEqual({ type: 'error', error: 'Not logged in · Please run /login' });
+  });
+
+  it('normalizes thrown SDK error result messages', async () => {
+    async function* failingGenerator(): AsyncGenerator<SDKMessage, void> {
+      throw new Error('Claude Code returned an error result: Not logged in · Please run /login');
+    }
+    const query = failingGenerator() as MockQuery;
+    query.close = vi.fn();
+    mocks.query.mockReturnValue(query);
+
+    const stream = streamClaudeAgentSdkTurn({
+      messages: [{ role: 'user', content: 'Hi.' }],
+      systemPrompt: 'Test',
+    });
+
+    const events = await readAgentStream(stream);
+
+    expect(events).toContainEqual({ type: 'error', error: 'Not logged in · Please run /login' });
+  });
+
+  it('marks SDK runtime unavailable when server credentials are missing', async () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_AUTH_TOKEN;
+    delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+
+    const status = await checkClaudeAgentSdkRuntime();
+
+    expect(status.available).toBe(false);
+    expect(status.auth.anthropicTokenConfigured).toBe(false);
+    expect(status.error).toContain('CLAUDE_CODE_OAUTH_TOKEN');
   });
 });
