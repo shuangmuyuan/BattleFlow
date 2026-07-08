@@ -64,14 +64,16 @@ Skill registry identity has two layers: `skill_id` is the logical Skill identity
 Workflow chat uses the Claude Agent SDK adapter in `src/lib/agent-adapters/claude-agent-sdk.ts`.
 
 - It streams SDK messages from `query()` and maps them into BattleFlow `AgentEvent` values.
-- It keeps `persistSession: false` in phase 0, preserving the previous per-turn prompt assembly behavior.
+- It keeps `persistSession: false` in the current implementation, preserving the previous per-turn prompt assembly behavior until detached runs and session resume are introduced.
 - It uses `tools` to restrict the available built-in tool set to the explicit `BATTLEFLOW_CLAUDE_TOOLS` allowlist, and mirrors that list in `allowedTools` only for auto-approval.
-- It explicitly disallows `Skill`, `Write`, `Edit`, `MultiEdit`, and `Bash` in phase 0.
+- Workflow chat turns resolve the active Skill from the workflow step server-side, materialize that Skill under `data/workflows/<orgId>/<workflowId>/nodes/<stepId>/.claude/skills/<skill>/SKILL.md`, set SDK `cwd` to the node directory, enable `settingSources: ['project']`, and pass `skills: [currentSkillName]` so only the current node Skill is enabled.
+- The runtime directory currently remains inside the BattleFlow checkout under `data/workflows/`. Moving it to a repo-external runtime root remains a tracked follow-up to reduce parent project discovery, git working-tree noise, and accidental runtime-data commits.
+- It explicitly disallows `Write`, `Edit`, `MultiEdit`, and `Bash` for workflow chat turns. Non-node calls that do not pass a Skill continue to disallow `Skill` as well.
 - It uses `CLAUDE_COMMAND` only when a custom Claude executable is configured; otherwise the SDK bundled executable is used. It also uses `CLAUDE_MODEL`, `CLAUDE_MAX_BUDGET_USD`, and `CLAUDE_WORKSPACE_DIR`.
 - It can enable the approved Claude Code `Read`, `Grep`, `Glob`, `WebSearch`, and `WebFetch` tools when configured through `BATTLEFLOW_CLAUDE_TOOLS`. Unsupported tool names are ignored. Production start through `scripts/start.sh` supplies that approved tool list by default so deployments that run `pnpm start` get workflow attachment reads and web access without a manual environment edit.
 - It uses deployment environment variables for Claude authentication. Docker Compose injects Anthropic variables directly into the container; the local `~/.claude/settings.json` fallback is only enabled for `BATTLEFLOW_PROJECT_ENV=DEV`, or when an explicit `BATTLEFLOW_CLAUDE_SETTINGS_PATH` is provided.
 
-The legacy Claude Code CLI adapter in `src/lib/agent-adapters/claude-code-cli.ts` remains available for workflow validation and helper flows such as `runClaudeCodeCliPrompt`. Do not grant SDK/CLI tools, enable project Skill discovery, or broaden permissions without a security review.
+The legacy Claude Code CLI adapter in `src/lib/agent-adapters/claude-code-cli.ts` remains available for workflow validation and helper flows such as `runClaudeCodeCliPrompt`. Do not grant SDK/CLI write tools, broaden permissions, or add new project discovery surfaces without a security review.
 
 ## Workflow Validation Loop
 

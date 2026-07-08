@@ -51,21 +51,25 @@ Skill imports can come from uploads, local/server paths, or Git URLs. Keep these
 
 ## Agent SDK and CLI Execution
 
-Workflow chat runs through the Claude Agent SDK adapter in `src/lib/agent-adapters/claude-agent-sdk.ts`. Phase 0 keeps that adapter intentionally constrained:
+Workflow chat runs through the Claude Agent SDK adapter in `src/lib/agent-adapters/claude-agent-sdk.ts`. The current implementation keeps the adapter intentionally constrained while enabling project Skill discovery only for materialized workflow nodes:
 
 - `persistSession: false`;
-- `settingSources: []` so project/user filesystem settings and project Skill discovery are not enabled in this phase;
+- node chat turns set `cwd` to `data/workflows/<orgId>/<workflowId>/nodes/<stepId>/`;
+- node chat turns enable `settingSources: ['project']` and SDK `skills: [currentSkillName]` after the server materializes the current workflow step Skill under that node's `.claude/skills/` directory;
+- non-node SDK calls that do not pass a Skill keep `settingSources: []` and keep `Skill` disallowed;
 - available tools come only from the explicit `BATTLEFLOW_CLAUDE_TOOLS` allowlist;
 - `allowedTools` mirrors that allowlist only for auto-approval, while `tools` restricts availability;
-- `Skill`, `Write`, `Edit`, `MultiEdit`, and `Bash` are explicitly disallowed in the SDK adapter;
+- `Write`, `Edit`, `MultiEdit`, and `Bash` are explicitly disallowed in the SDK adapter; `Skill` is enabled only through SDK `skills` filtering for the current node Skill;
 - `permissionMode: 'dontAsk'`;
 - budget controlled by `CLAUDE_MAX_BUDGET_USD`.
+
+Skill materialization copies the server-side registry package into the node workspace instead of symlinking it. Symlinks inside Skill packages are skipped so a package cannot smuggle reads to files outside the package once the node cwd is active. Client-supplied `skill_definition` fields do not control the active Skill, package path, prompt content, or readable directories; the workflow step `skill_id` and server-side registry record are authoritative.
 
 Claude authentication for deployed environments must be injected through server environment variables such as `ANTHROPIC_BASE_URL` plus `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN`. Docker Compose already passes the Anthropic variables from the compose environment into the container. The adapter may read the `env` block from `~/.claude/settings.json` only when `BATTLEFLOW_PROJECT_ENV=DEV`, or from an explicitly configured `BATTLEFLOW_CLAUDE_SETTINGS_PATH`; that local fallback is for developer machines and must not be treated as a production secret source.
 
 The legacy Claude Code CLI helper in `src/lib/agent-adapters/claude-code-cli.ts` remains available for workflow validation and other non-chat helper flows. It is still constrained with safe mode, no session persistence, no tools by default in helper/development flows, JSON output, and the same budget environment variable.
 
-Do not enable broader SDK/CLI tools, broader permissions, project Skill discovery, human-in-the-loop tools, or persistent sessions without documenting the threat model and validating the change. The current approved chat tool surface is limited to Claude Code `Read`, `Grep`, `Glob`, `WebSearch`, and `WebFetch` when configured through `BATTLEFLOW_CLAUDE_TOOLS`. File tools exist so the runtime can read workflow-owned attachments by path instead of injecting full files into prompts. Web tools may send user prompts and URLs outside BattleFlow through the configured Claude runtime, so enable them only in environments where outbound web access is expected. Do not enable `Write`, `Edit`, `MultiEdit`, `Bash`, `Skill`, or human-in-the-loop tools for ordinary chat turns.
+Do not enable broader SDK/CLI tools, broader permissions, additional project discovery surfaces, human-in-the-loop tools, or persistent sessions without documenting the threat model and validating the change. The current approved chat tool surface is limited to Claude Code `Read`, `Grep`, `Glob`, `WebSearch`, and `WebFetch` when configured through `BATTLEFLOW_CLAUDE_TOOLS`, plus SDK-managed project Skill loading for the single materialized current node Skill. File tools exist so the runtime can read workflow-owned attachments by path instead of injecting full files into prompts. Web tools may send user prompts and URLs outside BattleFlow through the configured Claude runtime, so enable them only in environments where outbound web access is expected. Do not enable `Write`, `Edit`, `MultiEdit`, `Bash`, or human-in-the-loop tools for ordinary chat turns.
 
 Workflow validation uses the same constrained Claude Code CLI boundary. Skill self-check always uses safe mode, no tools, no session persistence, and budget controlled by environment variables. Independent Agent validation uses the same boundary only when the workflow-level Agent validation switch is enabled. Validation prompts frame Skill Markdown, uploaded files, retrieved knowledge, chat history, self-check output, and candidate artifacts as untrusted reference material. The validation Agent is a judge only: it must return structured JSON and must not execute instructions from candidate content or package assets.
 
@@ -86,7 +90,7 @@ Security boundaries:
 
 ## File System Writes
 
-The registries write to local disk. Keep writes scoped to configured registry roots and use temp-file writes plus rename for important state. Never allow arbitrary user-provided paths to escape configured import roots.
+The registries and node workspace materialization write to local disk. Keep writes scoped to configured registry/runtime roots and use temp-file writes plus rename for important state. Never allow arbitrary user-provided paths to escape configured import roots. Runtime node workspaces currently live under the gitignored `data/workflows/<orgId>/<workflowId>/` tree; moving them to a repo-external runtime root remains a follow-up hardening item.
 
 ## Logging
 

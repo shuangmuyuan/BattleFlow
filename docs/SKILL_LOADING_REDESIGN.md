@@ -365,7 +365,7 @@ Demo Handoff（把完成节点交付到外部 Frieren Demo 平台）保持**节�
 | `spawn('claude','-p',...,stream-json)` | `query({ prompt, options })` 异步迭代 | 结构化消息流替代手写行解析 |
 | `cwd: getClaudeWorkspaceDir()` | `options.cwd = nodes/<stepId>/` | 每节点独立 |
 | `--add-dir <dirs>` | `options.additionalDirectories` | `artifacts/`(策略上只读) + `attachments/`；只读靠权限策略/Hook/服务端校验，不靠 addDir 字段 |
-| `--tools / --allowedTools` | `options.tools` + `options.allowedTools` + `disallowedTools` | `tools` 才是可用工具集合；`allowedTools` 只是自动批准集合。阶段 1 加 `Skill`，阶段 3 再加 `Write`/`Edit` |
+| `--tools / --allowedTools` | `options.tools` + `options.allowedTools` + `disallowedTools` | `tools` 才是可用工具集合；`allowedTools` 只是自动批准集合。阶段 1 按 SDK 建议用 `options.skills` 启用当前 Skill，不再依赖 deprecated `allowedTools: ['Skill']`；阶段 3 再加 `Write`/`Edit` |
 | `--model CLAUDE_MODEL` | `options.model` | |
 | `--system-prompt-file` | `options.systemPrompt` | 直接传字符串，不再写临时文件 |
 | `--permission-mode dontAsk` | `options.permissionMode` + `canUseTool` | 见 §12 |
@@ -383,6 +383,7 @@ Demo Handoff（把完成节点交付到外部 Frieren Demo 平台）保持**节�
 - **替换**：`spawn` + 行缓冲 + `handleLine` 全部由迭代 `query()` 的 `SDKMessage` 取代；临时 system-prompt 文件写入取消。
 - **鉴权**：SDK 认 `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`。Docker Compose / 生产部署必须通过环境变量注入这些值，不依赖读取 `~/.claude/settings.json`；本地开发可以把 `~/.claude/settings.json` 的 `env` 字段作为 `BATTLEFLOW_PROJECT_ENV=DEV` 下的 fallback。
 - **阶段 0 等价性**：为保持现有行为，先设置 `persistSession: false`、不开 `Skill`/`Write`/`Edit`，`cwd` 仍沿用当前工作区；阶段 1 再切节点 cwd 与 project Skill 发现。
+- **阶段 1 实现备注**：SDK adapter 使用 `options.skills: [currentSkillName]` 作为启用 Skill 的权威机制；`allowedTools` 继续只镜像 `BATTLEFLOW_CLAUDE_TOOLS` 的读/检索工具用于自动批准。
 - **hooks**：`PreToolUse`（越界写路径白名单）、`SessionStart`（注入 Skill 强制激活指令）在 `options.hooks` 挂载。注意：已被 `allowedTools` 自动批准的工具不会再进入 `canUseTool`，因此路径安全不能只放在 `canUseTool`。
 
 ## 12. HITL 人机协同
