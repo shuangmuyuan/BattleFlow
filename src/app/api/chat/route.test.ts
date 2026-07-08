@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from '@/lib/agent-adapters/types';
+import type { SkillRecord } from '@/lib/skill-registry';
 import type { WorkflowRecord } from '@/lib/workflow-registry';
 
 const mocks = vi.hoisted(() => ({
@@ -16,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   requireWorkflowAccess: vi.fn(),
   getSkill: vi.fn(),
   findWorkflowAttachment: vi.fn(),
+  materializeNodeWorkspace: vi.fn(),
   getWorkflow: vi.fn(),
   upsertWorkflow: vi.fn(),
 }));
@@ -77,6 +79,10 @@ vi.mock('@/lib/workflow-attachments', () => ({
   findWorkflowAttachment: mocks.findWorkflowAttachment,
 }));
 
+vi.mock('@/lib/workflow-node-workspace', () => ({
+  materializeNodeWorkspace: mocks.materializeNodeWorkspace,
+}));
+
 vi.mock('@/lib/workflow-registry', () => ({
   getWorkflow: mocks.getWorkflow,
   upsertWorkflow: mocks.upsertWorkflow,
@@ -92,6 +98,42 @@ const authContext = {
   user: { id: 'user-1' },
   activeOrganization: { id: 'org-1' },
 };
+
+function skillRecord(overrides: Partial<SkillRecord> = {}): SkillRecord {
+  return {
+    id: 'skill-1',
+    skill_id: 'user-needs-breakdown',
+    display_name: '用户需求拆解',
+    name: 'User Needs Breakdown',
+    description: 'Break down user needs into scenarios, stories, and acceptance criteria.',
+    version: '1.0.0',
+    author: 'BattleFlow',
+    tags: [],
+    source_type: 'local',
+    scope: 'official',
+    status: 'published',
+    methodology: 'SERVER_METHODOLOGY_SHOULD_NOT_BE_IN_PROMPT',
+    tools: ['knowledge_query'],
+    outputs: {},
+    checklist: ['SERVER_CHECKLIST_SHOULD_NOT_BE_IN_PROMPT'],
+    prompt_template: 'SERVER_PROMPT_TEMPLATE_SHOULD_NOT_BE_IN_PROMPT',
+    skill_md: 'SERVER_SKILL_MD_SHOULD_NOT_BE_IN_PROMPT',
+    meta_json: {},
+    changelog: '',
+    attachments: [],
+    package_assets: [],
+    created_at: '2026-07-08T00:00:00.000Z',
+    updated_at: '2026-07-08T00:00:00.000Z',
+    versions: [{
+      version: '1.0.0',
+      updated_at: '2026-07-08T00:00:00.000Z',
+      changelog: '',
+      package_path: '/tmp/battleflow-skill-package',
+    }],
+    is_active: true,
+    ...overrides,
+  };
+}
 
 function workflow(overrides: Partial<WorkflowRecord> = {}): WorkflowRecord {
   return {
@@ -165,8 +207,16 @@ beforeEach(() => {
   mocks.isKnowledgeDatabaseConfigured.mockReturnValue(false);
   mocks.listKnowledgeBases.mockResolvedValue([]);
   mocks.searchKnowledgeDocuments.mockResolvedValue([]);
-  mocks.getSkill.mockResolvedValue(null);
+  mocks.getSkill.mockResolvedValue(skillRecord());
   mocks.findWorkflowAttachment.mockReturnValue(null);
+  mocks.materializeNodeWorkspace.mockResolvedValue({
+    cwd: '/tmp/battleflow-runtime/org-1/workflow-1/nodes/step-1',
+    skillsRoot: '/tmp/battleflow-runtime/org-1/workflow-1/nodes/step-1/.claude/skills',
+    skillName: 'user-needs-breakdown',
+    skillDirectory: '/tmp/battleflow-runtime/org-1/workflow-1/nodes/step-1/.claude/skills/user-needs-breakdown',
+    skillFilePath: '/tmp/battleflow-runtime/org-1/workflow-1/nodes/step-1/.claude/skills/user-needs-breakdown/SKILL.md',
+    metadataPath: '/tmp/battleflow-runtime/org-1/workflow-1/nodes/step-1/.battleflow-node-workspace.json',
+  });
   mocks.getWorkflow.mockResolvedValue(workflow());
   mocks.upsertWorkflow.mockImplementation(async (record: WorkflowRecord) => record);
 });
@@ -504,9 +554,8 @@ describe('Chat API route', () => {
     expect(agentInput.readableDirectories).toContain('/tmp/battleflow-attachments');
   });
 
-  it('passes Skill package assets as readable file references instead of inlining template content', async () => {
-    mocks.getSkill.mockResolvedValue({
-      id: 'skill-1',
+  it('materializes the server-side Skill and passes node cwd with a single Skill filter', async () => {
+    const serverSkill = skillRecord({
       package_assets: [{
         path: 'assets/templates/template.md',
         kind: 'template',
@@ -519,6 +568,7 @@ describe('Chat API route', () => {
         absolute_path: '/tmp/battleflow-skill-package/assets/templates/template.md',
       }],
     });
+    mocks.getSkill.mockResolvedValue(serverSkill);
     mocks.streamClaudeAgentSdkTurn.mockReturnValue(streamAgentEvents([
       { type: 'assistant_final', text: 'ok' },
       { type: 'session_status', status: 'done' },
@@ -546,40 +596,38 @@ describe('Chat API route', () => {
 
     expect(response.status).toBe(200);
     expect(mocks.requireSkillIdAccess).toHaveBeenCalledWith(authContext, 'skill-1', 'skill.run');
+    expect(mocks.getSkill).toHaveBeenCalledWith('skill-1');
+    expect(mocks.materializeNodeWorkspace).toHaveBeenCalledWith({
+      organizationId: 'org-1',
+      workflowId: 'workflow-1',
+      stepId: 'step-1',
+      skill: serverSkill,
+    });
     const agentInput = mocks.streamClaudeAgentSdkTurn.mock.calls[0][0] as {
       systemPrompt: string;
       readableDirectories: string[];
+      cwd: string;
+      skills: string[];
     };
-    expect(agentInput.systemPrompt).toContain('Skill Package Asset References');
-    expect(agentInput.systemPrompt).toContain('path="assets/templates/template.md"');
-    expect(agentInput.systemPrompt).toContain('package_path="/tmp/battleflow-skill-package"');
-    expect(agentInput.systemPrompt).toContain('absolute_path="/tmp/battleflow-skill-package/assets/templates/template.md"');
+    expect(agentInput.cwd).toBe('/tmp/battleflow-runtime/org-1/workflow-1/nodes/step-1');
+    expect(agentInput.skills).toEqual(['user-needs-breakdown']);
+    expect(agentInput.systemPrompt).toContain('Active BattleFlow Skill: 用户需求拆解');
+    expect(agentInput.systemPrompt).toContain('enabled through Claude Agent SDK project Skill discovery');
+    expect(agentInput.systemPrompt).not.toContain('Skill Package Asset References');
+    expect(agentInput.systemPrompt).not.toContain('path="assets/templates/template.md"');
+    expect(agentInput.systemPrompt).not.toContain('package_path="/tmp/battleflow-skill-package"');
+    expect(agentInput.systemPrompt).not.toContain('absolute_path="/tmp/battleflow-skill-package/assets/templates/template.md"');
     expect(agentInput.systemPrompt).not.toContain('TEMPLATE_CONTENT_SHOULD_NOT_BE_IN_PROMPT');
     expect(agentInput.systemPrompt).not.toContain('CLIENT_SUPPLIED_CONTENT_SHOULD_NOT_BE_TRUSTED');
-    expect(agentInput.systemPrompt).not.toContain('BEGIN UNTRUSTED ASSET CONTENT');
-    expect(agentInput.readableDirectories).toContain('/tmp/battleflow-skill-package');
-    expect(agentInput.readableDirectories).toContain('/tmp/battleflow-skill-package/assets/templates');
+    expect(agentInput.systemPrompt).not.toContain('SERVER_SKILL_MD_SHOULD_NOT_BE_IN_PROMPT');
+    expect(agentInput.systemPrompt).not.toContain('SERVER_PROMPT_TEMPLATE_SHOULD_NOT_BE_IN_PROMPT');
+    expect(agentInput.systemPrompt).not.toContain('SERVER_CHECKLIST_SHOULD_NOT_BE_IN_PROMPT');
+    expect(agentInput.readableDirectories).not.toContain('/tmp/battleflow-skill-package');
+    expect(agentInput.readableDirectories).not.toContain('/tmp/battleflow-skill-package/assets/templates');
     expect(agentInput.readableDirectories).not.toContain('/tmp/malicious');
   });
 
-  it('resolves relative Skill package assets against the server-side version package path', async () => {
-    mocks.getSkill.mockResolvedValue({
-      id: 'skill-1',
-      version: '1.0.0',
-      versions: [{
-        version: '1.0.0',
-        package_path: '/tmp/battleflow-skill-package',
-      }],
-      package_assets: [{
-        path: 'assets/templates/template.md',
-        kind: 'template',
-        source_folder: 'assets',
-        mime_type: 'text/markdown',
-        size: 128,
-        content_kind: 'text',
-        content: 'TEMPLATE_CONTENT_SHOULD_NOT_BE_IN_PROMPT',
-      }],
-    });
+  it('uses the workflow step Skill instead of a client-supplied Skill id', async () => {
     mocks.streamClaudeAgentSdkTurn.mockReturnValue(streamAgentEvents([
       { type: 'assistant_final', text: 'ok' },
       { type: 'session_status', status: 'done' },
@@ -590,23 +638,27 @@ describe('Chat API route', () => {
       workflow_step_id: 'step-1',
       messages: [{ role: 'user', content: '小需求评审版，读这个模板来生成。' }],
       skill_definition: {
-        id: 'skill-1',
-        name: 'TR1 用户需求说明书生成器',
-        skill_md: 'Follow the template files.',
+        id: 'malicious-skill',
+        name: 'CLIENT_SKILL_NAME_SHOULD_NOT_BE_USED',
+        skill_md: 'CLIENT_SKILL_MD_SHOULD_NOT_BE_IN_PROMPT',
+        package_path: '/tmp/malicious',
       },
     }));
     await response.text();
 
     expect(response.status).toBe(200);
+    expect(mocks.requireSkillIdAccess).toHaveBeenCalledWith(authContext, 'skill-1', 'skill.run');
+    expect(mocks.getSkill).toHaveBeenCalledWith('skill-1');
     const agentInput = mocks.streamClaudeAgentSdkTurn.mock.calls[0][0] as {
       systemPrompt: string;
       readableDirectories: string[];
+      skills: string[];
     };
-    expect(agentInput.systemPrompt).toContain('Skill Package Asset References');
-    expect(agentInput.systemPrompt).toContain('package_path="/tmp/battleflow-skill-package"');
-    expect(agentInput.systemPrompt).toContain('absolute_path="/tmp/battleflow-skill-package/assets/templates/template.md"');
-    expect(agentInput.systemPrompt).not.toContain('TEMPLATE_CONTENT_SHOULD_NOT_BE_IN_PROMPT');
-    expect(agentInput.readableDirectories).toContain('/tmp/battleflow-skill-package');
-    expect(agentInput.readableDirectories).toContain('/tmp/battleflow-skill-package/assets/templates');
+    expect(agentInput.skills).toEqual(['user-needs-breakdown']);
+    expect(agentInput.systemPrompt).toContain('Active BattleFlow Skill: 用户需求拆解');
+    expect(agentInput.systemPrompt).not.toContain('CLIENT_SKILL_NAME_SHOULD_NOT_BE_USED');
+    expect(agentInput.systemPrompt).not.toContain('CLIENT_SKILL_MD_SHOULD_NOT_BE_IN_PROMPT');
+    expect(agentInput.systemPrompt).not.toContain('/tmp/malicious');
+    expect(agentInput.readableDirectories).not.toContain('/tmp/malicious');
   });
 });
