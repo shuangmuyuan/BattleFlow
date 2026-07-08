@@ -22,7 +22,8 @@ import {
 } from './claude-code-cli';
 import type { AgentEvent, AgentRuntimeStatus, AgentTurnInput } from './types';
 
-const PHASE_ZERO_DISALLOWED_TOOLS = ['Skill', 'Write', 'Edit', 'MultiEdit', 'Bash'];
+const WRITE_TOOL_NAMES = ['Write', 'Edit', 'MultiEdit', 'Bash'];
+const PHASE_ZERO_DISALLOWED_TOOLS = ['Skill', ...WRITE_TOOL_NAMES];
 
 function parseBudgetUsd(value: string) {
   const budget = Number.parseFloat(value);
@@ -132,6 +133,20 @@ function buildClaudeRuntimeEnv(): Record<string, string | undefined> {
   };
 }
 
+function normalizeSkillNames(skills: string[] | undefined) {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  for (const skill of skills || []) {
+    const item = skill.trim();
+    if (!item || seen.has(item)) continue;
+    seen.add(item);
+    normalized.push(item);
+  }
+
+  return normalized;
+}
+
 function hasClaudeAgentSdkCredentials(env: NodeJS.ProcessEnv | Record<string, string | undefined>) {
   return Boolean(
     env.ANTHROPIC_API_KEY
@@ -148,13 +163,15 @@ function buildClaudeAgentSdkOptions(
   const executablePath = getClaudeSdkExecutablePath();
   const maxBudgetUsd = parseBudgetUsd(getClaudeMaxBudgetUsd());
   const env = buildClaudeRuntimeEnv();
+  const skills = normalizeSkillNames(input.skills);
+  const hasProjectSkills = skills.length > 0;
 
   return {
     abortController,
     additionalDirectories: normalizeReadableDirectories(input.readableDirectories),
     allowedTools: configuredTools,
-    cwd: getClaudeWorkspaceDir(),
-    disallowedTools: PHASE_ZERO_DISALLOWED_TOOLS,
+    cwd: input.cwd?.trim() || getClaudeWorkspaceDir(),
+    disallowedTools: hasProjectSkills ? WRITE_TOOL_NAMES : PHASE_ZERO_DISALLOWED_TOOLS,
     env,
     includePartialMessages: true,
     maxBudgetUsd,
@@ -162,7 +179,8 @@ function buildClaudeAgentSdkOptions(
     ...(executablePath ? { pathToClaudeCodeExecutable: executablePath } : {}),
     permissionMode: 'dontAsk',
     persistSession: false,
-    settingSources: [],
+    settingSources: hasProjectSkills ? ['project'] : [],
+    ...(hasProjectSkills ? { skills } : {}),
     systemPrompt: input.systemPrompt,
     tools: configuredTools,
   };

@@ -233,6 +233,51 @@ describe('streamClaudeAgentSdkTurn', () => {
     expect(events).toContainEqual({ type: 'session_status', status: 'done' });
   });
 
+  it('uses node cwd and project Skill discovery when skills are provided', async () => {
+    mocks.query.mockReturnValue(createMockQuery([
+      sdkMessage({
+        type: 'result',
+        subtype: 'success',
+        duration_ms: 10,
+        duration_api_ms: 9,
+        is_error: false,
+        num_turns: 1,
+        result: 'OK',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0.01,
+        usage: {},
+        modelUsage: {},
+        permission_denials: [],
+        uuid: 'uuid-result',
+        session_id: 'session-1',
+      }),
+    ]));
+
+    const stream = streamClaudeAgentSdkTurn({
+      messages: [{ role: 'user', content: 'Run the current method.' }],
+      systemPrompt: 'Use the current BattleFlow method.',
+      cwd: '/tmp/battleflow-runtime/org-1/workflow-1/nodes/step-1',
+      skills: ['user-needs-breakdown', 'user-needs-breakdown', '  '],
+    });
+
+    await readAgentStream(stream);
+
+    expect(mocks.query).toHaveBeenCalledWith({
+      prompt: 'User:\nRun the current method.',
+      options: expect.objectContaining({
+        allowedTools: ['Read', 'Grep', 'Glob'],
+        cwd: '/tmp/battleflow-runtime/org-1/workflow-1/nodes/step-1',
+        disallowedTools: ['Write', 'Edit', 'MultiEdit', 'Bash'],
+        permissionMode: 'dontAsk',
+        persistSession: false,
+        settingSources: ['project'],
+        skills: ['user-needs-breakdown'],
+        systemPrompt: 'Use the current BattleFlow method.',
+        tools: ['Read', 'Grep', 'Glob'],
+      }),
+    });
+  });
+
   it('emits an error event for SDK result failures', async () => {
     mocks.query.mockReturnValue(createMockQuery([
       sdkMessage({

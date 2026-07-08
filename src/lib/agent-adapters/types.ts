@@ -62,6 +62,8 @@ export interface AgentRuntimeStatus {
 export interface AgentTurnInput {
   messages: AgentChatMessage[];
   systemPrompt: string;
+  cwd?: string;
+  skills?: string[];
   attachments?: AgentInputAttachment[];
   readableDirectories?: string[];
   signal?: AbortSignal;
