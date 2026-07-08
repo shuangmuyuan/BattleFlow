@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   getSkill: vi.fn(),
   findWorkflowAttachment: vi.fn(),
   materializeNodeWorkspace: vi.fn(),
+  getWorkflowArtifactsDirectory: vi.fn(),
   getWorkflow: vi.fn(),
   upsertWorkflow: vi.fn(),
 }));
@@ -81,6 +82,10 @@ vi.mock('@/lib/workflow-attachments', () => ({
 
 vi.mock('@/lib/workflow-node-workspace', () => ({
   materializeNodeWorkspace: mocks.materializeNodeWorkspace,
+}));
+
+vi.mock('@/lib/workflow-runtime-paths', () => ({
+  getWorkflowArtifactsDirectory: mocks.getWorkflowArtifactsDirectory,
 }));
 
 vi.mock('@/lib/workflow-registry', () => ({
@@ -210,6 +215,7 @@ beforeEach(() => {
   mocks.searchKnowledgeDocuments.mockResolvedValue([]);
   mocks.getSkill.mockResolvedValue(skillRecord());
   mocks.findWorkflowAttachment.mockReturnValue(null);
+  mocks.getWorkflowArtifactsDirectory.mockReturnValue('/tmp/battleflow-runtime/org-1/workflow-1/artifacts');
   mocks.materializeNodeWorkspace.mockResolvedValue({
     cwd: '/tmp/battleflow-runtime/org-1/workflow-1/nodes/step-1',
     skillsRoot: '/tmp/battleflow-runtime/org-1/workflow-1/nodes/step-1/.claude/skills',
@@ -574,6 +580,80 @@ describe('Chat API route', () => {
     expect(agentInput.systemPrompt).not.toContain('INLINE_CONTEXT_SHOULD_NOT_APPEAR');
     expect(agentInput.systemPrompt).not.toContain('Previous Steps Output');
     expect(agentInput.readableDirectories).toContain('/tmp/battleflow-attachments');
+  });
+
+  it('passes promoted workflow artifacts as shared read-only context', async () => {
+    mocks.getWorkflow.mockResolvedValue(workflow({
+      steps: [
+        {
+          id: 'step-1',
+          skill_id: 'skill-1',
+          step_index: 0,
+          runMode: 'serial',
+          name: 'Previous step',
+          status: 'completed',
+          output: 'PROMOTED_ARTIFACT_BODY_SHOULD_NOT_BE_INLINED',
+          created_at: '2026-07-04T00:00:00.000Z',
+          updated_at: '2026-07-04T00:00:00.000Z',
+        },
+        {
+          id: 'step-2',
+          skill_id: 'skill-2',
+          step_index: 1,
+          runMode: 'serial',
+          name: 'Current step',
+          status: 'in_progress',
+          output: '',
+          created_at: '2026-07-04T00:00:00.000Z',
+          updated_at: '2026-07-04T00:00:00.000Z',
+        },
+      ],
+      artifacts: [{
+        id: 'artifact-step-1',
+        workflowId: 'workflow-1',
+        producedByStepId: 'step-1',
+        producedByStepName: 'Previous step',
+        title: 'Previous Requirements',
+        summary: 'Validated upstream requirements.',
+        fileName: 'step-1-Previous-Requirements.md',
+        path: 'artifacts/step-1-Previous-Requirements.md',
+        format: 'markdown',
+        mimeType: 'text/markdown; charset=utf-8',
+        size: 2048,
+        checksum: 'sha256-1',
+        version: 1,
+        created_at: '2026-07-04T00:00:00.000Z',
+        updated_at: '2026-07-04T00:00:00.000Z',
+      }],
+    }));
+    mocks.streamClaudeAgentSdkTurn.mockReturnValue(streamAgentEvents([
+      { type: 'assistant_final', text: 'ok' },
+      { type: 'session_status', status: 'done' },
+    ]));
+
+    const response = await POST(postRequest({
+      workflowId: 'workflow-1',
+      workflow_step_id: 'step-2',
+      messages: [{ role: 'user', content: '请参考共享产物继续' }],
+    }));
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(mocks.getWorkflowArtifactsDirectory).toHaveBeenCalledWith({
+      organizationId: 'org-1',
+      workflowId: 'workflow-1',
+    });
+    const agentInput = mocks.streamClaudeAgentSdkTurn.mock.calls[0][0] as {
+      systemPrompt: string;
+      readableDirectories: string[];
+    };
+    expect(agentInput.readableDirectories).toContain('/tmp/battleflow-runtime/org-1/workflow-1/artifacts');
+    expect(agentInput.systemPrompt).toContain('Workflow Shared Artifacts');
+    expect(agentInput.systemPrompt).toContain('node_relative_path="../../artifacts/step-1-Previous-Requirements.md"');
+    expect(agentInput.systemPrompt).toContain('../../artifacts/manifest.json');
+    expect(agentInput.systemPrompt).toContain('Previous Requirements');
+    expect(agentInput.systemPrompt).not.toContain('PROMOTED_ARTIFACT_BODY_SHOULD_NOT_BE_INLINED');
+    expect(agentInput.systemPrompt).not.toContain('/tmp/battleflow-runtime/org-1/workflow-1/artifacts/step-1-Previous-Requirements.md');
   });
 
   it('only passes enabled prior-step attachments from supplemental context as file references', async () => {

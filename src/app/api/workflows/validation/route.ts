@@ -6,6 +6,7 @@ import { AuthError } from '@/lib/auth/types';
 import { requireWorkflowAccess } from '@/lib/resource-metadata-repository';
 import { getSkill } from '@/lib/skill-registry';
 import { normalizeAiGeneratedText } from '@/lib/simplified-chinese';
+import { promoteWorkflowStepArtifact } from '@/lib/workflow-artifacts';
 import {
   getWorkflow,
   upsertWorkflow,
@@ -474,11 +475,32 @@ async function persistValidationState(workflow: WorkflowRecord) {
   return updated;
 }
 
+async function promoteValidatedStepArtifact(
+  workflow: WorkflowRecord,
+  stepId: string,
+  output: string,
+  options: { organizationId: string; completedAt: string },
+) {
+  const normalizedWorkflow = normalizeWorkflowExecutionPlan(workflow, options.completedAt);
+  const promotedStep = normalizedWorkflow.steps.find((item) => item.id === stepId);
+  if (!promotedStep) return normalizedWorkflow;
+
+  const promoted = await promoteWorkflowStepArtifact({
+    organizationId: options.organizationId,
+    workflowId: normalizedWorkflow.id,
+    workflow: normalizedWorkflow,
+    step: promotedStep,
+    content: output,
+    now: options.completedAt,
+  });
+  return promoted.workflow;
+}
+
 async function runValidation(
   workflow: WorkflowRecord,
   step: WorkflowStepRecord,
   candidateOutput: string,
-  options: { agentValidationEnabled: boolean },
+  options: { agentValidationEnabled: boolean; organizationId: string },
   responseExtras: Record<string, unknown> = {},
 ) {
   if (!WORKFLOW_OUTPUT_VALIDATION_ENABLED) {
@@ -495,9 +517,11 @@ async function runValidation(
       validationStatus: 'passed',
       validationSummary: undefined,
     }, completedAt);
-    const finalWorkflow = await persistValidationState(
-      normalizeWorkflowExecutionPlan(completedWorkflow, completedAt),
-    );
+    const workflowWithArtifact = await promoteValidatedStepArtifact(completedWorkflow, step.id, normalizedOutput, {
+      organizationId: options.organizationId,
+      completedAt,
+    });
+    const finalWorkflow = await persistValidationState(workflowWithArtifact);
     const finalStep = finalWorkflow.steps.find((item) => item.id === step.id);
 
     return {
@@ -585,11 +609,13 @@ async function runValidation(
       validationStatus: gateResult.validationStatus,
       validationSummary: gateResult.summary || (gateResult.shouldPromoteCandidate ? '验证通过' : '验证未通过'),
     }, selfCheckedAt), finalAttempt, selfCheckedAt);
-    const finalWorkflow = await persistValidationState(
-      gateResult.shouldPromoteCandidate
-        ? normalizeWorkflowExecutionPlan(finalState, selfCheckedAt)
-        : finalState,
-    );
+    const workflowWithArtifact = gateResult.shouldPromoteCandidate
+      ? await promoteValidatedStepArtifact(finalState, step.id, normalizedOutput, {
+        organizationId: options.organizationId,
+        completedAt: selfCheckedAt,
+      })
+      : finalState;
+    const finalWorkflow = await persistValidationState(workflowWithArtifact);
     const finalStep = finalWorkflow.steps.find((item) => item.id === step.id);
 
     return {
@@ -639,11 +665,13 @@ async function runValidation(
     validationStatus: gateResult.validationStatus,
     validationSummary: gateResult.summary || (gateResult.shouldPromoteCandidate ? '验证通过' : '验证未通过'),
   }, completedAt), finalAttempt, completedAt);
-  const finalWorkflow = await persistValidationState(
-    gateResult.shouldPromoteCandidate
-      ? normalizeWorkflowExecutionPlan(finalState, completedAt)
-      : finalState,
-  );
+  const workflowWithArtifact = gateResult.shouldPromoteCandidate
+    ? await promoteValidatedStepArtifact(finalState, step.id, normalizedOutput, {
+      organizationId: options.organizationId,
+      completedAt,
+    })
+    : finalState;
+  const finalWorkflow = await persistValidationState(workflowWithArtifact);
   const finalStep = finalWorkflow.steps.find((item) => item.id === step.id);
 
   return {
@@ -735,6 +763,7 @@ export async function POST(request: NextRequest) {
 
     const result = await runValidation(workflowForValidation, step, candidateOutput, {
       agentValidationEnabled: parsed.agentValidationEnabled,
+      organizationId: context.activeOrganization.id,
     }, responseExtras);
     return result.response;
   } catch (error) {
