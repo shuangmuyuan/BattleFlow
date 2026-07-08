@@ -548,6 +548,7 @@ function getDisplayPathPrefixes(displayPathRoot?: string) {
   if (!displayPathRoot?.trim()) return [];
 
   const absoluteRoot = normalizeDisplayPath(path.resolve(displayPathRoot));
+  const appRoot = normalizeDisplayPath(process.cwd());
   const rawRelativeRoot = path.relative(process.cwd(), absoluteRoot);
   const relativeRoot = rawRelativeRoot
     && rawRelativeRoot !== '.'
@@ -559,6 +560,7 @@ function getDisplayPathPrefixes(displayPathRoot?: string) {
     absoluteRoot,
     relativeRoot,
     relativeRoot ? `./${relativeRoot}` : '',
+    appRoot,
   ].filter(Boolean))).sort((a, b) => b.length - a.length);
 }
 
@@ -1061,6 +1063,7 @@ function buildSystemPrompt(body: Record<string, unknown>) {
       'When the user asks to follow the current method package requirements, use the loaded project Skill for this node.',
       'When the user asks which Skill, method package, or current capability is active, answer with this active BattleFlow Skill name and its declared planning capabilities. Never say that no runtime Skill is loaded while this binding exists.',
       'A loaded BattleFlow Skill is the workflow-step binding above. It does not require a visible Skill tool_call event before you can name it.',
+      'When reading the materialized Skill files, use relative paths returned by Glob exactly as returned, such as .claude/skills/<skill>/SKILL.md. Do not prefix /app, the repository root, or another absolute workspace path.',
       'If an earlier assistant message asked the user to choose a runtime capability, treat it as an obsolete misinterpretation and continue with this active BattleFlow method package.',
       'If an earlier assistant message claimed no Skill was loaded or no Skill tool was called, treat it as an obsolete misinterpretation and answer from this active BattleFlow method package.',
     ].map((item) => `- ${item}`).join('\n')}\n`;
@@ -1121,6 +1124,7 @@ function buildSystemPrompt(body: Record<string, unknown>) {
   }
 
   systemPrompt += '\n\n## Instructions\n- Provide structured, professional output\n- If this is a methodology-driven workflow capability, follow the methodology steps\n- When previous-step or uploaded file context is relevant, inspect the attachment references with Claude Code Read, Grep, or Glob instead of assuming their contents from filenames\n- Be thorough but concise\n- Use markdown formatting for better readability';
+  systemPrompt += '\n- When a file tool returns a relative path, pass that same relative path to follow-up Read or Grep calls. Do not convert relative paths into /app-prefixed or repository-root absolute paths.';
   systemPrompt += '\n- Do not append a standalone Sources or References section for web/tool search results unless the user explicitly asks for that section. BattleFlow renders structured citation UI separately from tool results.';
   systemPrompt += '\n- Never ask the user to choose a Claude Code or Codex runtime capability. The BattleFlow workflow step has already supplied the active method package when one is available.';
   systemPrompt += '\n- For ordinary Q&A, reply as a conversational assistant message. Do not package the answer as a workflow deliverable or markdown file unless the user explicitly asks to generate/export a document or is confirming the step output.';

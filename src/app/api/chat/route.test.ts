@@ -421,6 +421,82 @@ describe('Chat API route', () => {
     ]);
   });
 
+  it('hides app-root absolute paths attempted outside the node cwd', async () => {
+    const nodeCwd = `${process.cwd()}/data/workflow-runtime/org-1/workflow-1/nodes/step-1`;
+    const relativeSkillPath = '.claude/skills/user-needs-breakdown/SKILL.md';
+    const appRootSkillPath = `${process.cwd()}/${relativeSkillPath}`;
+    mocks.materializeNodeWorkspace.mockResolvedValue({
+      cwd: nodeCwd,
+      skillsRoot: `${nodeCwd}/.claude/skills`,
+      skillName: 'user-needs-breakdown',
+      skillDirectory: `${nodeCwd}/.claude/skills/user-needs-breakdown`,
+      skillFilePath: `${nodeCwd}/${relativeSkillPath}`,
+      metadataPath: `${nodeCwd}/.battleflow-node-workspace.json`,
+    });
+    mocks.streamClaudeAgentSdkTurn.mockReturnValue(streamAgentEvents([
+      {
+        type: 'tool_call',
+        id: 'tool-read-app-root',
+        name: 'Read',
+        status: 'running',
+        input: { file_path: appRootSkillPath },
+        timestamp: '2026-07-06T02:00:00.000Z',
+      },
+      {
+        type: 'tool_call',
+        id: 'tool-read-app-root',
+        name: 'Read',
+        status: 'failed',
+        input: { file_path: appRootSkillPath },
+        resultPreview: `File does not exist: ${appRootSkillPath}`,
+        error: `File does not exist: ${appRootSkillPath}`,
+        timestamp: '2026-07-06T02:00:01.000Z',
+      },
+      { type: 'assistant_final', text: `读取失败：${appRootSkillPath}` },
+      { type: 'session_status', status: 'done' },
+    ]));
+
+    const response = await POST(postRequest({
+      workflowId: 'workflow-1',
+      workflow_step_id: 'step-1',
+      messages: [{ role: 'user', content: '读取当前 Skill 文件' }],
+    }));
+    const responseText = await response.text();
+    const events = parseSse(responseText);
+
+    expect(response.status).toBe(200);
+    expect(responseText).not.toContain(process.cwd());
+    expect(responseText).toContain(relativeSkillPath);
+
+    const failedToolEvent = events.find((event) => (
+      event.event === 'tool_call'
+      && (event.tool_call as { status?: string } | undefined)?.status === 'failed'
+    )) as { tool_call: {
+      input: { file_path: string };
+      resultPreview: string;
+      error: string;
+    } };
+    expect(failedToolEvent.tool_call.input.file_path).toBe(relativeSkillPath);
+    expect(failedToolEvent.tool_call.resultPreview).toBe(`File does not exist: ${relativeSkillPath}`);
+    expect(failedToolEvent.tool_call.error).toBe(`File does not exist: ${relativeSkillPath}`);
+
+    const persistedWorkflow = mocks.upsertWorkflow.mock.calls.at(-1)?.[0] as WorkflowRecord;
+    expect(JSON.stringify(persistedWorkflow.stepChats['step-1'])).not.toContain(process.cwd());
+    expect(persistedWorkflow.stepChats['step-1']).toEqual([
+      expect.objectContaining({
+        role: 'assistant',
+        content: `读取失败：${relativeSkillPath}`,
+        toolCalls: [
+          expect.objectContaining({
+            input: { file_path: relativeSkillPath },
+            resultPreview: `File does not exist: ${relativeSkillPath}`,
+            error: `File does not exist: ${relativeSkillPath}`,
+          }),
+        ],
+      }),
+    ]);
+  });
+
   it('passes workflow files as readable references instead of inlining previous-step output', async () => {
     mocks.getWorkflow.mockResolvedValue(workflow({
       steps: [
