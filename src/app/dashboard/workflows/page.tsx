@@ -190,6 +190,7 @@ type WorkflowStepStatus =
 type WorkflowStepValidationStatus = 'not_started' | 'running' | 'passed' | 'failed' | 'error';
 type WorkflowValidationOutcome = 'pass' | 'needs_revision' | 'blocked' | 'error';
 type WorkflowStepSnapshotType = 'auto' | 'manual' | 'validation_candidate';
+type WorkflowArtifactFormat = 'markdown' | 'text' | 'json';
 
 interface WorkflowStepValidationFinding {
   id: string;
@@ -246,6 +247,24 @@ interface WorkflowStep {
   created_at?: string;
   updated_at?: string;
   completed_at?: string;
+}
+
+interface WorkflowArtifact {
+  id: string;
+  workflowId: string;
+  producedByStepId: string;
+  producedByStepName: string;
+  title: string;
+  summary: string;
+  fileName: string;
+  path: string;
+  format: WorkflowArtifactFormat;
+  mimeType: string;
+  size: number;
+  checksum: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
 }
 
 type WorkflowDemoHandoffStatus = 'queued' | 'ready' | 'running' | 'succeeded' | 'failed' | 'canceled';
@@ -332,6 +351,7 @@ interface Workflow {
   steps: WorkflowStep[];
   contextFiles?: UploadedContextFile[];
   reviewedOutputFiles?: ReviewedOutputFile[];
+  artifacts?: WorkflowArtifact[];
   reviewComments?: Record<string, string>;
   archivedReviewStepIds?: string[];
   contextSelections?: Record<string, WorkflowContextSelection>;
@@ -2836,6 +2856,29 @@ export default function WorkflowsPage() {
     toast.error('附件下载地址缺失');
   };
 
+  const downloadWorkflowArtifact = async (workflow: Workflow, artifact: WorkflowArtifact) => {
+    try {
+      const params = new URLSearchParams({
+        workflow_id: workflow.id,
+        artifact_id: artifact.id,
+      });
+      const response = await fetch(`/api/workflows/artifacts?${params.toString()}`, {
+        cache: 'no-store',
+        credentials: 'same-origin',
+      });
+      if (!response.ok) {
+        const message = await response.text().catch(() => '');
+        throw new Error(message || `Download failed with ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      triggerBlobDownload(blob, artifact.fileName || `${artifact.title || 'workflow-artifact'}.md`);
+    } catch (error) {
+      console.warn('Failed to download workflow artifact', error);
+      toast.error('下载共享产物失败，请稍后重试');
+    }
+  };
+
   const saveReviewedUploadFilesToKnowledge = async (
     workflow: Workflow,
     step: WorkflowStep,
@@ -5199,6 +5242,7 @@ export default function WorkflowsPage() {
   const previousSteps = currentStep
     ? getPriorWorkflowSteps(activeWorkflow, currentStep).filter((step) => step.output)
     : [];
+  const workflowArtifacts = activeWorkflow.artifacts || [];
   const currentContextSelection = currentStep
     ? getContextSelection(activeWorkflow, currentStep.id)
     : defaultContextSelection;
@@ -5543,6 +5587,48 @@ export default function WorkflowsPage() {
       </Card>
     );
   };
+
+  const renderWorkflowArtifactPreview = (artifact: WorkflowArtifact) => (
+    <Card key={artifact.id} className="mb-2 border-border/60 bg-card/75 shadow-none">
+      <CardContent className="p-3">
+        <div className="flex min-w-0 items-start gap-2">
+          <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <FileText className="h-3.5 w-3.5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="min-w-0 truncate text-xs font-semibold">{artifact.title || artifact.fileName}</p>
+                <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                  {artifact.producedByStepName || '未知节点'} · v{artifact.version} · {formatFileSize(artifact.size)}
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 shrink-0 p-0"
+                title="下载共享产物"
+                aria-label={`下载共享产物 ${artifact.title || artifact.fileName}`}
+                onClick={() => {
+                  void downloadWorkflowArtifact(activeWorkflow, artifact);
+                }}
+              >
+                <Download className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+            {artifact.summary && (
+              <p className="mt-2 line-clamp-2 break-words text-xs leading-5 text-muted-foreground">
+                {artifact.summary}
+              </p>
+            )}
+            <p className="mt-2 truncate text-[11px] text-muted-foreground">
+              更新于 {formatSnapshotTime(artifact.updated_at)}
+            </p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
 
   const supplementalContextPanel = (
     <div className="flex h-full min-w-0 flex-col gap-3 overflow-y-auto p-4">
@@ -6653,6 +6739,20 @@ export default function WorkflowsPage() {
                   ) : (
                     <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
                       当前步骤验证通过后，会在这里展示本步骤产出。
+                    </p>
+                  )}
+                </div>
+
+                <div className="min-w-0">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <h4 className="min-w-0 truncate text-xs font-medium text-muted-foreground">共享工作流产物</h4>
+                    <Badge variant="outline" className="shrink-0 text-[11px]">{workflowArtifacts.length} 个</Badge>
+                  </div>
+                  {workflowArtifacts.length > 0 ? (
+                    workflowArtifacts.map((artifact) => renderWorkflowArtifactPreview(artifact))
+                  ) : (
+                    <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
+                      节点产物验证通过后，会在这里形成可下载的共享产物。
                     </p>
                   )}
                 </div>
