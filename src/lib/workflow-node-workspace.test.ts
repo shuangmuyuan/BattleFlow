@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync, symlinkSync, mkdirSync, readFileSync, readdirSync, lstatSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, symlinkSync, mkdirSync, readFileSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -39,7 +39,7 @@ function createSkill(overrides: Partial<SkillRecord> = {}): SkillRecord {
 }
 
 function createPackage(name: string, skillMd: string) {
-  const packagePath = path.join(tempRoot, name);
+  const packagePath = path.join(tempRoot, 'skill-registry', 'packages', name);
   mkdirSync(path.join(packagePath, 'assets'), { recursive: true });
   writeFileSync(path.join(packagePath, 'skill.md'), skillMd);
   writeFileSync(path.join(packagePath, 'assets', 'template.md'), 'Template');
@@ -48,7 +48,11 @@ function createPackage(name: string, skillMd: string) {
 
 beforeEach(() => {
   tempRoot = mkdtempSync(path.join(tmpdir(), 'battleflow-node-workspace-'));
-  process.env = { ...originalEnv, WORKFLOW_RUNTIME_DIR: path.join(tempRoot, 'runtime') };
+  process.env = {
+    ...originalEnv,
+    SKILL_REGISTRY_DIR: path.join(tempRoot, 'skill-registry'),
+    WORKFLOW_RUNTIME_DIR: path.join(tempRoot, 'runtime'),
+  };
 });
 
 afterEach(() => {
@@ -80,7 +84,7 @@ describe('materializeNodeWorkspace', () => {
       skillId: 'skill-1',
       skillVersion: '1.0.0',
       skillName: 'user-needs-breakdown',
-      sourcePackagePath: packagePath,
+      sourcePackagePath: realpathSync(packagePath),
     }));
   });
 
@@ -143,5 +147,19 @@ describe('materializeNodeWorkspace', () => {
       skillName: 'skill-two',
     }));
   });
-});
 
+  it('rejects package paths outside the server-side Skill package roots', async () => {
+    const packagePath = path.join(tempRoot, 'outside-package');
+    mkdirSync(packagePath, { recursive: true });
+    writeFileSync(path.join(packagePath, 'skill.md'), '# Outside Skill');
+
+    await expect(materializeNodeWorkspace({
+      organizationId: 'org-1',
+      workflowId: 'workflow-1',
+      stepId: 'step-1',
+      skill: createSkill({
+        versions: [{ version: '1.0.0', updated_at: '2026-07-08T00:00:00.000Z', changelog: '', package_path: packagePath }],
+      }),
+    })).rejects.toThrow('outside allowed registry roots');
+  });
+});

@@ -60,6 +60,15 @@ function getWorkflowRuntimeRoot() {
   );
 }
 
+function getAllowedSkillPackageRoots() {
+  const registryRoot = process.env.SKILL_REGISTRY_DIR?.trim()
+    || path.join(process.cwd(), 'data', 'skill-registry');
+  return [
+    path.resolve(registryRoot, 'packages'),
+    path.resolve(process.cwd(), 'skills', 'official'),
+  ];
+}
+
 function currentVersion(skill: MaterializeNodeWorkspaceInput['skill']): SkillVersion | null {
   return skill.versions.find((item) => item.version === skill.version) || skill.versions[0] || null;
 }
@@ -87,6 +96,36 @@ async function pathExists(filePath: string) {
   } catch {
     return false;
   }
+}
+
+async function realPathOrNull(filePath: string) {
+  try {
+    return await fs.realpath(filePath);
+  } catch {
+    return null;
+  }
+}
+
+function isPathInside(candidate: string, root: string) {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+async function assertAllowedSkillPackagePath(packagePath: string) {
+  const realPackagePath = await realPathOrNull(packagePath);
+  if (!realPackagePath) {
+    throw new Error('Skill package path does not exist.');
+  }
+
+  const realAllowedRoots = (await Promise.all(
+    getAllowedSkillPackageRoots().map((root) => realPathOrNull(root)),
+  )).filter((root): root is string => Boolean(root));
+
+  if (!realAllowedRoots.some((root) => isPathInside(realPackagePath, root))) {
+    throw new Error('Skill package path is outside allowed registry roots.');
+  }
+
+  return realPackagePath;
 }
 
 async function findSkillFile(directory: string) {
@@ -160,11 +199,14 @@ export async function materializeNodeWorkspace(
   const skillDirectory = path.join(skillsRoot, skillName);
   const tempSkillDirectory = path.join(tempSkillsRoot, skillName);
   const sourcePackagePath = resolveSkillPackagePath(input.skill);
+  const allowedSourcePackagePath = sourcePackagePath
+    ? await assertAllowedSkillPackagePath(sourcePackagePath)
+    : null;
 
   await fs.mkdir(claudeDirectory, { recursive: true });
   await fs.rm(tempSkillsRoot, { recursive: true, force: true });
 
-  const skillFilePath = await writeSkillMd(tempSkillDirectory, sourcePackagePath, input.skill.skill_md);
+  const skillFilePath = await writeSkillMd(tempSkillDirectory, allowedSourcePackagePath, input.skill.skill_md);
 
   await fs.rm(skillsRoot, { recursive: true, force: true });
   await fs.rename(tempSkillsRoot, skillsRoot);
@@ -177,7 +219,7 @@ export async function materializeNodeWorkspace(
     skillId: input.skill.id,
     skillVersion: resolveSkillVersion(input.skill),
     skillName,
-    ...(sourcePackagePath ? { sourcePackagePath } : {}),
+    ...(allowedSourcePackagePath ? { sourcePackagePath: allowedSourcePackagePath } : {}),
     materializedAt: new Date().toISOString(),
   };
   await fs.writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
@@ -191,4 +233,3 @@ export async function materializeNodeWorkspace(
     metadataPath,
   };
 }
-
