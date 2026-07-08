@@ -661,4 +661,37 @@ describe('Chat API route', () => {
     expect(agentInput.systemPrompt).not.toContain('/tmp/malicious');
     expect(agentInput.readableDirectories).not.toContain('/tmp/malicious');
   });
+
+  it('drops stale assistant messages that confuse loaded Skills with Skill tool calls', async () => {
+    mocks.streamClaudeAgentSdkTurn.mockReturnValue(streamAgentEvents([
+      { type: 'assistant_final', text: 'ok' },
+      { type: 'session_status', status: 'done' },
+    ]));
+
+    const response = await POST(postRequest({
+      workflowId: 'workflow-1',
+      workflow_step_id: 'step-1',
+      messages: [
+        {
+          role: 'assistant',
+          content: '当前对话中没有加载任何 skill，全程是直接对话完成的，没有调用过 Skill 工具。',
+        },
+        { role: 'user', content: '当前节点加载的skill是什么？' },
+      ],
+    }));
+    await response.text();
+
+    expect(response.status).toBe(200);
+    const agentInput = mocks.streamClaudeAgentSdkTurn.mock.calls[0][0] as {
+      messages: Array<{ role: string; content: string }>;
+      systemPrompt: string;
+    };
+    expect(agentInput.messages).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        content: expect.stringContaining('没有加载任何 skill'),
+      }),
+    ]));
+    expect(agentInput.systemPrompt).toContain('A loaded BattleFlow Skill is the workflow-step binding above');
+    expect(agentInput.systemPrompt).toContain('If an earlier assistant message claimed no Skill was loaded');
+  });
 });
