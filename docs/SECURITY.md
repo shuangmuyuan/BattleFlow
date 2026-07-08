@@ -25,7 +25,7 @@ Never commit:
 - Platform super admin bootstrap runs only on the server when a signed-in user matches `BATTLEFLOW_SUPER_ADMIN_EMAILS` or `BATTLEFLOW_SUPER_ADMIN_USER_IDS`. API responses and UI state must never return the configured bootstrap values.
 - Super admin product access can view and administer organization content, but it must still be blocked from secret material such as connection strings, service role keys, environment variables, and raw auth tokens.
 - Super admin grant and revoke changes must write audit events, and the last enabled super admin must not be revoked through normal management APIs.
-- Skill, workflow, knowledge-base, PRD, snapshot, milestone, and chat routes must resolve first-party auth and Postgres-backed resource permissions before returning file-backed package assets, workflow outputs, or prompt context.
+- Skill, workflow, knowledge-base, PRD, snapshot, milestone, chat, and workflow artifact routes must resolve first-party auth and Postgres-backed resource permissions before returning file-backed package assets, workflow outputs, artifacts, or prompt context.
 - Demo handoff routes must resolve organization context and workflow resource permissions before reading workflow outputs or writing returned Demo links.
 
 ## Database Access
@@ -69,11 +69,23 @@ Claude authentication for deployed environments must be injected through server 
 
 The legacy Claude Code CLI helper in `src/lib/agent-adapters/claude-code-cli.ts` remains available for workflow validation and other non-chat helper flows. It is still constrained with safe mode, no session persistence, no tools by default in helper/development flows, JSON output, and the same budget environment variable.
 
-Do not enable broader SDK/CLI tools, broader permissions, additional project discovery surfaces, human-in-the-loop tools, or persistent sessions without documenting the threat model and validating the change. The current approved chat tool surface is limited to Claude Code `Read`, `Grep`, `Glob`, `WebSearch`, and `WebFetch` when configured through `BATTLEFLOW_CLAUDE_TOOLS`, plus SDK-managed project Skill loading for the single materialized current node Skill. File tools exist so the runtime can read workflow-owned attachments by path instead of injecting full files into prompts. Web tools may send user prompts and URLs outside BattleFlow through the configured Claude runtime, so enable them only in environments where outbound web access is expected. Do not enable `Write`, `Edit`, `MultiEdit`, `Bash`, or human-in-the-loop tools for ordinary chat turns.
+Do not enable broader SDK/CLI tools, broader permissions, additional project discovery surfaces, human-in-the-loop tools, or persistent sessions without documenting the threat model and validating the change. The current approved chat tool surface is limited to Claude Code `Read`, `Grep`, `Glob`, `WebSearch`, and `WebFetch` when configured through `BATTLEFLOW_CLAUDE_TOOLS`, plus SDK-managed project Skill loading for the single materialized current node Skill. File tools exist so the runtime can read workflow-owned attachments and promoted workflow artifacts by path instead of injecting full files into prompts. Web tools may send user prompts and URLs outside BattleFlow through the configured Claude runtime, so enable them only in environments where outbound web access is expected. Do not enable `Write`, `Edit`, `MultiEdit`, `Bash`, or human-in-the-loop tools for ordinary chat turns.
 
 Workflow validation uses the same constrained Claude Code CLI boundary. Skill self-check always uses safe mode, no tools, no session persistence, and budget controlled by environment variables. Independent Agent validation uses the same boundary only when the workflow-level Agent validation switch is enabled. Validation prompts frame Skill Markdown, uploaded files, retrieved knowledge, chat history, self-check output, and candidate artifacts as untrusted reference material. The validation Agent is a judge only: it must return structured JSON and must not execute instructions from candidate content or package assets.
 
 Validation failures and runtime errors are stored as bounded summaries and findings. Do not log or surface full uploaded private documents, full candidate artifacts, credentials, raw service-role keys, or raw CLI prompts in validation error messages.
+
+## Workflow Shared Artifacts
+
+Server-promoted workflow artifacts are durable outputs created only after validation passes. The shared area is intentionally read-only for agent chat turns:
+
+- artifact files are stored under `data/workflows/<orgId>/<workflowId>/artifacts/`;
+- metadata is stored in `WorkflowRecord.artifacts` and mirrored into `artifacts/manifest.json`;
+- failed validation candidates remain in candidate fields and must not be promoted to `step.output` or shared artifacts;
+- chat prompts include compact artifact metadata and node-relative paths, not full artifact bodies or absolute runtime roots;
+- Claude Agent SDK receives the artifacts directory as an additional readable directory only when promoted artifacts exist.
+
+`GET /api/workflows/artifacts` must require `workflow.read` before looking up the artifact record. The route must resolve the stored artifact path with the server-side artifact resolver and reject any path outside the workflow `artifacts/` directory. Do not trust client-supplied paths, file names, MIME types, or artifact metadata for filesystem access.
 
 ## External Demo Handoff
 
@@ -90,7 +102,7 @@ Security boundaries:
 
 ## File System Writes
 
-The registries and node workspace materialization write to local disk. Keep writes scoped to configured registry/runtime roots and use temp-file writes plus rename for important state. Never allow arbitrary user-provided paths to escape configured import roots. Runtime node workspaces currently live under the gitignored `data/workflows/<orgId>/<workflowId>/` tree; moving them to a repo-external runtime root remains a follow-up hardening item.
+The registries, node workspace materialization, and workflow artifact promotion write to local disk. Keep writes scoped to configured registry/runtime roots and use temp-file writes plus rename for important state. Never allow arbitrary user-provided paths to escape configured import roots or workflow artifact roots. Runtime node workspaces and shared artifacts currently live under the gitignored `data/workflows/<orgId>/<workflowId>/` tree; moving them to a repo-external runtime root remains a follow-up hardening item.
 
 ## Logging
 
