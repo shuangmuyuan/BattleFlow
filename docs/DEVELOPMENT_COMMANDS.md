@@ -87,7 +87,9 @@ BATTLEFLOW_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start
 docker compose up -d --build
 ```
 
-The Docker image starts through `pnpm start`, not `node dist/server.js`, so the same production defaults from `scripts/start.sh` are applied. `docker-compose.yml` also passes `BATTLEFLOW_CLAUDE_TOOLS` explicitly as `Read,Grep,Glob,WebSearch,WebFetch` by default. After deployment, verify `GET /api/agent-runtime` reports `toolsEnabled: true` and includes `Read`, `Grep`, `Glob`, `WebSearch`, and `WebFetch`.
+The Docker image starts through `pnpm start`, not `node dist/server.js`, so the same production defaults from `scripts/start.sh` are applied. `docker-compose.yml` also passes `BATTLEFLOW_CLAUDE_TOOLS` explicitly as `Read,Grep,Glob,WebSearch,WebFetch` by default.
+
+Docker deployments must inject Claude authentication through environment variables. Do not rely on reading `~/.claude/settings.json` inside the container. At minimum, compose deployments provide `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`; deployments that use another supported auth mechanism may provide `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` through the container environment instead. After deployment, verify `GET /api/agent-runtime` reports `toolsEnabled: true`, `auth.anthropicTokenConfigured: true`, and includes `Read`, `Grep`, `Glob`, `WebSearch`, and `WebFetch`.
 
 ## Database Bootstrap
 
@@ -133,3 +135,4 @@ The local route is `POST /api/demos/handoffs` with `{ workflowId, stepId }`. It 
 | `CLAUDE_MAX_BUDGET_USD` | Per-turn CLI budget, defaults to `1.00`. |
 | `CLAUDE_WORKSPACE_DIR` | Working directory for Claude CLI turns. |
 | `BATTLEFLOW_CLAUDE_TOOLS` | Optional comma-separated Claude Code tools for CLI-backed chat and Skill tuning. Only `Read`, `Grep`, `Glob`, `WebSearch`, and `WebFetch` are accepted, for example `Read,Grep,Glob,WebSearch,WebFetch`. Local `pnpm dev` and production `pnpm start` default to that approved tool set unless the variable is explicitly overridden. |
+| `BATTLEFLOW_CLAUDE_SETTINGS_PATH` | Optional local-development fallback path for a Claude settings JSON file whose `env` block should be merged into the SDK subprocess environment. Do not use this as the Docker/production secret source; inject Anthropic credentials as environment variables instead. |

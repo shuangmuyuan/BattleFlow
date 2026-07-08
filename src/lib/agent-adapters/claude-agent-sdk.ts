@@ -100,14 +100,19 @@ function getThrownErrorText(error: unknown) {
 }
 
 function getClaudeSettingsPath() {
-  return process.env.BATTLEFLOW_CLAUDE_SETTINGS_PATH?.trim()
-    || process.env.CLAUDE_SETTINGS_PATH?.trim()
-    || path.join(homedir(), '.claude', 'settings.json');
+  const explicitPath = process.env.BATTLEFLOW_CLAUDE_SETTINGS_PATH?.trim()
+    || process.env.CLAUDE_SETTINGS_PATH?.trim();
+  if (explicitPath) return explicitPath;
+  if (process.env.BATTLEFLOW_PROJECT_ENV === 'DEV') {
+    return path.join(homedir(), '.claude', 'settings.json');
+  }
+  return '';
 }
 
 function getClaudeSettingsEnv(): Record<string, string> {
   const settingsPath = getClaudeSettingsPath();
   try {
+    if (!settingsPath) return {};
     if (!existsSync(settingsPath)) return {};
     const parsed = JSON.parse(readFileSync(settingsPath, 'utf8')) as unknown;
     if (!isRecord(parsed) || !isRecord(parsed.env)) return {};

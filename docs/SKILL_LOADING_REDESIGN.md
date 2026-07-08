@@ -381,7 +381,7 @@ Demo Handoff（把完成节点交付到外部 Frieren Demo 平台）保持**节�
 
 - **保留**：`AgentTurnInput` / `AgentEvent` / `AgentToolCallEvent` 类型；`streamAgentEventsAsSse` 的 SSE 桥接；tool 结果的截断归一化（`normalizeToolResult` 等，防超大输出）。
 - **替换**：`spawn` + 行缓冲 + `handleLine` 全部由迭代 `query()` 的 `SDKMessage` 取代；临时 system-prompt 文件写入取消。
-- **鉴权**：SDK 认 `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`，与现有代理路由兼容（后端已确认 Claude）。
+- **鉴权**：SDK 认 `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`。Docker Compose / 生产部署必须通过环境变量注入这些值，不依赖读取 `~/.claude/settings.json`；本地开发可以把 `~/.claude/settings.json` 的 `env` 字段作为 `BATTLEFLOW_PROJECT_ENV=DEV` 下的 fallback。
 - **阶段 0 等价性**：为保持现有行为，先设置 `persistSession: false`、不开 `Skill`/`Write`/`Edit`，`cwd` 仍沿用当前工作区；阶段 1 再切节点 cwd 与 project Skill 发现。
 - **hooks**：`PreToolUse`（越界写路径白名单）、`SessionStart`（注入 Skill 强制激活指令）在 `options.hooks` 挂载。注意：已被 `allowedTools` 自动批准的工具不会再进入 `canUseTool`，因此路径安全不能只放在 `canUseTool`。
 

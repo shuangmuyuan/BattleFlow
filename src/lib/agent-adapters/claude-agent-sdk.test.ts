@@ -58,6 +58,7 @@ describe('streamClaudeAgentSdkTurn', () => {
     process.env.CLAUDE_MODEL = 'sonnet';
     process.env.CLAUDE_MAX_BUDGET_USD = '1.25';
     process.env.CLAUDE_WORKSPACE_DIR = '/tmp/battleflow-workspace';
+    process.env.BATTLEFLOW_PROJECT_ENV = 'DEV';
     process.env.BATTLEFLOW_CLAUDE_SETTINGS_PATH = path.join(tmpdir(), 'battleflow-missing-claude-settings.json');
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_AUTH_TOKEN;
@@ -372,5 +373,19 @@ describe('streamClaudeAgentSdkTurn', () => {
     } finally {
       rmSync(settingsDir, { recursive: true, force: true });
     }
+  });
+
+  it('does not load the default user settings file in production mode', async () => {
+    process.env.BATTLEFLOW_PROJECT_ENV = 'PROD';
+    delete process.env.BATTLEFLOW_CLAUDE_SETTINGS_PATH;
+    delete process.env.CLAUDE_SETTINGS_PATH;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_AUTH_TOKEN;
+    delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+
+    const status = await checkClaudeAgentSdkRuntime();
+
+    expect(status.available).toBe(false);
+    expect(status.auth.anthropicTokenConfigured).toBe(false);
   });
 });

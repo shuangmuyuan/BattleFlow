@@ -69,6 +69,7 @@ Workflow chat uses the Claude Agent SDK adapter in `src/lib/agent-adapters/claud
 - It explicitly disallows `Skill`, `Write`, `Edit`, `MultiEdit`, and `Bash` in phase 0.
 - It uses `CLAUDE_COMMAND` only when a custom Claude executable is configured; otherwise the SDK bundled executable is used. It also uses `CLAUDE_MODEL`, `CLAUDE_MAX_BUDGET_USD`, and `CLAUDE_WORKSPACE_DIR`.
 - It can enable the approved Claude Code `Read`, `Grep`, `Glob`, `WebSearch`, and `WebFetch` tools when configured through `BATTLEFLOW_CLAUDE_TOOLS`. Unsupported tool names are ignored. Production start through `scripts/start.sh` supplies that approved tool list by default so deployments that run `pnpm start` get workflow attachment reads and web access without a manual environment edit.
+- It uses deployment environment variables for Claude authentication. Docker Compose injects Anthropic variables directly into the container; the local `~/.claude/settings.json` fallback is only enabled for `BATTLEFLOW_PROJECT_ENV=DEV`, or when an explicit `BATTLEFLOW_CLAUDE_SETTINGS_PATH` is provided.
 
 The legacy Claude Code CLI adapter in `src/lib/agent-adapters/claude-code-cli.ts` remains available for workflow validation and helper flows such as `runClaudeCodeCliPrompt`. Do not grant SDK/CLI tools, enable project Skill discovery, or broaden permissions without a security review.
 
