@@ -338,6 +338,89 @@ describe('Chat API route', () => {
     ]);
   });
 
+  it('hides the node cwd from streamed and persisted tool calls', async () => {
+    const nodeCwd = `${process.cwd()}/data/workflows/org-1/workflow-1/nodes/step-1`;
+    const repoRelativeNodeCwd = 'data/workflows/org-1/workflow-1/nodes/step-1';
+    const relativeSkillPath = '.claude/skills/user-needs-breakdown/SKILL.md';
+    const absoluteSkillPath = `${nodeCwd}/${relativeSkillPath}`;
+    const repoRelativeSkillPath = `${repoRelativeNodeCwd}/${relativeSkillPath}`;
+    mocks.materializeNodeWorkspace.mockResolvedValue({
+      cwd: nodeCwd,
+      skillsRoot: `${nodeCwd}/.claude/skills`,
+      skillName: 'user-needs-breakdown',
+      skillDirectory: `${nodeCwd}/.claude/skills/user-needs-breakdown`,
+      skillFilePath: absoluteSkillPath,
+      metadataPath: `${nodeCwd}/.battleflow-node-workspace.json`,
+    });
+    mocks.streamClaudeAgentSdkTurn.mockReturnValue(streamAgentEvents([
+      {
+        type: 'tool_call',
+        id: 'tool-read-cwd',
+        name: 'Read',
+        status: 'running',
+        input: { file_path: absoluteSkillPath },
+        timestamp: '2026-07-06T02:00:00.000Z',
+      },
+      {
+        type: 'tool_call',
+        id: 'tool-read-cwd',
+        name: 'Read',
+        status: 'completed',
+        result: {
+          content: `1|---\n2|path ${absoluteSkillPath}`,
+          file: { filePath: absoluteSkillPath, numLines: 2 },
+        },
+        resultPreview: `file=${absoluteSkillPath}`,
+        timestamp: '2026-07-06T02:00:01.000Z',
+      },
+      { type: 'assistant_message', text: `已读取 ${absoluteSkillPath}。` },
+      { type: 'assistant_final', text: `最终读取 ${repoRelativeSkillPath} 和 ${absoluteSkillPath}。` },
+      { type: 'session_status', status: 'done' },
+    ]));
+
+    const response = await POST(postRequest({
+      workflowId: 'workflow-1',
+      workflow_step_id: 'step-1',
+      messages: [{ role: 'user', content: '读取当前 Skill 文件' }],
+    }));
+    const responseText = await response.text();
+    const events = parseSse(responseText);
+
+    expect(response.status).toBe(200);
+    expect(responseText).not.toContain(nodeCwd);
+    expect(responseText).not.toContain(repoRelativeNodeCwd);
+    expect(responseText).toContain(relativeSkillPath);
+
+    const completedToolEvent = events.find((event) => (
+      event.event === 'tool_call'
+      && (event.tool_call as { status?: string } | undefined)?.status === 'completed'
+    )) as { tool_call: {
+      input: { file_path: string };
+      result: { file: { filePath: string }; content: string };
+      resultPreview: string;
+    } };
+    expect(completedToolEvent.tool_call.input.file_path).toBe(relativeSkillPath);
+    expect(completedToolEvent.tool_call.result.file.filePath).toBe(relativeSkillPath);
+    expect(completedToolEvent.tool_call.result.content).toContain(`path ${relativeSkillPath}`);
+    expect(completedToolEvent.tool_call.resultPreview).toBe(`file=${relativeSkillPath}`);
+
+    const persistedWorkflow = mocks.upsertWorkflow.mock.calls.at(-1)?.[0] as WorkflowRecord;
+    expect(JSON.stringify(persistedWorkflow.stepChats['step-1'])).not.toContain(nodeCwd);
+    expect(JSON.stringify(persistedWorkflow.stepChats['step-1'])).not.toContain(repoRelativeNodeCwd);
+    expect(persistedWorkflow.stepChats['step-1']).toEqual([
+      expect.objectContaining({
+        role: 'assistant',
+        content: `最终读取 ${relativeSkillPath} 和 ${relativeSkillPath}。`,
+        toolCalls: [
+          expect.objectContaining({
+            input: { file_path: relativeSkillPath },
+            resultPreview: `file=${relativeSkillPath}`,
+          }),
+        ],
+      }),
+    ]);
+  });
+
   it('passes workflow files as readable references instead of inlining previous-step output', async () => {
     mocks.getWorkflow.mockResolvedValue(workflow({
       steps: [

@@ -158,6 +158,7 @@ const MAX_KNOWLEDGE_CHUNKS_PER_BASE = 3;
 const MAX_KNOWLEDGE_CHUNK_PROMPT_CHARS = 1_200;
 const MAX_IMAGE_ATTACHMENT_COUNT = 6;
 const MAX_IMAGE_ATTACHMENT_BYTES = 2 * 1024 * 1024;
+const MAX_TOOL_CALL_DISPLAY_SANITIZE_DEPTH = 8;
 const CHAT_RUN_RETENTION_MS = 30 * 60 * 1000;
 const MAX_RETAINED_CHAT_RUNS = 100;
 
@@ -535,19 +536,119 @@ function parseToolCallInputText(inputText?: string): Record<string, unknown> | u
   }
 }
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeDisplayPath(value: string) {
+  return value.replaceAll('\\', '/');
+}
+
+function getDisplayPathPrefixes(displayPathRoot?: string) {
+  if (!displayPathRoot?.trim()) return [];
+
+  const absoluteRoot = normalizeDisplayPath(path.resolve(displayPathRoot));
+  const rawRelativeRoot = path.relative(process.cwd(), absoluteRoot);
+  const relativeRoot = rawRelativeRoot
+    && rawRelativeRoot !== '.'
+    && rawRelativeRoot !== '..'
+    && !rawRelativeRoot.startsWith(`..${path.sep}`)
+    ? normalizeDisplayPath(rawRelativeRoot)
+    : '';
+  return Array.from(new Set([
+    absoluteRoot,
+    relativeRoot,
+    relativeRoot ? `./${relativeRoot}` : '',
+  ].filter(Boolean))).sort((a, b) => b.length - a.length);
+}
+
+function sanitizeDisplayPathText(value: string, displayPathRoot?: string) {
+  const prefixes = getDisplayPathPrefixes(displayPathRoot);
+  if (prefixes.length === 0) return value;
+
+  let next = value;
+  for (const prefix of prefixes) {
+    next = next.split(`${prefix}/`).join('');
+    next = next.replace(new RegExp(`${escapeRegExp(prefix)}(?=$|[\\s:;,.，。)\\]\\}])`, 'g'), '.');
+  }
+  return next;
+}
+
+function sanitizeToolCallDisplayValue(
+  value: unknown,
+  displayPathRoot: string | undefined,
+  depth = 0,
+): unknown {
+  if (!displayPathRoot) return value;
+  if (typeof value === 'string') return sanitizeDisplayPathText(value, displayPathRoot);
+  if (Array.isArray(value)) {
+    if (depth >= MAX_TOOL_CALL_DISPLAY_SANITIZE_DEPTH) return value;
+    return value.map((item) => sanitizeToolCallDisplayValue(item, displayPathRoot, depth + 1));
+  }
+  if (isRecord(value)) {
+    if (depth >= MAX_TOOL_CALL_DISPLAY_SANITIZE_DEPTH) return value;
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        sanitizeToolCallDisplayValue(item, displayPathRoot, depth + 1),
+      ]),
+    );
+  }
+  return value;
+}
+
+function sanitizeToolCallInput(
+  input: Record<string, unknown> | undefined,
+  displayPathRoot?: string,
+): Record<string, unknown> | undefined {
+  if (!input) return undefined;
+  return sanitizeToolCallDisplayValue(input, displayPathRoot) as Record<string, unknown>;
+}
+
+function sanitizeAgentToolCallEvent(
+  event: AgentToolCallEvent,
+  displayPathRoot?: string,
+): AgentToolCallEvent {
+  return {
+    ...event,
+    ...(event.input ? { input: sanitizeToolCallInput(event.input, displayPathRoot) } : {}),
+    ...(event.inputText ? { inputText: sanitizeDisplayPathText(event.inputText, displayPathRoot) } : {}),
+    ...(event.result !== undefined
+      ? { result: sanitizeToolCallDisplayValue(event.result, displayPathRoot) }
+      : {}),
+    ...(event.resultPreview
+      ? { resultPreview: sanitizeDisplayPathText(event.resultPreview, displayPathRoot) }
+      : {}),
+    ...(event.error ? { error: sanitizeDisplayPathText(event.error, displayPathRoot) } : {}),
+  };
+}
+
 function mergeToolCallEvent(
   toolCalls: WorkflowChatToolCallRecord[],
   event: AgentToolCallEvent,
+  displayPathRoot?: string,
 ): WorkflowChatToolCallRecord[] {
   const timestamp = event.timestamp || nowIso();
   const existingIndex = toolCalls.findIndex((toolCall) => toolCall.id === event.id);
   const existing = existingIndex >= 0 ? toolCalls[existingIndex] : undefined;
-  const nextInputText = event.inputJsonDelta
+  const rawInputText = event.inputJsonDelta
     ? `${existing?.inputText || ''}${event.inputJsonDelta}`.slice(-4000)
     : existing?.inputText;
-  const nextInput = event.input
+  const nextInputText = rawInputText
+    ? sanitizeDisplayPathText(rawInputText, displayPathRoot)
+    : undefined;
+  const nextInput = sanitizeToolCallInput(event.input, displayPathRoot)
     || existing?.input
     || parseToolCallInputText(nextInputText);
+  const nextResult = event.result !== undefined
+    ? sanitizeToolCallDisplayValue(event.result, displayPathRoot)
+    : existing?.result;
+  const nextResultPreview = event.resultPreview
+    ? sanitizeDisplayPathText(event.resultPreview, displayPathRoot)
+    : existing?.resultPreview;
+  const nextError = event.error
+    ? sanitizeDisplayPathText(event.error, displayPathRoot)
+    : existing?.error;
   const nextToolCall: WorkflowChatToolCallRecord = {
     id: event.id,
     name: event.name || existing?.name || 'Tool',
@@ -555,12 +656,12 @@ function mergeToolCallEvent(
     ...(nextInput ? { input: nextInput } : {}),
     ...(nextInputText ? { inputText: nextInputText } : {}),
     ...(event.result !== undefined || existing?.result !== undefined
-      ? { result: event.result !== undefined ? event.result : existing?.result }
+      ? { result: nextResult }
       : {}),
-    ...(event.resultPreview || existing?.resultPreview
-      ? { resultPreview: event.resultPreview || existing?.resultPreview }
+    ...(nextResultPreview
+      ? { resultPreview: nextResultPreview }
       : {}),
-    ...(event.error || existing?.error ? { error: event.error || existing?.error } : {}),
+    ...(nextError ? { error: nextError } : {}),
     started_at: existing?.started_at || timestamp,
     ...(event.status === 'completed' || event.status === 'failed' || event.status === 'canceled'
       ? { completed_at: timestamp }
@@ -1028,7 +1129,11 @@ function buildSystemPrompt(body: Record<string, unknown>) {
   return systemPrompt;
 }
 
-function streamAgentEventsAsSse(agentStream: ReadableStream<AgentEvent>, run?: ChatRunRecord) {
+function streamAgentEventsAsSse(
+  agentStream: ReadableStream<AgentEvent>,
+  run?: ChatRunRecord,
+  displayPathRoot?: string,
+) {
   const encoder = new TextEncoder();
   let reader: ReadableStreamDefaultReader<AgentEvent> | null = null;
   let assistantContent = '';
@@ -1092,11 +1197,17 @@ function streamAgentEventsAsSse(agentStream: ReadableStream<AgentEvent>, run?: C
           if (done) break;
           if (!value) continue;
           if (value.type === 'assistant_message') {
-            const simplifiedText = toSimplifiedChinese(value.text);
+            const simplifiedText = sanitizeDisplayPathText(
+              toSimplifiedChinese(value.text),
+              displayPathRoot,
+            );
             assistantContent += simplifiedText;
             emit({ content: simplifiedText });
           } else if (value.type === 'assistant_final') {
-            assistantContent = normalizeAiGeneratedText('chat.final', value.text);
+            assistantContent = sanitizeDisplayPathText(
+              normalizeAiGeneratedText('chat.final', value.text),
+              displayPathRoot,
+            );
             emit({
               event: 'assistant_final',
               content: assistantContent,
@@ -1104,21 +1215,22 @@ function streamAgentEventsAsSse(agentStream: ReadableStream<AgentEvent>, run?: C
             });
           } else if (value.type === 'tool_call') {
             let toolCall: WorkflowChatToolCallRecord | undefined;
+            const sanitizedToolCallEvent = sanitizeAgentToolCallEvent(value, displayPathRoot);
             if (run) {
-              run.toolCalls = mergeToolCallEvent(run.toolCalls, value);
-              toolCall = run.toolCalls.find((item) => item.id === value.id);
+              run.toolCalls = mergeToolCallEvent(run.toolCalls, value, displayPathRoot);
+              toolCall = run.toolCalls.find((item) => item.id === sanitizedToolCallEvent.id);
             }
             emit({
               event: 'tool_call',
               tool_call: toolCall || {
-                id: value.id,
-                name: value.name,
-                status: value.status,
-                ...(value.input ? { input: value.input } : {}),
-                ...(value.inputText ? { inputText: value.inputText } : {}),
-                ...(value.result !== undefined ? { result: value.result } : {}),
-                ...(value.resultPreview ? { resultPreview: value.resultPreview } : {}),
-                ...(value.error ? { error: value.error } : {}),
+                id: sanitizedToolCallEvent.id,
+                name: sanitizedToolCallEvent.name,
+                status: sanitizedToolCallEvent.status,
+                ...(sanitizedToolCallEvent.input ? { input: sanitizedToolCallEvent.input } : {}),
+                ...(sanitizedToolCallEvent.inputText ? { inputText: sanitizedToolCallEvent.inputText } : {}),
+                ...(sanitizedToolCallEvent.result !== undefined ? { result: sanitizedToolCallEvent.result } : {}),
+                ...(sanitizedToolCallEvent.resultPreview ? { resultPreview: sanitizedToolCallEvent.resultPreview } : {}),
+                ...(sanitizedToolCallEvent.error ? { error: sanitizedToolCallEvent.error } : {}),
               },
             });
           } else if (value.type === 'session_status') {
@@ -1160,19 +1272,20 @@ function streamAgentEventsAsSse(agentStream: ReadableStream<AgentEvent>, run?: C
             emit({
               event: 'terminal_output',
               stream: value.stream,
-              text: value.text,
+              text: sanitizeDisplayPathText(value.text, displayPathRoot),
             });
           } else if (value.type === 'error') {
+            const sanitizedError = sanitizeDisplayPathText(value.error, displayPathRoot);
             if (run) {
               run.status = 'failed';
-              run.error = getSafeChatErrorMessage(value.error);
+              run.error = getSafeChatErrorMessage(sanitizedError);
               run.updatedAt = nowIso();
-              const message = await persistFailedChatRun(run, value.error);
+              const message = await persistFailedChatRun(run, sanitizedError);
               pruneChatRuns();
-              closeWith({ error: getSafeChatErrorMessage(value.error), message });
+              closeWith({ error: getSafeChatErrorMessage(sanitizedError), message });
               return;
             }
-            closeWith({ error: getSafeChatErrorMessage(value.error) });
+            closeWith({ error: getSafeChatErrorMessage(sanitizedError) });
             return;
           }
         }
@@ -1191,19 +1304,24 @@ function streamAgentEventsAsSse(agentStream: ReadableStream<AgentEvent>, run?: C
       } catch (error) {
         if (run) {
           run.status = run.abortController.signal.aborted ? 'canceled' : 'failed';
-          run.error = run.status === 'failed' ? getSafeChatErrorMessage(error) : undefined;
+          const sanitizedError = sanitizeDisplayPathText(getSafeChatErrorMessage(error), displayPathRoot);
+          run.error = run.status === 'failed' ? sanitizedError : undefined;
           run.updatedAt = nowIso();
           const message = run.status === 'canceled'
             ? await persistCanceledChatRun(run)
-            : await persistFailedChatRun(run, error);
+            : await persistFailedChatRun(run, sanitizedError);
           pruneChatRuns();
           closeWith({
-            ...(run.status === 'failed' ? { error: getSafeChatErrorMessage(error) } : { done: true }),
+            ...(run.status === 'failed' ? { error: sanitizedError } : { done: true }),
             message,
           });
           return;
         }
-        closeWith({ error: error instanceof Error ? error.message : 'Agent stream interrupted' });
+        closeWith({
+          error: error instanceof Error
+            ? sanitizeDisplayPathText(error.message, displayPathRoot)
+            : 'Agent stream interrupted',
+        });
       } finally {
         stopHeartbeat();
         activeReader.releaseLock();
@@ -1251,7 +1369,7 @@ function streamClaudeAgentSdk(
     readableDirectories,
     signal: run.abortController.signal,
   });
-  return streamAgentEventsAsSse(agentStream, run);
+  return streamAgentEventsAsSse(agentStream, run, nodeWorkspace.cwd);
 }
 
 export async function GET(request: NextRequest) {
