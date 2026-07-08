@@ -23,6 +23,7 @@ function workflow(overrides: Partial<WorkflowRecord> = {}): WorkflowRecord {
     steps: [],
     contextFiles: [],
     reviewedOutputFiles: [],
+    artifacts: [],
     reviewComments: {},
     archivedReviewStepIds: [],
     contextSelections: {},

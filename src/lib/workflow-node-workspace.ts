@@ -1,7 +1,11 @@
-import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { SkillRecord, SkillVersion } from './skill-registry';
+import {
+  getWorkflowNodeRuntimeDirectory,
+  isPathInsideRoot,
+  sanitizeWorkflowRuntimeSegment,
+} from './workflow-runtime-paths';
 
 const NODE_WORKSPACE_METADATA_FILE = '.battleflow-node-workspace.json';
 const SKILL_FILE_CANDIDATES = ['SKILL.md', 'skill.md'];
@@ -33,31 +37,8 @@ interface NodeWorkspaceMetadata {
   materializedAt: string;
 }
 
-function hashForPath(value: string) {
-  return createHash('sha1').update(value).digest('hex').slice(0, 10);
-}
-
 function sanitizePathSegment(value: string, label: string) {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    throw new Error(`${label} is required to materialize a node workspace.`);
-  }
-
-  const sanitized = trimmed
-    .replace(/[^A-Za-z0-9._-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 72);
-
-  if (!sanitized) return `${label}-${hashForPath(trimmed)}`;
-  return sanitized === trimmed ? sanitized : `${sanitized}-${hashForPath(trimmed)}`;
-}
-
-function getWorkflowRuntimeRoot() {
-  return path.resolve(
-    process.env.WORKFLOW_RUNTIME_DIR?.trim()
-    || process.env.WORKFLOW_REGISTRY_DIR?.trim()
-    || path.join(process.cwd(), 'data', 'workflows'),
-  );
+  return sanitizeWorkflowRuntimeSegment(value, label);
 }
 
 function getAllowedSkillPackageRoots() {
@@ -106,11 +87,6 @@ async function realPathOrNull(filePath: string) {
   }
 }
 
-function isPathInside(candidate: string, root: string) {
-  const relative = path.relative(root, candidate);
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
 async function assertAllowedSkillPackagePath(packagePath: string) {
   const realPackagePath = await realPathOrNull(packagePath);
   if (!realPackagePath) {
@@ -121,7 +97,7 @@ async function assertAllowedSkillPackagePath(packagePath: string) {
     getAllowedSkillPackageRoots().map((root) => realPathOrNull(root)),
   )).filter((root): root is string => Boolean(root));
 
-  if (!realAllowedRoots.some((root) => isPathInside(realPackagePath, root))) {
+  if (!realAllowedRoots.some((root) => isPathInsideRoot(realPackagePath, root))) {
     throw new Error('Skill package path is outside allowed registry roots.');
   }
 
@@ -195,12 +171,12 @@ async function writeSkillMd(
 export async function materializeNodeWorkspace(
   input: MaterializeNodeWorkspaceInput,
 ): Promise<MaterializedNodeWorkspace> {
-  const organizationSegment = sanitizePathSegment(input.organizationId, 'organizationId');
-  const workflowSegment = sanitizePathSegment(input.workflowId, 'workflowId');
-  const stepSegment = sanitizePathSegment(input.stepId, 'stepId');
   const skillName = resolveSkillName(input.skill);
-  const root = getWorkflowRuntimeRoot();
-  const cwd = path.join(root, organizationSegment, workflowSegment, 'nodes', stepSegment);
+  const cwd = getWorkflowNodeRuntimeDirectory({
+    organizationId: input.organizationId,
+    workflowId: input.workflowId,
+    stepId: input.stepId,
+  });
   const claudeDirectory = path.join(cwd, '.claude');
   const skillsRoot = path.join(claudeDirectory, 'skills');
   const tempSkillsRoot = path.join(claudeDirectory, `.skills-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`);

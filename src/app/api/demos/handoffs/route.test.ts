@@ -104,6 +104,7 @@ function workflow(overrides: Partial<WorkflowRecord> = {}): WorkflowRecord {
     }],
     contextFiles: [],
     reviewedOutputFiles: [],
+    artifacts: [],
     reviewComments: {},
     archivedReviewStepIds: [],
     contextSelections: {},

@@ -18,6 +18,7 @@ export type WorkflowStepValidationStatus = 'not_started' | 'running' | 'passed' 
 export type WorkflowStepValidationAttemptStatus = 'running' | 'passed' | 'failed' | 'error';
 export type WorkflowStepSnapshotType = 'auto' | 'manual' | 'validation_candidate';
 export type WorkflowDemoHandoffStatus = 'queued' | 'ready' | 'running' | 'succeeded' | 'failed' | 'canceled';
+export type WorkflowArtifactFormat = 'markdown' | 'text' | 'json';
 
 export interface WorkflowStepValidationFindingRecord {
   id: string;
@@ -146,6 +147,24 @@ export interface WorkflowReviewedOutputFileRecord {
   extension?: string;
   extractedTextRelativePath?: string;
   extractedTextPath?: string;
+}
+
+export interface WorkflowArtifactRecord {
+  id: string;
+  workflowId: string;
+  producedByStepId: string;
+  producedByStepName: string;
+  title: string;
+  summary: string;
+  fileName: string;
+  path: string;
+  format: WorkflowArtifactFormat;
+  mimeType: string;
+  size: number;
+  checksum: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface WorkflowChatAttachmentRecord {
@@ -294,6 +313,7 @@ export interface WorkflowRecord {
   steps: WorkflowStepRecord[];
   contextFiles: WorkflowContextFileRecord[];
   reviewedOutputFiles: WorkflowReviewedOutputFileRecord[];
+  artifacts: WorkflowArtifactRecord[];
   reviewComments: Record<string, string>;
   archivedReviewStepIds: string[];
   contextSelections: Record<string, WorkflowContextSelectionRecord>;
@@ -503,6 +523,58 @@ function normalizeReviewedOutputFile(
     created_at: file.created_at || now,
     ...normalizeStoredAttachmentFields(file),
   };
+}
+
+function normalizeWorkflowArtifactFormat(value: unknown): WorkflowArtifactFormat {
+  return value === 'text' || value === 'json' ? value : 'markdown';
+}
+
+function normalizeWorkflowArtifact(
+  artifact: Partial<WorkflowArtifactRecord>,
+  index: number,
+  workflowId: string,
+): WorkflowArtifactRecord {
+  const now = nowIso();
+  const fileName = typeof artifact.fileName === 'string' && artifact.fileName.trim()
+    ? artifact.fileName.trim()
+    : `artifact-${index + 1}.md`;
+  return {
+    id: artifact.id || uniqueId('artifact', fileName),
+    workflowId: artifact.workflowId || workflowId,
+    producedByStepId: typeof artifact.producedByStepId === 'string' ? artifact.producedByStepId : '',
+    producedByStepName: typeof artifact.producedByStepName === 'string' ? artifact.producedByStepName : '',
+    title: typeof artifact.title === 'string' && artifact.title.trim()
+      ? artifact.title.trim()
+      : `Artifact ${index + 1}`,
+    summary: typeof artifact.summary === 'string' ? artifact.summary : '',
+    fileName,
+    path: typeof artifact.path === 'string' && artifact.path.trim()
+      ? artifact.path.trim()
+      : `artifacts/${fileName}`,
+    format: normalizeWorkflowArtifactFormat(artifact.format),
+    mimeType: typeof artifact.mimeType === 'string' && artifact.mimeType.trim()
+      ? artifact.mimeType.trim()
+      : 'text/markdown; charset=utf-8',
+    size: typeof artifact.size === 'number' && Number.isFinite(artifact.size) ? artifact.size : 0,
+    checksum: typeof artifact.checksum === 'string' ? artifact.checksum : '',
+    version: typeof artifact.version === 'number' && Number.isFinite(artifact.version)
+      ? Math.max(1, Math.floor(artifact.version))
+      : 1,
+    created_at: artifact.created_at || now,
+    updated_at: artifact.updated_at || now,
+  };
+}
+
+export function normalizeWorkflowArtifacts(
+  value: unknown,
+  workflowId: string,
+): WorkflowArtifactRecord[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is Partial<WorkflowArtifactRecord> => (
+      Boolean(item) && typeof item === 'object' && !Array.isArray(item)
+    ))
+    .map((item, index) => normalizeWorkflowArtifact(item, index, workflowId));
 }
 
 function normalizeReviewComments(value: unknown): Record<string, string> {
@@ -961,11 +1033,12 @@ function sortWorkflowSteps(steps: WorkflowStepRecord[]): WorkflowStepRecord[] {
 
 function normalizeWorkflow(workflow: Partial<WorkflowRecord>): WorkflowRecord {
   const now = nowIso();
+  const id = workflow.id || uniqueId('workflow', workflow.name || 'workflow');
   const steps = Array.isArray(workflow.steps)
     ? workflow.steps.map((step, index) => normalizeStep(step, index))
     : [];
   const normalized: WorkflowRecord = {
-    id: workflow.id || uniqueId('workflow', workflow.name || 'workflow'),
+    id,
     workspaceId: workflow.workspaceId || '',
     name: workflow.name || '未命名工作流',
     description: workflow.description || '',
@@ -978,6 +1051,7 @@ function normalizeWorkflow(workflow: Partial<WorkflowRecord>): WorkflowRecord {
     reviewedOutputFiles: Array.isArray(workflow.reviewedOutputFiles)
       ? workflow.reviewedOutputFiles.map((file, index) => normalizeReviewedOutputFile(file, index))
       : [],
+    artifacts: normalizeWorkflowArtifacts(workflow.artifacts, id),
     reviewComments: normalizeReviewComments(workflow.reviewComments),
     archivedReviewStepIds: Array.isArray(workflow.archivedReviewStepIds)
       ? workflow.archivedReviewStepIds.filter((stepId): stepId is string => typeof stepId === 'string')
@@ -989,7 +1063,7 @@ function normalizeWorkflow(workflow: Partial<WorkflowRecord>): WorkflowRecord {
     stepChats: normalizeStepChats(workflow.stepChats),
     skillDrafts: normalizeSkillDrafts(workflow.skillDrafts),
     validationAttempts: normalizeValidationAttempts(workflow.validationAttempts, workflow.id || ''),
-    demoHandoffs: normalizeWorkflowDemoHandoffs(workflow.demoHandoffs, workflow.id || ''),
+    demoHandoffs: normalizeWorkflowDemoHandoffs(workflow.demoHandoffs, id),
     created_by: typeof workflow.created_by === 'string' ? workflow.created_by : null,
     created_by_name: typeof workflow.created_by_name === 'string' ? workflow.created_by_name : null,
     created_by_email: typeof workflow.created_by_email === 'string' ? workflow.created_by_email : null,
