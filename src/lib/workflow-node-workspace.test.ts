@@ -162,4 +162,21 @@ describe('materializeNodeWorkspace', () => {
       }),
     })).rejects.toThrow('outside allowed registry roots');
   });
+
+  it('falls back to registry Skill markdown when the package directory is missing', async () => {
+    const missingPackagePath = path.join(tempRoot, 'skill-registry', 'packages', 'missing-skill', '1.0.0');
+
+    const workspace = await materializeNodeWorkspace({
+      organizationId: 'org-1',
+      workflowId: 'workflow-1',
+      stepId: 'step-1',
+      skill: createSkill({
+        skill_md: '# Registry Skill Markdown\n\nUse the stored registry instructions.',
+        versions: [{ version: '1.0.0', updated_at: '2026-07-08T00:00:00.000Z', changelog: '', package_path: missingPackagePath }],
+      }),
+    });
+
+    expect(readFileSync(path.join(workspace.skillDirectory, 'SKILL.md'), 'utf8')).toContain('Registry Skill Markdown');
+    expect(JSON.parse(readFileSync(workspace.metadataPath, 'utf8'))).not.toHaveProperty('sourcePackagePath');
+  });
 });

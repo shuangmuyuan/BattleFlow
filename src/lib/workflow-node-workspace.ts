@@ -128,6 +128,14 @@ async function assertAllowedSkillPackagePath(packagePath: string) {
   return realPackagePath;
 }
 
+async function resolveAllowedSkillPackagePath(packagePath: string | null, hasSkillMarkdownFallback: boolean) {
+  if (!packagePath) return null;
+  if (!(await pathExists(packagePath)) && hasSkillMarkdownFallback) {
+    return null;
+  }
+  return assertAllowedSkillPackagePath(packagePath);
+}
+
 async function findSkillFile(directory: string) {
   for (const fileName of SKILL_FILE_CANDIDATES) {
     const candidate = path.join(directory, fileName);
@@ -199,9 +207,10 @@ export async function materializeNodeWorkspace(
   const skillDirectory = path.join(skillsRoot, skillName);
   const tempSkillDirectory = path.join(tempSkillsRoot, skillName);
   const sourcePackagePath = resolveSkillPackagePath(input.skill);
-  const allowedSourcePackagePath = sourcePackagePath
-    ? await assertAllowedSkillPackagePath(sourcePackagePath)
-    : null;
+  const allowedSourcePackagePath = await resolveAllowedSkillPackagePath(
+    sourcePackagePath,
+    Boolean(input.skill.skill_md.trim()),
+  );
 
   await fs.mkdir(claudeDirectory, { recursive: true });
   await fs.rm(tempSkillsRoot, { recursive: true, force: true });
