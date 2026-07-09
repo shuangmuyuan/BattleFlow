@@ -92,10 +92,35 @@ ALTER TABLE chat_run_events
 
 CREATE INDEX IF NOT EXISTS chat_run_events_created_at_idx ON chat_run_events (created_at);
 
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE p.proname = 'battleflow_set_updated_at'
+      AND n.nspname = current_schema()
+      AND pg_get_function_identity_arguments(p.oid) = ''
+  ) THEN
+    EXECUTE $function$
+      CREATE FUNCTION battleflow_set_updated_at()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $body$
+      BEGIN
+        NEW.updated_at = now();
+        RETURN NEW;
+      END;
+      $body$;
+    $function$;
+  END IF;
+END;
+$$;
+
 DROP TRIGGER IF EXISTS chat_runs_set_updated_at ON chat_runs;
 CREATE TRIGGER chat_runs_set_updated_at
 BEFORE UPDATE ON chat_runs
-FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+FOR EACH ROW EXECUTE FUNCTION battleflow_set_updated_at();
 
 DO $$
 BEGIN
