@@ -17,10 +17,9 @@ Review security-sensitive BattleFlow changes: auth, Supabase credentials, Skill 
 1. Check secret exposure and client/server env boundaries.
 2. Check request-body narrowing and untrusted content handling.
 3. Check file-system path confinement.
-4. Check CLI permissions, tool access, session persistence, and budget defaults.
+4. Check CLI permissions, tool access, session persistence, and prompt/context limits.
 5. Check logging for sensitive values.
 
 ## Output
 
 List critical findings first. A critical secret exposure, arbitrary path write, or broadened CLI permission without review blocks completion.
-

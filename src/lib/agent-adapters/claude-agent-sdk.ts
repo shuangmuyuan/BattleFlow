@@ -16,7 +16,6 @@ import {
   buildConversationPrompt,
   buildToolCallEvent,
   getClaudeCommand,
-  getClaudeMaxBudgetUsd,
   getClaudeModel,
   getClaudeWorkspaceDir,
   getString,
@@ -37,11 +36,6 @@ const NON_NODE_DISALLOWED_TOOLS = ['Skill', ...MUTATING_WRITE_TOOLS, ...UNSUPPOR
 const PROTECTED_NODE_PATH_SEGMENTS = new Set(['.claude']);
 const PROTECTED_NODE_FILE_NAMES = new Set(['.battleflow-node-workspace.json']);
 const TOOL_PATH_KEYS = ['file_path', 'filePath', 'path'];
-
-function parseBudgetUsd(value: string) {
-  const budget = Number.parseFloat(value);
-  return Number.isFinite(budget) && budget > 0 ? budget : undefined;
-}
 
 function getClaudeSdkExecutablePath() {
   const command = process.env.CLAUDE_COMMAND?.trim();
@@ -358,7 +352,6 @@ function buildClaudeAgentSdkOptions(
 ): Options {
   const configuredTools = getConfiguredClaudeTools();
   const executablePath = getClaudeSdkExecutablePath();
-  const maxBudgetUsd = parseBudgetUsd(getClaudeMaxBudgetUsd());
   const env = buildClaudeRuntimeEnv();
   const skills = normalizeSkillNames(input.skills);
   const hasProjectSkills = skills.length > 0;
@@ -374,7 +367,6 @@ function buildClaudeAgentSdkOptions(
     env,
     ...(writeGuard || {}),
     includePartialMessages: true,
-    maxBudgetUsd,
     model: getClaudeModel(),
     ...(executablePath ? { pathToClaudeCodeExecutable: executablePath } : {}),
     permissionMode: 'dontAsk',

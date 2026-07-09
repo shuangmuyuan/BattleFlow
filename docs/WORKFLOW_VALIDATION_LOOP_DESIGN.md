@@ -81,8 +81,7 @@ pending -> in_progress -> completed
 - safe mode；
 - no session persistence；
 - no tools；
-- JSON 流式输出；
-- 预算受 `CLAUDE_MAX_BUDGET_USD` 控制。
+- JSON 流式输出。
 
 验证 Agent 应该沿用这个边界。它只做只读判断，不执行脚本、不读写文件、不调用外部工具。
 

@@ -371,7 +371,6 @@ Demo Handoff（把完成节点交付到外部 Frieren Demo 平台）保持**节�
 | `--permission-mode dontAsk` | `options.permissionMode` + `canUseTool` | 见 §12 |
 | （无） | `options.mcpServers` | MCP 接入点 + HITL 工具（§12） |
 | （无，靠 CWD 隐式发现） | `options.settingSources: ['project']` + `options.skills` | **关键**：`project` 加载项目 `.claude/skills/`；`skills` 限定本轮启用的 Skill，但不是文件系统沙箱 |
-| `--max-budget-usd` | `options.maxBudgetUsd` | 按实际 SDK 类型校验字段名 |
 | `--no-session-persistence` + 每轮重拼历史 | 有状态会话（§13） | 废弃 `buildConversationPrompt` 重拼 |
 | 手写 `ClaudeCodeStreamEvent` 解析 | SDK `SDKMessage`（system/assistant/user/result/stream_event） | 映射到既有 `AgentEvent` |
 

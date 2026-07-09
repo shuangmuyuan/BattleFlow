@@ -132,7 +132,6 @@ The local route is `POST /api/demos/handoffs` with `{ workflowId, stepId }`. It 
 | `WORKFLOW_REGISTRY_DIR` | File-backed workflow registry root. |
 | `CLAUDE_COMMAND` | Claude Code CLI command, defaults to `claude`. |
 | `CLAUDE_MODEL` | Claude model alias, defaults to `sonnet`. |
-| `CLAUDE_MAX_BUDGET_USD` | Per-turn CLI budget, defaults to `1.00`. |
 | `CLAUDE_WORKSPACE_DIR` | Working directory for Claude CLI turns. |
 | `BATTLEFLOW_CLAUDE_TOOLS` | Optional comma-separated Claude Code tools for SDK-backed workflow chat and CLI-backed helper flows. `Read`, `Grep`, `Glob`, `WebSearch`, `WebFetch`, `Write`, and `Edit` are accepted for SDK workflow chat; `Write` and `Edit` are guarded to the active node cwd. Legacy CLI helper calls filter this value back to the read/web subset. `MultiEdit`, `Bash`, and unknown tools are ignored. Local `pnpm dev` and production `pnpm start` default to `Read,Grep,Glob,WebSearch,WebFetch,Write,Edit` unless explicitly overridden. |
 | `BATTLEFLOW_CLAUDE_SETTINGS_PATH` | Optional local-development fallback path for a Claude settings JSON file whose `env` block should be merged into the SDK subprocess environment. Do not use this as the Docker/production secret source; inject Anthropic credentials as environment variables instead. |

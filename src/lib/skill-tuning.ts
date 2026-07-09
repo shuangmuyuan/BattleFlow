@@ -107,10 +107,6 @@ function getClaudeModel() {
   return process.env.CLAUDE_MODEL || 'sonnet';
 }
 
-function getClaudeMaxBudgetUsd() {
-  return process.env.CLAUDE_MAX_BUDGET_USD || '1.00';
-}
-
 function getClaudeWorkspaceDir() {
   return process.env.CLAUDE_WORKSPACE_DIR || process.cwd();
 }
@@ -248,8 +244,6 @@ function runClaudeCli(systemPrompt: string, prompt: string, timeoutMs = 120_000)
       '--include-partial-messages',
       '--model',
       getClaudeModel(),
-      '--max-budget-usd',
-      getClaudeMaxBudgetUsd(),
       ...buildClaudeToolsArgs(),
       '--permission-mode',
       'dontAsk',

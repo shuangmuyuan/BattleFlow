@@ -43,7 +43,7 @@ File-backed registries are simple and inspectable but not meant for high-concurr
 - Stream responses instead of buffering full model output.
 - Truncate workflow, knowledge, and file context before prompt construction.
 - Keep Skill package assets under a separate prompt budget from uploaded workflow files.
-- Keep CLI budget defaults conservative.
+- Keep prompt/context budgets conservative; BattleFlow does not set a per-turn Claude spend cap.
 - Surface adapter availability through `/api/agent-runtime` without blocking dashboard rendering.
 - Validation prompts use bounded candidate, Skill, previous-step, and recent-message context. Keep those budgets conservative because each validation can make two CLI calls plus one repair call when JSON parsing fails.
 - `/api/workflows/validation` is currently synchronous from the browser's perspective. Long Claude CLI runs can hold the request open; if usage grows, move validation into a queued/background job with polling rather than increasing prompt size or route timeouts.

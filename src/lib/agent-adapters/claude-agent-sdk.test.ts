@@ -117,7 +117,6 @@ describe('streamClaudeAgentSdkTurn', () => {
     process.env = { ...originalEnv };
     process.env.BATTLEFLOW_CLAUDE_TOOLS = 'Read,Grep,Glob';
     process.env.CLAUDE_MODEL = 'sonnet';
-    process.env.CLAUDE_MAX_BUDGET_USD = '1.25';
     process.env.CLAUDE_WORKSPACE_DIR = '/tmp/battleflow-workspace';
     process.env.BATTLEFLOW_PROJECT_ENV = 'DEV';
     process.env.BATTLEFLOW_CLAUDE_SETTINGS_PATH = path.join(tmpdir(), 'battleflow-missing-claude-settings.json');
@@ -248,7 +247,6 @@ describe('streamClaudeAgentSdkTurn', () => {
         cwd: '/tmp/battleflow-workspace',
         disallowedTools: ['Skill', 'Write', 'Edit', 'MultiEdit', 'Bash'],
         includePartialMessages: true,
-        maxBudgetUsd: 1.25,
         model: 'sonnet',
         permissionMode: 'dontAsk',
         persistSession: false,
@@ -258,6 +256,7 @@ describe('streamClaudeAgentSdkTurn', () => {
         additionalDirectories: ['/tmp/readable'],
       }),
     });
+    expect(mocks.query.mock.calls[0]?.[0].options).not.toHaveProperty('maxBudgetUsd');
     expect(events).toContainEqual({ type: 'session_status', status: 'starting' });
     expect(events).toContainEqual({ type: 'session_status', status: 'starting', sessionId: 'session-1' });
     expect(events).toContainEqual(expect.objectContaining({
@@ -452,7 +451,7 @@ describe('streamClaudeAgentSdkTurn', () => {
     mocks.query.mockReturnValue(createMockQuery([
       sdkMessage({
         type: 'result',
-        subtype: 'error_max_budget_usd',
+        subtype: 'error_runtime',
         duration_ms: 10,
         duration_api_ms: 9,
         is_error: true,
