@@ -1423,6 +1423,7 @@ function streamClaudeAgentSdk(
     skills: [nodeWorkspace.skillName],
     attachments,
     readableDirectories,
+    writableRoot: nodeWorkspace.cwd,
     signal: run.abortController.signal,
   });
   return streamAgentEventsAsSse(agentStream, run, nodeWorkspace.cwd);

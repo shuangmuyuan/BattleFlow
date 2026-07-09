@@ -1,7 +1,16 @@
 import { existsSync, promises as fs, readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
-import { query, type Options, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import {
+  query,
+  type CanUseTool,
+  type HookCallbackMatcher,
+  type HookInput,
+  type HookJSONOutput,
+  type Options,
+  type PermissionResult,
+  type SDKMessage,
+} from '@anthropic-ai/claude-agent-sdk';
 import { getConfiguredClaudeTools } from './claude-code-tools';
 import {
   buildConversationPrompt,
@@ -22,8 +31,12 @@ import {
 } from './claude-code-cli';
 import type { AgentEvent, AgentRuntimeStatus, AgentTurnInput } from './types';
 
-const WRITE_TOOL_NAMES = ['Write', 'Edit', 'MultiEdit', 'Bash'];
-const PHASE_ZERO_DISALLOWED_TOOLS = ['Skill', ...WRITE_TOOL_NAMES];
+const MUTATING_WRITE_TOOLS = ['Write', 'Edit'];
+const UNSUPPORTED_WRITE_TOOLS = ['MultiEdit', 'Bash'];
+const NON_NODE_DISALLOWED_TOOLS = ['Skill', ...MUTATING_WRITE_TOOLS, ...UNSUPPORTED_WRITE_TOOLS];
+const PROTECTED_NODE_PATH_SEGMENTS = new Set(['.claude']);
+const PROTECTED_NODE_FILE_NAMES = new Set(['.battleflow-node-workspace.json']);
+const TOOL_PATH_KEYS = ['file_path', 'filePath', 'path'];
 
 function parseBudgetUsd(value: string) {
   const budget = Number.parseFloat(value);
@@ -147,6 +160,190 @@ function normalizeSkillNames(skills: string[] | undefined) {
   return normalized;
 }
 
+function isPathInside(candidate: string, root: string) {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function getCanonicalWriteToolName(toolName: string) {
+  const normalized = toolName.trim().toLowerCase();
+  if (normalized === 'write') return 'Write';
+  if (normalized === 'edit') return 'Edit';
+  return null;
+}
+
+function getConfiguredWriteTools(configuredTools: string[]) {
+  return configuredTools.filter((tool) => getCanonicalWriteToolName(tool));
+}
+
+function getNodeWritableRoot(input: AgentTurnInput) {
+  const cwd = input.cwd?.trim();
+  const writableRoot = input.writableRoot?.trim();
+  if (!cwd || !writableRoot) return null;
+
+  const resolvedCwd = path.resolve(cwd);
+  const resolvedWritableRoot = path.resolve(writableRoot);
+  return resolvedCwd === resolvedWritableRoot ? resolvedWritableRoot : null;
+}
+
+function buildDisallowedTools(configuredTools: string[], hasProjectSkills: boolean, writableRoot: string | null) {
+  if (!hasProjectSkills) return NON_NODE_DISALLOWED_TOOLS;
+
+  const configured = new Set(configuredTools);
+  const disallowed: string[] = [];
+  for (const tool of MUTATING_WRITE_TOOLS) {
+    if (!writableRoot || !configured.has(tool)) disallowed.push(tool);
+  }
+  return [...disallowed, ...UNSUPPORTED_WRITE_TOOLS];
+}
+
+function extractToolTargetPath(input: Record<string, unknown>) {
+  for (const key of TOOL_PATH_KEYS) {
+    const value = input[key];
+    if (typeof value === 'string') return value.trim();
+  }
+  return '';
+}
+
+async function pathExists(filePath: string) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function realPathOrNull(filePath: string) {
+  try {
+    return await fs.realpath(filePath);
+  } catch {
+    return null;
+  }
+}
+
+async function findExistingAncestor(candidate: string, boundary: string) {
+  let current = candidate;
+  while (isPathInside(current, boundary)) {
+    if (await pathExists(current)) return current;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return boundary;
+}
+
+function isProtectedNodePath(targetPath: string, writableRoot: string) {
+  const relative = path.relative(writableRoot, targetPath);
+  const [firstSegment] = relative.split(path.sep);
+  return PROTECTED_NODE_PATH_SEGMENTS.has(firstSegment) || PROTECTED_NODE_FILE_NAMES.has(path.basename(targetPath));
+}
+
+async function validateWritableToolPath(
+  writableRoot: string,
+  toolName: string,
+  input: Record<string, unknown>,
+): Promise<{ allowed: true; targetPath: string } | { allowed: false; reason: string }> {
+  const canonicalToolName = getCanonicalWriteToolName(toolName);
+  if (!canonicalToolName) return { allowed: true, targetPath: writableRoot };
+
+  const rawPath = extractToolTargetPath(input);
+  if (!rawPath) {
+    return { allowed: false, reason: `${canonicalToolName} requires a file path inside the current workflow node directory.` };
+  }
+
+  const rootPath = path.resolve(writableRoot);
+  const targetPath = path.resolve(rootPath, rawPath);
+  if (!isPathInside(targetPath, rootPath)) {
+    return { allowed: false, reason: `${canonicalToolName} can only write inside the current workflow node directory.` };
+  }
+
+  if (isProtectedNodePath(targetPath, rootPath)) {
+    return { allowed: false, reason: `${canonicalToolName} cannot modify BattleFlow runtime metadata or materialized Skill files.` };
+  }
+
+  const realRoot = await fs.realpath(rootPath).catch(() => rootPath);
+  const realTarget = await realPathOrNull(targetPath);
+  if (realTarget) {
+    return isPathInside(realTarget, realRoot)
+      ? { allowed: true, targetPath }
+      : { allowed: false, reason: `${canonicalToolName} resolved outside the current workflow node directory.` };
+  }
+
+  const ancestor = await findExistingAncestor(path.dirname(targetPath), rootPath);
+  const realAncestor = await fs.realpath(ancestor).catch(() => ancestor);
+  const realCandidate = path.resolve(realAncestor, path.relative(ancestor, targetPath));
+
+  return isPathInside(realCandidate, realRoot)
+    ? { allowed: true, targetPath }
+    : { allowed: false, reason: `${canonicalToolName} parent directory resolves outside the current workflow node directory.` };
+}
+
+function buildWritePermissionResult(
+  options: Parameters<CanUseTool>[2],
+  validation: Awaited<ReturnType<typeof validateWritableToolPath>>,
+): PermissionResult {
+  if (validation.allowed) {
+    return {
+      behavior: 'allow',
+      toolUseID: options.toolUseID,
+    };
+  }
+
+  return {
+    behavior: 'deny',
+    message: validation.reason,
+    interrupt: false,
+    toolUseID: options.toolUseID,
+  };
+}
+
+function buildPreToolUseOutput(validation: Awaited<ReturnType<typeof validateWritableToolPath>>): HookJSONOutput {
+  if (validation.allowed) {
+    return {
+      continue: true,
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'allow',
+      },
+    };
+  }
+
+  return {
+    continue: false,
+    decision: 'block',
+    reason: validation.reason,
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: validation.reason,
+    },
+  };
+}
+
+function buildNodeWriteGuard(writableRoot: string): Pick<Options, 'canUseTool' | 'hooks'> {
+  const canUseTool: CanUseTool = async (toolName, input, options) => {
+    const validation = await validateWritableToolPath(writableRoot, toolName, input);
+    return buildWritePermissionResult(options, validation);
+  };
+
+  const preToolUseHooks: HookCallbackMatcher[] = [{
+    hooks: [async (input: HookInput): Promise<HookJSONOutput> => {
+      if (input.hook_event_name !== 'PreToolUse') return { continue: true };
+      const toolInput = isRecord(input.tool_input) ? input.tool_input : {};
+      const validation = await validateWritableToolPath(writableRoot, input.tool_name, toolInput);
+      return buildPreToolUseOutput(validation);
+    }],
+  }];
+
+  return {
+    canUseTool,
+    hooks: {
+      PreToolUse: preToolUseHooks,
+    },
+  };
+}
+
 function hasClaudeAgentSdkCredentials(env: NodeJS.ProcessEnv | Record<string, string | undefined>) {
   return Boolean(
     env.ANTHROPIC_API_KEY
@@ -165,14 +362,17 @@ function buildClaudeAgentSdkOptions(
   const env = buildClaudeRuntimeEnv();
   const skills = normalizeSkillNames(input.skills);
   const hasProjectSkills = skills.length > 0;
+  const writableRoot = getNodeWritableRoot(input);
+  const writeGuard = writableRoot ? buildNodeWriteGuard(writableRoot) : null;
 
   return {
     abortController,
     additionalDirectories: normalizeReadableDirectories(input.readableDirectories),
     allowedTools: configuredTools,
     cwd: input.cwd?.trim() || getClaudeWorkspaceDir(),
-    disallowedTools: hasProjectSkills ? WRITE_TOOL_NAMES : PHASE_ZERO_DISALLOWED_TOOLS,
+    disallowedTools: buildDisallowedTools(configuredTools, hasProjectSkills, writableRoot),
     env,
+    ...(writeGuard || {}),
     includePartialMessages: true,
     maxBudgetUsd,
     model: getClaudeModel(),
@@ -190,6 +390,7 @@ export async function checkClaudeAgentSdkRuntime(): Promise<AgentRuntimeStatus> 
   const model = getClaudeModel();
   const cwd = getClaudeWorkspaceDir();
   const configuredTools = getConfiguredClaudeTools();
+  const writeTools = getConfiguredWriteTools(configuredTools);
   const command = getClaudeSdkCommandLabel();
   const env = buildClaudeRuntimeEnv();
   const hasCredentials = hasClaudeAgentSdkCredentials(env);
@@ -212,6 +413,9 @@ export async function checkClaudeAgentSdkRuntime(): Promise<AgentRuntimeStatus> 
     outputFormat: 'sdk-message',
     toolsEnabled: configuredTools.length > 0,
     tools: configuredTools,
+    writeToolsEnabled: writeTools.length > 0,
+    writeTools,
+    writeGuardEnabled: true,
     auth: {
       anthropicBaseUrlConfigured: Boolean(env.ANTHROPIC_BASE_URL),
       anthropicTokenConfigured: hasCredentials,

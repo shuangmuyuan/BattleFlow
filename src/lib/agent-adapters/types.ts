@@ -52,6 +52,9 @@ export interface AgentRuntimeStatus {
   outputFormat: 'sdk-message' | 'stream-json';
   toolsEnabled: boolean;
   tools?: string[];
+  writeToolsEnabled?: boolean;
+  writeTools?: string[];
+  writeGuardEnabled?: boolean;
   auth: {
     anthropicBaseUrlConfigured: boolean;
     anthropicTokenConfigured: boolean;
@@ -66,6 +69,7 @@ export interface AgentTurnInput {
   skills?: string[];
   attachments?: AgentInputAttachment[];
   readableDirectories?: string[];
+  writableRoot?: string;
   signal?: AbortSignal;
 }
 

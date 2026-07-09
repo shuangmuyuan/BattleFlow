@@ -4,6 +4,8 @@ const SUPPORTED_CLAUDE_TOOLS = new Map([
   ['glob', 'Glob'],
   ['websearch', 'WebSearch'],
   ['webfetch', 'WebFetch'],
+  ['write', 'Write'],
+  ['edit', 'Edit'],
 ]);
 
 export function getConfiguredClaudeTools(env: NodeJS.ProcessEnv = process.env) {

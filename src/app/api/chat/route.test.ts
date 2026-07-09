@@ -848,8 +848,10 @@ describe('Chat API route', () => {
       readableDirectories: string[];
       cwd: string;
       skills: string[];
+      writableRoot: string;
     };
     expect(agentInput.cwd).toBe('/tmp/battleflow-runtime/org-1/workflow-1/nodes/step-1');
+    expect(agentInput.writableRoot).toBe('/tmp/battleflow-runtime/org-1/workflow-1/nodes/step-1');
     expect(agentInput.skills).toEqual(['user-needs-breakdown']);
     expect(agentInput.systemPrompt).toContain('Active BattleFlow Skill: 用户需求拆解');
     expect(agentInput.systemPrompt).toContain('enabled through Claude Agent SDK project Skill discovery');

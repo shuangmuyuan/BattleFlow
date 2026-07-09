@@ -1,9 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { AgentEvent } from './types';
+import { getConfiguredClaudeTools } from './claude-code-tools';
 
 const mocks = vi.hoisted(() => ({
   query: vi.fn(),
@@ -17,6 +18,24 @@ import { checkClaudeAgentSdkRuntime, streamClaudeAgentSdkTurn } from './claude-a
 
 type MockQuery = AsyncGenerator<SDKMessage, void> & {
   close: ReturnType<typeof vi.fn>;
+};
+
+type CapturedSdkOptions = {
+  allowedTools?: string[];
+  canUseTool?: (
+    toolName: string,
+    input: Record<string, unknown>,
+    options: { signal: AbortSignal; toolUseID: string; requestId: string },
+  ) => Promise<{ behavior: string; message?: string } | null>;
+  cwd?: string;
+  disallowedTools?: string[];
+  hooks?: {
+    PreToolUse?: Array<{
+      hooks: Array<(input: unknown) => Promise<unknown>>;
+    }>;
+  };
+  tools?: string[];
+  writableRoot?: string;
 };
 
 const originalEnv = { ...process.env };
@@ -49,6 +68,41 @@ async function readAgentStream(stream: ReadableStream<AgentEvent>) {
 
   return events;
 }
+
+function successMessages(): SDKMessage[] {
+  return [
+    sdkMessage({
+      type: 'result',
+      subtype: 'success',
+      duration_ms: 10,
+      duration_api_ms: 9,
+      is_error: false,
+      num_turns: 1,
+      result: 'OK',
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: {},
+      modelUsage: {},
+      permission_denials: [],
+      uuid: 'uuid-result',
+      session_id: 'session-1',
+    }),
+  ];
+}
+
+function getCapturedOptions(): CapturedSdkOptions {
+  const call = mocks.query.mock.calls.at(-1)?.[0] as { options?: CapturedSdkOptions } | undefined;
+  return call?.options || {};
+}
+
+describe('getConfiguredClaudeTools', () => {
+  it('accepts Write and Edit while ignoring unsupported mutating tools', () => {
+    expect(getConfiguredClaudeTools({
+      ...process.env,
+      BATTLEFLOW_CLAUDE_TOOLS: 'Read Write Edit MultiEdit Bash Nope',
+    })).toEqual(['Read', 'Write', 'Edit']);
+  });
+});
 
 describe('streamClaudeAgentSdkTurn', () => {
   beforeEach(() => {
@@ -234,24 +288,7 @@ describe('streamClaudeAgentSdkTurn', () => {
   });
 
   it('uses node cwd and project Skill discovery when skills are provided', async () => {
-    mocks.query.mockReturnValue(createMockQuery([
-      sdkMessage({
-        type: 'result',
-        subtype: 'success',
-        duration_ms: 10,
-        duration_api_ms: 9,
-        is_error: false,
-        num_turns: 1,
-        result: 'OK',
-        stop_reason: 'end_turn',
-        total_cost_usd: 0.01,
-        usage: {},
-        modelUsage: {},
-        permission_denials: [],
-        uuid: 'uuid-result',
-        session_id: 'session-1',
-      }),
-    ]));
+    mocks.query.mockReturnValue(createMockQuery(successMessages()));
 
     const stream = streamClaudeAgentSdkTurn({
       messages: [{ role: 'user', content: 'Run the current method.' }],
@@ -276,6 +313,132 @@ describe('streamClaudeAgentSdkTurn', () => {
         tools: ['Read', 'Grep', 'Glob'],
       }),
     });
+  });
+
+  it('keeps Write and Edit disallowed for non-node turns even when configured', async () => {
+    process.env.BATTLEFLOW_CLAUDE_TOOLS = 'Read,Write,Edit';
+    mocks.query.mockReturnValue(createMockQuery(successMessages()));
+
+    const stream = streamClaudeAgentSdkTurn({
+      messages: [{ role: 'user', content: 'Write a draft.' }],
+      systemPrompt: 'Test',
+    });
+
+    await readAgentStream(stream);
+
+    expect(mocks.query).toHaveBeenCalledWith({
+      prompt: 'User:\nWrite a draft.',
+      options: expect.objectContaining({
+        allowedTools: ['Read', 'Write', 'Edit'],
+        disallowedTools: ['Skill', 'Write', 'Edit', 'MultiEdit', 'Bash'],
+        settingSources: [],
+        tools: ['Read', 'Write', 'Edit'],
+      }),
+    });
+    const options = getCapturedOptions();
+    expect(options.canUseTool).toBeUndefined();
+    expect(options.hooks).toBeUndefined();
+  });
+
+  it('enables Write and Edit for node turns with a cwd-scoped write guard', async () => {
+    const workspaceRoot = mkdtempSync(path.join(tmpdir(), 'battleflow-node-write-'));
+    process.env.BATTLEFLOW_CLAUDE_TOOLS = 'Read,Grep,Glob,Write,Edit,MultiEdit,Bash';
+    mocks.query.mockReturnValue(createMockQuery(successMessages()));
+
+    try {
+      const stream = streamClaudeAgentSdkTurn({
+        messages: [{ role: 'user', content: 'Create a draft.' }],
+        systemPrompt: 'Use the current BattleFlow method.',
+        cwd: workspaceRoot,
+        writableRoot: workspaceRoot,
+        skills: ['user-needs-breakdown'],
+      });
+
+      await readAgentStream(stream);
+
+      const options = getCapturedOptions();
+      expect(options.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Write', 'Edit']);
+      expect(options.tools).toEqual(['Read', 'Grep', 'Glob', 'Write', 'Edit']);
+      expect(options.disallowedTools).toEqual(['MultiEdit', 'Bash']);
+      expect(options.canUseTool).toEqual(expect.any(Function));
+      expect(options.hooks?.PreToolUse?.[0]?.hooks?.[0]).toEqual(expect.any(Function));
+
+      const signal = new AbortController().signal;
+      await expect(options.canUseTool?.('Write', { file_path: 'draft.md' }, {
+        signal,
+        toolUseID: 'tool-write-1',
+        requestId: 'request-1',
+      })).resolves.toEqual(expect.objectContaining({ behavior: 'allow' }));
+
+      await expect(options.canUseTool?.('Edit', { file_path: '../outside.md' }, {
+        signal,
+        toolUseID: 'tool-edit-1',
+        requestId: 'request-2',
+      })).resolves.toEqual(expect.objectContaining({
+        behavior: 'deny',
+        message: expect.stringContaining('current workflow node directory'),
+      }));
+
+      await expect(options.canUseTool?.('Write', { file_path: '.claude/skills/method/SKILL.md' }, {
+        signal,
+        toolUseID: 'tool-write-2',
+        requestId: 'request-3',
+      })).resolves.toEqual(expect.objectContaining({
+        behavior: 'deny',
+        message: expect.stringContaining('materialized Skill files'),
+      }));
+
+      const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0];
+      await expect(preToolUse?.({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Edit',
+        tool_input: { file_path: '../outside.md' },
+        tool_use_id: 'tool-edit-2',
+      })).resolves.toEqual(expect.objectContaining({
+        continue: false,
+        decision: 'block',
+        hookSpecificOutput: expect.objectContaining({
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+        }),
+      }));
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('denies Write through symlink parents that escape the node cwd', async () => {
+    const workspaceRoot = mkdtempSync(path.join(tmpdir(), 'battleflow-node-write-link-'));
+    const outsideRoot = mkdtempSync(path.join(tmpdir(), 'battleflow-node-outside-'));
+    const linkPath = path.join(workspaceRoot, 'linked');
+    process.env.BATTLEFLOW_CLAUDE_TOOLS = 'Read,Write';
+    mocks.query.mockReturnValue(createMockQuery(successMessages()));
+
+    try {
+      symlinkSync(outsideRoot, linkPath);
+      const stream = streamClaudeAgentSdkTurn({
+        messages: [{ role: 'user', content: 'Create a draft.' }],
+        systemPrompt: 'Use the current BattleFlow method.',
+        cwd: workspaceRoot,
+        writableRoot: workspaceRoot,
+        skills: ['user-needs-breakdown'],
+      });
+
+      await readAgentStream(stream);
+
+      const options = getCapturedOptions();
+      await expect(options.canUseTool?.('Write', { file_path: 'linked/escape.md' }, {
+        signal: new AbortController().signal,
+        toolUseID: 'tool-write-link',
+        requestId: 'request-link',
+      })).resolves.toEqual(expect.objectContaining({
+        behavior: 'deny',
+        message: expect.stringContaining('outside'),
+      }));
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+      rmSync(outsideRoot, { recursive: true, force: true });
+    }
   });
 
   it('emits an error event for SDK result failures', async () => {
