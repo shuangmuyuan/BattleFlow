@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, type ReactNode, type RefObject } from 'react';
+import { useCallback, useMemo, useState, type ReactNode, type RefObject } from 'react';
 import {
   AssistantRuntimeProvider,
   groupPartByType,
@@ -16,11 +16,15 @@ import {
   ArrowDown,
   Check,
   CheckCircle2,
+  CircleHelp,
   Copy,
   Download,
   Image as ImageIcon,
   Paperclip,
+  Send,
+  ShieldCheck,
   Sparkles,
+  X,
 } from 'lucide-react';
 import {
   ToolGroupContent,
@@ -29,6 +33,7 @@ import {
 } from '@/components/assistant-ui/tool-group';
 import { AnimatedShinyText } from '@/components/ui/animated-shiny-text';
 import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
 import { CompactMarkdown } from '@/components/battleflow/compact-markdown';
 import { SourceCitationList } from '@/components/battleflow/source-citations';
 import {
@@ -99,6 +104,40 @@ export interface WorkflowAssistantSkillSummary {
   checklist: string[];
 }
 
+export interface WorkflowAssistantHumanInputOption {
+  label: string;
+  description: string;
+  preview?: string;
+}
+
+export interface WorkflowAssistantHumanInputQuestion {
+  question: string;
+  header: string;
+  options: WorkflowAssistantHumanInputOption[];
+  multiSelect?: boolean;
+}
+
+export interface WorkflowAssistantHumanInputRequest {
+  id: string;
+  kind: 'ask_user_question' | 'tool_permission';
+  prompt: string;
+  title?: string;
+  description?: string;
+  toolName?: string;
+  toolUseId?: string;
+  dialogKind?: string;
+  payload?: Record<string, unknown>;
+  questions?: WorkflowAssistantHumanInputQuestion[];
+  input?: Record<string, unknown>;
+}
+
+export interface WorkflowAssistantHumanInputResponsePayload {
+  answer?: unknown;
+  decision?: 'allow' | 'deny';
+  cancelled?: boolean;
+  message?: string;
+}
+
 interface EnrichedWorkflowAssistantMessage extends WorkflowAssistantChatMessage {
   id: string;
   index: number;
@@ -124,6 +163,11 @@ interface WorkflowAssistantThreadProps {
   shouldRenderDocumentCard: (message: WorkflowAssistantChatMessage) => boolean;
   renderDocumentCard: (message: WorkflowAssistantChatMessage, messageIndex: number) => ReactNode;
   formatFileSize: (size: number) => string;
+  pendingHumanInput?: WorkflowAssistantHumanInputRequest | null;
+  onRespondHumanInput: (
+    request: WorkflowAssistantHumanInputRequest,
+    response: WorkflowAssistantHumanInputResponsePayload,
+  ) => Promise<void>;
 }
 
 const maxRenderedMarkdownPreviewChars = 24_000;
@@ -736,6 +780,198 @@ function WorkflowAssistantMessageRow({
   );
 }
 
+function getHumanInputTargetLabel(input?: Record<string, unknown>) {
+  if (!input) return '';
+  const value = input.file_path || input.filePath || input.path;
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function HumanInputCard({
+  request,
+  onRespond,
+}: {
+  request: WorkflowAssistantHumanInputRequest;
+  onRespond: (
+    request: WorkflowAssistantHumanInputRequest,
+    response: WorkflowAssistantHumanInputResponsePayload,
+  ) => Promise<void>;
+}) {
+  const [selectedAnswers, setSelectedAnswers] = useState<Record<string, string[]>>({});
+  const [customResponse, setCustomResponse] = useState('');
+  const [submitting, setSubmitting] = useState<'answer' | 'allow' | 'deny' | 'cancel' | null>(null);
+  const [error, setError] = useState('');
+  const questions = request.questions || [];
+  const isToolPermission = request.kind === 'tool_permission';
+  const targetLabel = getHumanInputTargetLabel(request.input);
+  const hasStructuredAnswer = questions.some((question) => (selectedAnswers[question.question] || []).length > 0);
+  const canSubmitAnswer = hasStructuredAnswer || customResponse.trim().length > 0;
+
+  const toggleAnswer = (question: WorkflowAssistantHumanInputQuestion, label: string) => {
+    setSelectedAnswers((prev) => {
+      const current = prev[question.question] || [];
+      if (!question.multiSelect) {
+        return { ...prev, [question.question]: [label] };
+      }
+      const nextValues = current.includes(label)
+        ? current.filter((item) => item !== label)
+        : [...current, label];
+      return { ...prev, [question.question]: nextValues };
+    });
+  };
+
+  const submit = async (
+    mode: 'answer' | 'allow' | 'deny' | 'cancel',
+    response: WorkflowAssistantHumanInputResponsePayload,
+  ) => {
+    setSubmitting(mode);
+    setError('');
+    try {
+      await onRespond(request, response);
+    } catch (submitError) {
+      setError(submitError instanceof Error && submitError.message.trim()
+        ? submitError.message.trim()
+        : '提交失败');
+      setSubmitting(null);
+    }
+  };
+
+  const submitAnswer = () => {
+    const answers = Object.fromEntries(
+      questions.flatMap((question) => {
+        const value = selectedAnswers[question.question]?.join(', ').trim();
+        return value ? [[question.question, value] as const] : [];
+      }),
+    );
+    void submit('answer', {
+      answer: {
+        questions,
+        answers,
+        ...(customResponse.trim() ? { response: customResponse.trim() } : {}),
+      },
+    });
+  };
+
+  return (
+    <div className="flex justify-start pr-6 sm:pr-10">
+      <div className="w-full max-w-2xl rounded-lg border border-warning/35 bg-warning/10 p-3 shadow-sm">
+        <div className="mb-3 flex min-w-0 items-start gap-2">
+          <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md bg-warning/15 text-warning">
+            {isToolPermission ? (
+              <ShieldCheck className="size-4" />
+            ) : (
+              <CircleHelp className="size-4" />
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="break-words text-sm font-medium text-foreground">
+              {request.title || (isToolPermission ? `${request.toolName || 'Tool'} 需要确认` : '需要你的输入')}
+            </p>
+            <p className="mt-1 break-words text-sm text-muted-foreground">
+              {request.prompt || request.description || '请确认后继续。'}
+            </p>
+            {targetLabel && (
+              <p className="mt-2 break-all rounded-md border border-border/50 bg-background/40 px-2 py-1 font-mono text-xs text-muted-foreground">
+                {targetLabel}
+              </p>
+            )}
+          </div>
+        </div>
+
+        {isToolPermission ? (
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={Boolean(submitting)}
+              onClick={() => void submit('deny', { decision: 'deny' })}
+            >
+              <X className="size-4" />
+              拒绝
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={Boolean(submitting)}
+              onClick={() => void submit('allow', { decision: 'allow' })}
+            >
+              <ShieldCheck className="size-4" />
+              批准
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {questions.map((question) => (
+              <div key={question.question} className="space-y-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="shrink-0 rounded-md border border-border/60 bg-background/40 px-2 py-0.5 text-xs text-muted-foreground">
+                    {question.header}
+                  </span>
+                  <p className="min-w-0 break-words text-sm font-medium text-foreground">{question.question}</p>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {question.options.map((option) => {
+                    const selected = (selectedAnswers[question.question] || []).includes(option.label);
+                    return (
+                      <button
+                        key={`${question.question}-${option.label}`}
+                        type="button"
+                        disabled={Boolean(submitting)}
+                        className={cn(
+                          'min-w-0 rounded-md border p-2 text-left transition-colors',
+                          selected
+                            ? 'border-primary bg-primary/15 text-foreground'
+                            : 'border-border/60 bg-background/35 hover:border-primary/50',
+                        )}
+                        onClick={() => toggleAnswer(question, option.label)}
+                      >
+                        <span className="block break-words text-sm font-medium">{option.label}</span>
+                        <span className="mt-1 block break-words text-xs text-muted-foreground">{option.description}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+            <Textarea
+              value={customResponse}
+              disabled={Boolean(submitting)}
+              onChange={(event) => setCustomResponse(event.target.value)}
+              placeholder="补充说明或自定义回答..."
+              className="min-h-20 resize-none bg-background/45 text-sm"
+            />
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={Boolean(submitting)}
+                onClick={() => void submit('cancel', { cancelled: true })}
+              >
+                <X className="size-4" />
+                取消
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={Boolean(submitting) || !canSubmitAnswer}
+                onClick={submitAnswer}
+              >
+                <Send className="size-4" />
+                提交
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <p className="mt-2 break-words text-xs text-destructive">{error}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function WorkflowAssistantThread({
   messages,
   currentStep,
@@ -754,6 +990,8 @@ export function WorkflowAssistantThread({
   shouldRenderDocumentCard,
   renderDocumentCard,
   formatFileSize,
+  pendingHumanInput,
+  onRespondHumanInput,
 }: WorkflowAssistantThreadProps) {
   const enrichedMessages = useMemo<EnrichedWorkflowAssistantMessage[]>(() => (
     messages.map((message, index) => {
@@ -823,7 +1061,7 @@ export function WorkflowAssistantThread({
               onCopyMarkdown={onCopyMarkdown}
               onDownloadStepOutput={onDownloadStepOutput}
             />
-          ) : messages.length === 0 && currentSkill ? (
+          ) : messages.length === 0 && currentSkill && !pendingHumanInput ? (
             <StepStartGuide currentStep={currentStep} currentSkill={currentSkill} />
           ) : (
             <div className="w-full min-w-0 max-w-full space-y-4 overflow-x-hidden">
@@ -849,7 +1087,13 @@ export function WorkflowAssistantThread({
                   );
                 }}
               </ThreadPrimitive.Messages>
-              {isStreaming && !hasStreamingAssistantPlaceholder && (
+              {pendingHumanInput && (
+                <HumanInputCard
+                  request={pendingHumanInput}
+                  onRespond={onRespondHumanInput}
+                />
+              )}
+              {isStreaming && !hasStreamingAssistantPlaceholder && !pendingHumanInput && (
                 <div className="flex justify-start">
                   <div className="flex flex-col items-start gap-2">
                     <AssistantThinkingIndicator />

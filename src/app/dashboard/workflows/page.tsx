@@ -32,7 +32,13 @@ import {
   appCardClassName,
 } from '@/components/battleflow/ui';
 import { compactMarkdownPreview } from '@/components/battleflow/compact-markdown';
-import { WorkflowAssistantThread } from '@/components/battleflow/workflow-assistant-thread';
+import {
+  WorkflowAssistantThread,
+  type WorkflowAssistantHumanInputOption,
+  type WorkflowAssistantHumanInputQuestion,
+  type WorkflowAssistantHumanInputRequest,
+  type WorkflowAssistantHumanInputResponsePayload,
+} from '@/components/battleflow/workflow-assistant-thread';
 import { BentoCard, BentoGrid } from '@/registry/magicui/bento-grid';
 import { cn } from '@/lib/utils';
 import {
@@ -63,6 +69,7 @@ import {
   Clock,
   ArrowRight,
   MessageSquare,
+  MessageCircleQuestion,
   Sparkles,
   Loader2,
   BookOpen,
@@ -434,7 +441,7 @@ interface WorkflowExecutionGroup {
 }
 
 type ChatPersistenceStatus = 'idle' | 'streaming' | 'saving' | 'saved' | 'failed';
-type ChatRunStatus = 'running' | 'succeeded' | 'failed' | 'canceled';
+type ChatRunStatus = 'running' | 'waiting_human' | 'succeeded' | 'failed' | 'canceled';
 
 interface ChatRunSummary {
   id: string;
@@ -445,6 +452,7 @@ interface ChatRunSummary {
   updated_at: string;
   elapsed_seconds?: number;
   error?: string;
+  pending_human_input?: WorkflowAssistantHumanInputRequest;
 }
 
 type DeleteTarget =
@@ -1236,6 +1244,69 @@ function isRecoverableChatStreamReadError(error: unknown, activeRunId: string) {
   );
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function sanitizeHumanInputOptions(value: unknown): WorkflowAssistantHumanInputOption[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!isObjectRecord(item) || typeof item.label !== 'string' || typeof item.description !== 'string') return [];
+    return [{
+      label: item.label,
+      description: item.description,
+      ...(typeof item.preview === 'string' ? { preview: item.preview } : {}),
+    }];
+  });
+}
+
+function sanitizeHumanInputQuestions(value: unknown): WorkflowAssistantHumanInputQuestion[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!isObjectRecord(item) || typeof item.question !== 'string' || typeof item.header !== 'string') return [];
+    return [{
+      question: item.question,
+      header: item.header,
+      options: sanitizeHumanInputOptions(item.options),
+      ...(typeof item.multiSelect === 'boolean' ? { multiSelect: item.multiSelect } : {}),
+    }];
+  });
+}
+
+function sanitizeHumanInputRequest(value: unknown): WorkflowAssistantHumanInputRequest | undefined {
+  if (!isObjectRecord(value)) return undefined;
+  if (typeof value.id !== 'string' || !value.id.trim()) return undefined;
+  if (value.kind !== 'ask_user_question' && value.kind !== 'tool_permission') return undefined;
+  if (typeof value.prompt !== 'string' || !value.prompt.trim()) return undefined;
+
+  return {
+    id: value.id,
+    kind: value.kind,
+    prompt: value.prompt,
+    ...(typeof value.title === 'string' ? { title: value.title } : {}),
+    ...(typeof value.description === 'string' ? { description: value.description } : {}),
+    ...(typeof value.toolName === 'string' ? { toolName: value.toolName } : {}),
+    ...(typeof value.toolUseId === 'string' ? { toolUseId: value.toolUseId } : {}),
+    ...(typeof value.dialogKind === 'string' ? { dialogKind: value.dialogKind } : {}),
+    ...(isObjectRecord(value.payload) ? { payload: value.payload } : {}),
+    ...(isObjectRecord(value.input) ? { input: value.input } : {}),
+    ...(Array.isArray(value.questions) ? { questions: sanitizeHumanInputQuestions(value.questions) } : {}),
+  };
+}
+
+function isActiveChatRunStatus(status?: ChatRunStatus) {
+  return status === 'running' || status === 'waiting_human';
+}
+
+function getNextPendingHumanInput(
+  previousRun: ChatRunSummary | undefined,
+  payload: ChatStreamPayload,
+) {
+  if (payload.human_input_request) return payload.human_input_request;
+  if (payload.event === 'human_input_result' || payload.done || payload.error) return undefined;
+  return previousRun?.pending_human_input;
+}
+
 interface ChatStreamPayload {
   event?: string;
   content?: string;
@@ -1248,6 +1319,9 @@ interface ChatStreamPayload {
   status?: ChatRunStatus;
   started_at?: string;
   updated_at?: string;
+  human_input_request?: WorkflowAssistantHumanInputRequest;
+  request_id?: string;
+  response_behavior?: string;
 }
 
 interface ChatStreamEvent {
@@ -1276,6 +1350,7 @@ function parseChatStreamPayload(line: string): ChatStreamPayload | null {
     }
     : undefined;
   const [toolCall] = sanitizeChatToolCalls(record.tool_call ? [record.tool_call] : []);
+  const humanInputRequest = sanitizeHumanInputRequest(record.human_input_request);
 
   return {
     event: typeof record.event === 'string' ? record.event : undefined,
@@ -1287,6 +1362,7 @@ function parseChatStreamPayload(line: string): ChatStreamPayload | null {
     tool_call: toolCall,
     run_id: typeof record.run_id === 'string' ? record.run_id : undefined,
     status: record.status === 'running'
+      || record.status === 'waiting_human'
       || record.status === 'succeeded'
       || record.status === 'failed'
       || record.status === 'canceled'
@@ -1294,6 +1370,9 @@ function parseChatStreamPayload(line: string): ChatStreamPayload | null {
       : undefined,
     started_at: typeof record.started_at === 'string' ? record.started_at : undefined,
     updated_at: typeof record.updated_at === 'string' ? record.updated_at : undefined,
+    human_input_request: humanInputRequest,
+    request_id: typeof record.request_id === 'string' ? record.request_id : undefined,
+    response_behavior: typeof record.response_behavior === 'string' ? record.response_behavior : undefined,
   };
 }
 
@@ -1308,6 +1387,40 @@ function parseChatStreamEventBlock(block: string): ChatStreamEvent | null {
   return {
     ...(Number.isFinite(idValue) ? { id: idValue } : {}),
     payload,
+  };
+}
+
+function sanitizeChatRunSummary(value: unknown): ChatRunSummary | null {
+  if (!isObjectRecord(value)) return null;
+  const status = value.status === 'running'
+    || value.status === 'waiting_human'
+    || value.status === 'succeeded'
+    || value.status === 'failed'
+    || value.status === 'canceled'
+    ? value.status
+    : null;
+  if (
+    typeof value.id !== 'string'
+    || typeof value.workflow_id !== 'string'
+    || typeof value.step_id !== 'string'
+    || !status
+    || typeof value.started_at !== 'string'
+    || typeof value.updated_at !== 'string'
+  ) {
+    return null;
+  }
+
+  const pendingHumanInput = sanitizeHumanInputRequest(value.pending_human_input);
+  return {
+    id: value.id,
+    workflow_id: value.workflow_id,
+    step_id: value.step_id,
+    status,
+    started_at: value.started_at,
+    updated_at: value.updated_at,
+    ...(typeof value.elapsed_seconds === 'number' ? { elapsed_seconds: value.elapsed_seconds } : {}),
+    ...(typeof value.error === 'string' ? { error: value.error } : {}),
+    ...(pendingHumanInput ? { pending_human_input: pendingHumanInput } : {}),
   };
 }
 
@@ -2142,6 +2255,10 @@ export default function WorkflowsPage() {
                 status: data.status || 'running',
                 started_at: data.started_at || run.started_at || now,
                 updated_at: data.updated_at || now,
+                ...(() => {
+                  const pendingHumanInput = getNextPendingHumanInput(prev[stepId], data);
+                  return pendingHumanInput ? { pending_human_input: pendingHumanInput } : {};
+                })(),
               },
             }));
           }
@@ -2366,14 +2483,18 @@ export default function WorkflowsPage() {
         const response = await fetch(`/api/chat?workflow_id=${encodeURIComponent(workflowId)}`, {
           cache: 'no-store',
         });
-        const data = await response.json() as { runs?: ChatRunSummary[]; error?: string };
+        const data = await response.json() as { runs?: unknown[]; error?: string };
         if (!response.ok) {
           throw new Error(data.error || 'Chat run 状态同步失败');
         }
         if (cancelled) return;
+        const runs = (data.runs || []).flatMap((run) => {
+          const sanitized = sanitizeChatRunSummary(run);
+          return sanitized ? [sanitized] : [];
+        });
 
         const latestRunByStep = new Map<string, ChatRunSummary>();
-        for (const run of data.runs || []) {
+        for (const run of runs) {
           const existing = latestRunByStep.get(run.step_id);
           if (!existing || Date.parse(run.updated_at) > Date.parse(existing.updated_at)) {
             latestRunByStep.set(run.step_id, run);
@@ -2391,10 +2512,10 @@ export default function WorkflowsPage() {
         for (const stepId of trackedStepIds) {
           const previousRun = previousRuns[stepId];
           const nextRun = nextRuns[stepId];
-          if (previousRun?.status === 'running' && !nextRun) {
+          if (isActiveChatRunStatus(previousRun?.status) && !nextRun) {
             shouldRefreshWorkflow = true;
           }
-          if (nextRun && (!previousRun || previousRun.status !== nextRun.status) && nextRun.status !== 'running') {
+          if (nextRun && (!previousRun || previousRun.status !== nextRun.status) && !isActiveChatRunStatus(nextRun.status)) {
             shouldRefreshWorkflow = true;
           }
         }
@@ -2404,7 +2525,7 @@ export default function WorkflowsPage() {
           let changed = false;
           const next = { ...prev };
           for (const stepId of trackedStepIds) {
-            const isRunning = nextRuns[stepId]?.status === 'running';
+            const isRunning = isActiveChatRunStatus(nextRuns[stepId]?.status);
             if (isRunning && !next[stepId]) {
               next[stepId] = true;
               changed = true;
@@ -2420,7 +2541,7 @@ export default function WorkflowsPage() {
           const next = { ...prev };
           for (const stepId of trackedStepIds) {
             const run = nextRuns[stepId];
-            if (run?.status === 'running') {
+            if (isActiveChatRunStatus(run?.status)) {
               const startedAt = Date.parse(run.started_at);
               if (Number.isFinite(startedAt) && next[stepId] !== startedAt) {
                 next[stepId] = startedAt;
@@ -2438,7 +2559,7 @@ export default function WorkflowsPage() {
           const next = { ...prev };
           for (const stepId of trackedStepIds) {
             const run = nextRuns[stepId];
-            if (run?.status === 'running') {
+            if (isActiveChatRunStatus(run?.status)) {
               const seconds = run.elapsed_seconds || 0;
               if (next[stepId] !== seconds) {
                 next[stepId] = seconds;
@@ -2454,7 +2575,7 @@ export default function WorkflowsPage() {
 
         for (const stepId of trackedStepIds) {
           const run = nextRuns[stepId];
-          if (run?.status === 'running') {
+          if (isActiveChatRunStatus(run?.status)) {
             activeChatRunIdByStepIdRef.current[stepId] = run.id;
             setStepChatPersistenceStatus(stepId, 'streaming');
 
@@ -2665,6 +2786,8 @@ export default function WorkflowsPage() {
         return <Loader2 className="h-5 w-5 shrink-0 animate-spin text-primary" />;
       case 'validation_failed':
         return <CircleStop className="h-5 w-5 shrink-0 text-destructive" />;
+      case 'waiting_human':
+        return <MessageCircleQuestion className="h-5 w-5 shrink-0 text-warning" />;
       case 'in_progress':
         return <Clock className="h-5 w-5 shrink-0 animate-pulse text-warning" />;
       default:
@@ -3457,6 +3580,10 @@ export default function WorkflowsPage() {
               status: data.status || 'running',
               started_at: data.started_at || now,
               updated_at: data.updated_at || now,
+              ...(() => {
+                const pendingHumanInput = getNextPendingHumanInput(prev[currentStep.id], data);
+                return pendingHumanInput ? { pending_human_input: pendingHumanInput } : {};
+              })(),
             },
           }));
         }
@@ -3681,6 +3808,35 @@ export default function WorkflowsPage() {
     }
     activeChatRequestByStepIdRef.current[currentStep.id]?.abort();
     activeChatRunSubscriptionByStepIdRef.current[currentStep.id]?.controller.abort();
+  }, [activeWorkflow, activeStepIndex, chatRunByStepId]);
+
+  const handleRespondHumanInput = useCallback(async (
+    request: WorkflowAssistantHumanInputRequest,
+    responsePayload: WorkflowAssistantHumanInputResponsePayload,
+  ) => {
+    const workflow = activeWorkflow;
+    const step = workflow ? getVisibleSteps(workflow)[activeStepIndex] : undefined;
+    const runId = step
+      ? activeChatRunIdByStepIdRef.current[step.id] || chatRunByStepId[step.id]?.id
+      : '';
+    if (!workflow || !step || !runId) {
+      throw new Error('没有可响应的运行任务');
+    }
+
+    const response = await fetch('/api/chat/respond', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+      body: JSON.stringify({
+        run_id: runId,
+        prompt_id: request.id,
+        ...responsePayload,
+      }),
+    });
+    const data = await response.json().catch(() => ({})) as { error?: string };
+    if (!response.ok) {
+      throw new Error(data.error || '提交失败');
+    }
   }, [activeWorkflow, activeStepIndex, chatRunByStepId]);
 
   const handleChatInputKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -5470,6 +5626,9 @@ export default function WorkflowsPage() {
   const visibleWorkflowSteps = getVisibleSteps(activeWorkflow);
   const currentStep = visibleWorkflowSteps[activeStepIndex] || visibleWorkflowSteps[0];
   const isStreaming = currentStep ? Boolean(streamingByStepId[currentStep.id]) : false;
+  const currentPendingHumanInput = currentStep
+    ? chatRunByStepId[currentStep.id]?.pending_human_input || null
+    : null;
   const currentProcessingElapsedSeconds = currentStep
     ? processingElapsedSecondsByStepId[currentStep.id] || 0
     : 0;
@@ -6347,6 +6506,7 @@ export default function WorkflowsPage() {
                       const isActive = idx === activeStepIndex;
                       const isDisabled = step.status === 'pending' && !isActive;
                       const stepIsStreaming = Boolean(streamingByStepId[step.id]);
+                      const stepNeedsHumanInput = chatRunByStepId[step.id]?.status === 'waiting_human';
                       const stepHasChatMessages = getStepChatMessages(activeWorkflow, step.id).length > 0;
                       const shouldRenderParallelStepAsIdle = Boolean(
                         step.runMode === 'parallel'
@@ -6357,7 +6517,7 @@ export default function WorkflowsPage() {
                         && !validationStageByStepId[step.id],
                       );
                       const displayedStepStatus = validationStageByStepId[step.id]
-                        || (stepIsStreaming ? 'in_progress' : shouldRenderParallelStepAsIdle ? 'pending' : step.status);
+                        || (stepNeedsHumanInput ? 'waiting_human' : stepIsStreaming ? 'in_progress' : shouldRenderParallelStepAsIdle ? 'pending' : step.status);
                       const showNodeConfirm = step.id === currentStep?.id && currentStepHasConfirmableOutput;
 
                       return (
@@ -6386,8 +6546,17 @@ export default function WorkflowsPage() {
                               <span className={`min-w-0 truncate text-sm font-medium ${isActive ? 'text-primary' : ''}`}>
                                 {step.name}
                               </span>
-                              {step.runMode === 'parallel' && (
-                                <Badge variant="secondary" className="ml-auto text-[10px]">并行</Badge>
+                              {(step.runMode === 'parallel' || stepNeedsHumanInput) && (
+                                <span className="ml-auto flex shrink-0 items-center gap-1">
+                                  {step.runMode === 'parallel' && (
+                                    <Badge variant="secondary" className="text-[10px]">并行</Badge>
+                                  )}
+                                  {stepNeedsHumanInput && (
+                                    <Badge variant="outline" className="border-warning/50 bg-warning/10 text-[10px] text-warning">
+                                      需输入
+                                    </Badge>
+                                  )}
+                                </span>
                               )}
                             </div>
                           </button>
@@ -6531,6 +6700,8 @@ export default function WorkflowsPage() {
             shouldRenderDocumentCard={shouldRenderAssistantDocumentCard}
             renderDocumentCard={renderAssistantDocumentCard}
             formatFileSize={formatFileSize}
+            pendingHumanInput={currentPendingHumanInput}
+            onRespondHumanInput={handleRespondHumanInput}
           />
         </div>
 
