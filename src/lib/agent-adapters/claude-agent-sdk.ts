@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync, promises as fs, readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
@@ -7,9 +8,12 @@ import {
   type HookCallbackMatcher,
   type HookInput,
   type HookJSONOutput,
+  type OnUserDialog,
   type Options,
   type PermissionResult,
   type SDKMessage,
+  type UserDialogRequest,
+  type UserDialogResult,
 } from '@anthropic-ai/claude-agent-sdk';
 import { getConfiguredClaudeTools } from './claude-code-tools';
 import {
@@ -28,7 +32,14 @@ import {
   trimDiagnosticText,
   writeAttachments,
 } from './claude-code-cli';
-import type { AgentEvent, AgentRuntimeStatus, AgentTurnInput } from './types';
+import type {
+  AgentEvent,
+  AgentHumanInputQuestion,
+  AgentHumanInputRequest,
+  AgentHumanInputResponse,
+  AgentRuntimeStatus,
+  AgentTurnInput,
+} from './types';
 
 const MUTATING_WRITE_TOOLS = ['Write', 'Edit'];
 const UNSUPPORTED_WRITE_TOOLS = ['MultiEdit', 'Bash'];
@@ -36,6 +47,7 @@ const NON_NODE_DISALLOWED_TOOLS = ['Skill', ...MUTATING_WRITE_TOOLS, ...UNSUPPOR
 const PROTECTED_NODE_PATH_SEGMENTS = new Set(['.claude']);
 const PROTECTED_NODE_FILE_NAMES = new Set(['.battleflow-node-workspace.json']);
 const TOOL_PATH_KEYS = ['file_path', 'filePath', 'path'];
+const ASK_USER_QUESTION_DIALOG_KINDS = ['ask_user_question', 'AskUserQuestion'];
 
 function getClaudeSdkExecutablePath() {
   const command = process.env.CLAUDE_COMMAND?.trim();
@@ -170,6 +182,11 @@ function getConfiguredWriteTools(configuredTools: string[]) {
   return configuredTools.filter((tool) => getCanonicalWriteToolName(tool));
 }
 
+function buildAllowedTools(configuredTools: string[], requireWriteApproval: boolean) {
+  if (!requireWriteApproval) return configuredTools;
+  return configuredTools.filter((tool) => !getCanonicalWriteToolName(tool));
+}
+
 function getNodeWritableRoot(input: AgentTurnInput) {
   const cwd = input.cwd?.trim();
   const writableRoot = input.writableRoot?.trim();
@@ -197,6 +214,134 @@ function extractToolTargetPath(input: Record<string, unknown>) {
     if (typeof value === 'string') return value.trim();
   }
   return '';
+}
+
+function isAskUserQuestionDialogKind(dialogKind: string) {
+  return ASK_USER_QUESTION_DIALOG_KINDS.includes(dialogKind);
+}
+
+function normalizeHumanInputOptions(options: unknown): AgentHumanInputQuestion['options'] {
+  if (!Array.isArray(options)) return [];
+  return options.flatMap((option) => {
+    if (!isRecord(option) || typeof option.label !== 'string' || typeof option.description !== 'string') {
+      return [];
+    }
+    return [{
+      label: option.label,
+      description: option.description,
+      ...(typeof option.preview === 'string' ? { preview: option.preview } : {}),
+    }];
+  });
+}
+
+function normalizeHumanInputQuestions(payload: Record<string, unknown>): AgentHumanInputQuestion[] {
+  const rawQuestions = Array.isArray(payload.questions) ? payload.questions : [];
+  return rawQuestions.flatMap((question) => {
+    if (!isRecord(question) || typeof question.question !== 'string' || typeof question.header !== 'string') {
+      return [];
+    }
+    const options = normalizeHumanInputOptions(question.options);
+    return [{
+      question: question.question,
+      header: question.header,
+      options,
+      ...(typeof question.multiSelect === 'boolean' ? { multiSelect: question.multiSelect } : {}),
+    }];
+  });
+}
+
+function getAskUserQuestionPrompt(questions: AgentHumanInputQuestion[]) {
+  return questions[0]?.question || 'Claude needs your input to continue.';
+}
+
+function buildAskUserQuestionRequest(request: UserDialogRequest): AgentHumanInputRequest | null {
+  if (!isAskUserQuestionDialogKind(request.dialogKind)) return null;
+  const questions = normalizeHumanInputQuestions(request.payload);
+  if (questions.length === 0) return null;
+
+  return {
+    id: request.toolUseID || `dialog-${randomUUID()}`,
+    kind: 'ask_user_question',
+    prompt: getAskUserQuestionPrompt(questions),
+    title: 'Question',
+    description: 'Claude needs your response before it can continue.',
+    toolUseId: request.toolUseID,
+    dialogKind: request.dialogKind,
+    payload: request.payload,
+    questions,
+  };
+}
+
+function buildToolPermissionRequest(
+  toolName: string,
+  input: Record<string, unknown>,
+  options: Parameters<CanUseTool>[2],
+): AgentHumanInputRequest {
+  return {
+    id: options.requestId || options.toolUseID || `tool-${randomUUID()}`,
+    kind: 'tool_permission',
+    prompt: options.title || `${toolName} requires your approval.`,
+    title: options.displayName || options.title || toolName,
+    description: options.description || options.decisionReason,
+    toolName,
+    toolUseId: options.toolUseID,
+    input,
+  };
+}
+
+function emitHumanInputRequest(
+  emit: ((event: AgentEvent) => void) | undefined,
+  request: AgentHumanInputRequest,
+) {
+  emit?.({ type: 'human_input_request', request });
+}
+
+function emitHumanInputResolved(
+  emit: ((event: AgentEvent) => void) | undefined,
+  requestId: string,
+  response?: AgentHumanInputResponse,
+) {
+  emit?.({ type: 'human_input_resolved', requestId, response });
+}
+
+function toUserDialogResult(response: AgentHumanInputResponse): UserDialogResult {
+  if (response.behavior === 'completed') {
+    return {
+      behavior: 'completed',
+      result: response.result,
+    };
+  }
+
+  return { behavior: 'cancelled' };
+}
+
+function getPermissionDecision(response: AgentHumanInputResponse): 'allow' | 'deny' {
+  if (response.behavior === 'allow') return 'allow';
+  if (response.behavior === 'deny' || response.behavior === 'cancelled') return 'deny';
+  if (isRecord(response.result) && response.result.decision === 'allow') return 'allow';
+  return 'deny';
+}
+
+function buildHumanPermissionResult(
+  options: Parameters<CanUseTool>[2],
+  response: AgentHumanInputResponse,
+): PermissionResult {
+  if (getPermissionDecision(response) === 'allow') {
+    return {
+      behavior: 'allow',
+      toolUseID: options.toolUseID,
+    };
+  }
+
+  const message = response.behavior === 'deny'
+    ? response.message || 'Tool use denied by the user.'
+    : 'Tool use cancelled by the user.';
+  return {
+    behavior: 'deny',
+    message,
+    interrupt: false,
+    toolUseID: options.toolUseID,
+  };
 }
 
 async function pathExists(filePath: string) {
@@ -315,10 +460,31 @@ function buildPreToolUseOutput(validation: Awaited<ReturnType<typeof validateWri
   };
 }
 
-function buildNodeWriteGuard(writableRoot: string): Pick<Options, 'canUseTool' | 'hooks'> {
+function buildNodeWriteGuard(
+  writableRoot: string,
+  onHumanInputRequest?: AgentTurnInput['onHumanInputRequest'],
+  emit?: (event: AgentEvent) => void,
+): Pick<Options, 'canUseTool' | 'hooks'> {
   const canUseTool: CanUseTool = async (toolName, input, options) => {
     const validation = await validateWritableToolPath(writableRoot, toolName, input);
-    return buildWritePermissionResult(options, validation);
+    if (!validation.allowed || !getCanonicalWriteToolName(toolName) || !onHumanInputRequest) {
+      return buildWritePermissionResult(options, validation);
+    }
+
+    const request = buildToolPermissionRequest(toolName, input, options);
+    emitHumanInputRequest(emit, request);
+    try {
+      const response = await onHumanInputRequest(request, { signal: options.signal });
+      emitHumanInputResolved(emit, request.id, response);
+      return buildHumanPermissionResult(options, response);
+    } catch (error) {
+      const response: AgentHumanInputResponse = {
+        behavior: 'deny',
+        message: getThrownErrorText(error),
+      };
+      emitHumanInputResolved(emit, request.id, response);
+      return buildHumanPermissionResult(options, response);
+    }
   };
 
   const preToolUseHooks: HookCallbackMatcher[] = [{
@@ -338,6 +504,27 @@ function buildNodeWriteGuard(writableRoot: string): Pick<Options, 'canUseTool' |
   };
 }
 
+function buildUserDialogHandler(
+  onHumanInputRequest: AgentTurnInput['onHumanInputRequest'],
+  emit: (event: AgentEvent) => void,
+): OnUserDialog {
+  return async (request, options) => {
+    const humanInputRequest = buildAskUserQuestionRequest(request);
+    if (!humanInputRequest || !onHumanInputRequest) return { behavior: 'cancelled' };
+
+    emitHumanInputRequest(emit, humanInputRequest);
+    try {
+      const response = await onHumanInputRequest(humanInputRequest, { signal: options.signal });
+      emitHumanInputResolved(emit, humanInputRequest.id, response);
+      return toUserDialogResult(response);
+    } catch {
+      const response: AgentHumanInputResponse = { behavior: 'cancelled' };
+      emitHumanInputResolved(emit, humanInputRequest.id, response);
+      return { behavior: 'cancelled' };
+    }
+  };
+}
+
 function hasClaudeAgentSdkCredentials(env: NodeJS.ProcessEnv | Record<string, string | undefined>) {
   return Boolean(
     env.ANTHROPIC_API_KEY
@@ -349,6 +536,7 @@ function hasClaudeAgentSdkCredentials(env: NodeJS.ProcessEnv | Record<string, st
 function buildClaudeAgentSdkOptions(
   input: AgentTurnInput,
   abortController: AbortController,
+  emit?: (event: AgentEvent) => void,
 ): Options {
   const configuredTools = getConfiguredClaudeTools();
   const executablePath = getClaudeSdkExecutablePath();
@@ -356,12 +544,18 @@ function buildClaudeAgentSdkOptions(
   const skills = normalizeSkillNames(input.skills);
   const hasProjectSkills = skills.length > 0;
   const writableRoot = getNodeWritableRoot(input);
-  const writeGuard = writableRoot ? buildNodeWriteGuard(writableRoot) : null;
+  const humanInputHandler = input.onHumanInputRequest;
+  const hasHumanInputHandler = typeof humanInputHandler === 'function';
+  const writeGuard = writableRoot ? buildNodeWriteGuard(writableRoot, humanInputHandler, emit) : null;
+  const onUserDialog = hasHumanInputHandler && emit
+    ? buildUserDialogHandler(humanInputHandler, emit)
+    : undefined;
+  const requireWriteApproval = Boolean(writableRoot && hasHumanInputHandler);
 
   return {
     abortController,
     additionalDirectories: normalizeReadableDirectories(input.readableDirectories),
-    allowedTools: configuredTools,
+    allowedTools: buildAllowedTools(configuredTools, requireWriteApproval),
     cwd: input.cwd?.trim() || getClaudeWorkspaceDir(),
     disallowedTools: buildDisallowedTools(configuredTools, hasProjectSkills, writableRoot),
     env,
@@ -373,6 +567,15 @@ function buildClaudeAgentSdkOptions(
     persistSession: false,
     settingSources: hasProjectSkills ? ['project'] : [],
     ...(hasProjectSkills ? { skills } : {}),
+    ...(onUserDialog ? {
+      onUserDialog,
+      supportedDialogKinds: ASK_USER_QUESTION_DIALOG_KINDS,
+      toolConfig: {
+        askUserQuestion: {
+          previewFormat: 'markdown',
+        },
+      },
+    } : {}),
     systemPrompt: input.systemPrompt,
     tools: configuredTools,
   };
@@ -483,7 +686,7 @@ export function streamClaudeAgentSdkTurn(input: AgentTurnInput) {
         const prompt = buildConversationPrompt(input.messages, attachments);
         sdkQuery = query({
           prompt,
-          options: buildClaudeAgentSdkOptions(input, abortController),
+          options: buildClaudeAgentSdkOptions(input, abortController, emit),
         });
 
         for await (const message of sdkQuery) {

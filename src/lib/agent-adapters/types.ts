@@ -15,6 +15,40 @@ export interface AgentInputAttachment {
 
 export type AgentSessionStatus = 'starting' | 'requesting' | 'running' | 'done' | 'aborted' | 'error';
 export type AgentToolCallStatus = 'running' | 'completed' | 'failed' | 'canceled';
+export type AgentHumanInputKind = 'ask_user_question' | 'tool_permission';
+
+export interface AgentHumanInputOption {
+  label: string;
+  description: string;
+  preview?: string;
+}
+
+export interface AgentHumanInputQuestion {
+  question: string;
+  header: string;
+  options: AgentHumanInputOption[];
+  multiSelect?: boolean;
+}
+
+export interface AgentHumanInputRequest {
+  id: string;
+  kind: AgentHumanInputKind;
+  prompt: string;
+  title?: string;
+  description?: string;
+  toolName?: string;
+  toolUseId?: string;
+  dialogKind?: string;
+  payload?: Record<string, unknown>;
+  questions?: AgentHumanInputQuestion[];
+  input?: Record<string, unknown>;
+}
+
+export type AgentHumanInputResponse =
+  | { behavior: 'completed'; result: unknown }
+  | { behavior: 'cancelled'; message?: string }
+  | { behavior: 'allow'; message?: string }
+  | { behavior: 'deny'; message?: string };
 
 export interface AgentToolCallEvent {
   type: 'tool_call';
@@ -36,6 +70,8 @@ export type AgentEvent =
   | { type: 'assistant_message'; text: string }
   | { type: 'assistant_final'; text: string }
   | AgentToolCallEvent
+  | { type: 'human_input_request'; request: AgentHumanInputRequest }
+  | { type: 'human_input_resolved'; requestId: string; response?: AgentHumanInputResponse }
   | { type: 'terminal_output'; stream: 'stdout' | 'stderr'; text: string }
   | { type: 'usage'; inputTokens?: number; outputTokens?: number; costUsd?: number; model?: string }
   | { type: 'error'; error: string };
@@ -70,6 +106,10 @@ export interface AgentTurnInput {
   attachments?: AgentInputAttachment[];
   readableDirectories?: string[];
   writableRoot?: string;
+  onHumanInputRequest?: (
+    request: AgentHumanInputRequest,
+    options: { signal: AbortSignal },
+  ) => Promise<AgentHumanInputResponse>;
   signal?: AbortSignal;
 }
 

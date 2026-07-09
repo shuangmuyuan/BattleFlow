@@ -34,6 +34,16 @@ type CapturedSdkOptions = {
       hooks: Array<(input: unknown) => Promise<unknown>>;
     }>;
   };
+  onUserDialog?: (
+    request: { dialogKind: string; payload: Record<string, unknown>; toolUseID?: string },
+    options: { signal: AbortSignal },
+  ) => Promise<{ behavior: string; result?: unknown }>;
+  supportedDialogKinds?: string[];
+  toolConfig?: {
+    askUserQuestion?: {
+      previewFormat?: string;
+    };
+  };
   tools?: string[];
   writableRoot?: string;
 };
@@ -56,8 +66,30 @@ function createMockQuery(messages: SDKMessage[]): MockQuery {
   return query;
 }
 
+function createDeferredQuery(messages: SDKMessage[]) {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  async function* generator() {
+    await released;
+    for (const message of messages) {
+      yield message;
+    }
+  }
+
+  const query = generator() as MockQuery;
+  query.close = vi.fn();
+  return { query, release };
+}
+
 async function readAgentStream(stream: ReadableStream<AgentEvent>) {
   const reader = stream.getReader();
+  return readRemainingAgentEvents(reader);
+}
+
+async function readRemainingAgentEvents(reader: ReadableStreamDefaultReader<AgentEvent>) {
   const events: AgentEvent[] = [];
 
   while (true) {
@@ -67,6 +99,12 @@ async function readAgentStream(stream: ReadableStream<AgentEvent>) {
   }
 
   return events;
+}
+
+async function readNextAgentEvent(reader: ReadableStreamDefaultReader<AgentEvent>) {
+  const { done, value } = await reader.read();
+  expect(done).toBe(false);
+  return value;
 }
 
 function successMessages(): SDKMessage[] {
@@ -93,6 +131,15 @@ function successMessages(): SDKMessage[] {
 function getCapturedOptions(): CapturedSdkOptions {
   const call = mocks.query.mock.calls.at(-1)?.[0] as { options?: CapturedSdkOptions } | undefined;
   return call?.options || {};
+}
+
+async function waitForCapturedOptions() {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const options = getCapturedOptions();
+    if (Object.keys(options).length > 0) return options;
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error('Timed out waiting for captured SDK options');
 }
 
 describe('getConfiguredClaudeTools', () => {
@@ -321,6 +368,98 @@ describe('streamClaudeAgentSdkTurn', () => {
     });
   });
 
+  it('bridges SDK AskUserQuestion dialogs into human input events', async () => {
+    const { query: pendingQuery, release } = createDeferredQuery(successMessages());
+    mocks.query.mockReturnValue(pendingQuery);
+    const humanInputHandler = vi.fn().mockResolvedValue({
+      behavior: 'completed',
+      result: {
+        questions: [{
+          question: 'Which output format should be used?',
+          header: 'Format',
+          options: [
+            { label: 'Markdown', description: 'Write Markdown' },
+            { label: 'Docx', description: 'Write DOCX' },
+          ],
+          multiSelect: false,
+        }],
+        answers: {
+          'Which output format should be used?': 'Markdown',
+        },
+      },
+    });
+
+    const stream = streamClaudeAgentSdkTurn({
+      messages: [{ role: 'user', content: 'Ask me if needed.' }],
+      systemPrompt: 'Test',
+      onHumanInputRequest: humanInputHandler,
+    });
+    const reader = stream.getReader();
+
+    await expect(readNextAgentEvent(reader)).resolves.toEqual({ type: 'session_status', status: 'starting' });
+    const options = await waitForCapturedOptions();
+
+    expect(options.supportedDialogKinds).toEqual(['ask_user_question', 'AskUserQuestion']);
+    expect(options.toolConfig).toEqual({ askUserQuestion: { previewFormat: 'markdown' } });
+    expect(options.onUserDialog).toEqual(expect.any(Function));
+
+    const dialogResult = options.onUserDialog?.({
+      dialogKind: 'ask_user_question',
+      toolUseID: 'tool-question-1',
+      payload: {
+        questions: [{
+          question: 'Which output format should be used?',
+          header: 'Format',
+          options: [
+            { label: 'Markdown', description: 'Write Markdown' },
+            { label: 'Docx', description: 'Write DOCX' },
+          ],
+          multiSelect: false,
+        }],
+      },
+    }, {
+      signal: new AbortController().signal,
+    });
+
+    await expect(readNextAgentEvent(reader)).resolves.toEqual(expect.objectContaining({
+      type: 'human_input_request',
+      request: expect.objectContaining({
+        id: 'tool-question-1',
+        kind: 'ask_user_question',
+        prompt: 'Which output format should be used?',
+        dialogKind: 'ask_user_question',
+        questions: [expect.objectContaining({
+          question: 'Which output format should be used?',
+          header: 'Format',
+        })],
+      }),
+    }));
+    await expect(dialogResult).resolves.toEqual(expect.objectContaining({
+      behavior: 'completed',
+      result: expect.objectContaining({
+        answers: {
+          'Which output format should be used?': 'Markdown',
+        },
+      }),
+    }));
+    await expect(readNextAgentEvent(reader)).resolves.toEqual({
+      type: 'human_input_resolved',
+      requestId: 'tool-question-1',
+      response: expect.objectContaining({
+        behavior: 'completed',
+      }),
+    });
+    expect(humanInputHandler).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'ask_user_question',
+    }), {
+      signal: expect.any(AbortSignal),
+    });
+
+    release();
+    const remainingEvents = await readRemainingAgentEvents(reader);
+    expect(remainingEvents).toContainEqual({ type: 'session_status', status: 'done' });
+  });
+
   it('keeps Write and Edit disallowed for non-node turns even when configured', async () => {
     process.env.BATTLEFLOW_CLAUDE_TOOLS = 'Read,Write,Edit';
     mocks.query.mockReturnValue(createMockQuery(successMessages()));
@@ -408,6 +547,77 @@ describe('streamClaudeAgentSdkTurn', () => {
           permissionDecision: 'deny',
         }),
       }));
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('requires human approval for node Write and Edit when a HITL handler is present', async () => {
+    const workspaceRoot = mkdtempSync(path.join(tmpdir(), 'battleflow-node-hitl-write-'));
+    const { query: pendingQuery, release } = createDeferredQuery(successMessages());
+    process.env.BATTLEFLOW_CLAUDE_TOOLS = 'Read,Grep,Glob,Write,Edit';
+    mocks.query.mockReturnValue(pendingQuery);
+    const humanInputHandler = vi.fn().mockResolvedValue({
+      behavior: 'allow',
+    });
+
+    try {
+      const stream = streamClaudeAgentSdkTurn({
+        messages: [{ role: 'user', content: 'Create a draft.' }],
+        systemPrompt: 'Use the current BattleFlow method.',
+        cwd: workspaceRoot,
+        writableRoot: workspaceRoot,
+        skills: ['user-needs-breakdown'],
+        onHumanInputRequest: humanInputHandler,
+      });
+      const reader = stream.getReader();
+
+      await expect(readNextAgentEvent(reader)).resolves.toEqual({ type: 'session_status', status: 'starting' });
+      const options = await waitForCapturedOptions();
+      expect(options.allowedTools).toEqual(['Read', 'Grep', 'Glob']);
+      expect(options.tools).toEqual(['Read', 'Grep', 'Glob', 'Write', 'Edit']);
+      expect(options.canUseTool).toEqual(expect.any(Function));
+
+      const permissionResult = options.canUseTool?.('Write', { file_path: 'draft.md' }, {
+        signal: new AbortController().signal,
+        toolUseID: 'tool-write-approval',
+        requestId: 'request-write-approval',
+      });
+
+      await expect(readNextAgentEvent(reader)).resolves.toEqual(expect.objectContaining({
+        type: 'human_input_request',
+        request: expect.objectContaining({
+          id: 'request-write-approval',
+          kind: 'tool_permission',
+          toolName: 'Write',
+          toolUseId: 'tool-write-approval',
+          input: { file_path: 'draft.md' },
+        }),
+      }));
+      await expect(permissionResult).resolves.toEqual(expect.objectContaining({
+        behavior: 'allow',
+        toolUseID: 'tool-write-approval',
+      }));
+      await expect(readNextAgentEvent(reader)).resolves.toEqual({
+        type: 'human_input_resolved',
+        requestId: 'request-write-approval',
+        response: { behavior: 'allow' },
+      });
+      expect(humanInputHandler).toHaveBeenCalledTimes(1);
+
+      await expect(options.canUseTool?.('Edit', { file_path: '../outside.md' }, {
+        signal: new AbortController().signal,
+        toolUseID: 'tool-edit-outside',
+        requestId: 'request-edit-outside',
+      })).resolves.toEqual(expect.objectContaining({
+        behavior: 'deny',
+        message: expect.stringContaining('current workflow node directory'),
+      }));
+      expect(humanInputHandler).toHaveBeenCalledTimes(1);
+
+      release();
+      const remainingEvents = await readRemainingAgentEvents(reader);
+      expect(remainingEvents).toContainEqual({ type: 'session_status', status: 'done' });
     } finally {
       rmSync(workspaceRoot, { recursive: true, force: true });
     }
