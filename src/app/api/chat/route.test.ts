@@ -233,7 +233,7 @@ vi.mock('@/lib/workflow-skill-draft', () => ({
   cleanExecutableSkillText: (value: string) => value,
 }));
 
-import { POST } from './route';
+import { GET, POST } from './route';
 
 const authContext = {
   user: { id: 'user-1' },
@@ -502,6 +502,37 @@ describe('Chat API route', () => {
         ],
       }),
     ]);
+  });
+
+  it('replays persisted run events after the requested sequence', async () => {
+    mocks.streamClaudeAgentSdkTurn.mockReturnValue(streamAgentEvents([
+      { type: 'assistant_message', text: '第一段' },
+      { type: 'assistant_final', text: '最终段落' },
+      { type: 'session_status', status: 'done' },
+    ]));
+
+    const postResponse = await POST(postRequest({
+      workflowId: 'workflow-1',
+      workflow_step_id: 'step-1',
+      messages: [{ role: 'user', content: '生成内容' }],
+    }));
+    const postEvents = parseSse(await postResponse.text());
+    const runId = postEvents[0]?.run_id as string;
+
+    const replayResponse = await GET(new NextRequest(`http://localhost/api/chat?run_id=${runId}&after=1`, {
+      method: 'GET',
+    }));
+    const replayEvents = parseSse(await replayResponse.text());
+
+    expect(replayResponse.status).toBe(200);
+    expect(replayEvents).not.toContainEqual(expect.objectContaining({ event: 'chat_run' }));
+    expect(replayEvents).toContainEqual(expect.objectContaining({ content: '第一段' }));
+    expect(replayEvents).toContainEqual(expect.objectContaining({
+      event: 'assistant_final',
+      content: '最终段落',
+      replace: true,
+    }));
+    expect(replayEvents).toContainEqual(expect.objectContaining({ done: true }));
   });
 
   it('hides the node cwd from streamed and persisted tool calls', async () => {

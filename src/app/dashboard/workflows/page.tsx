@@ -1250,6 +1250,11 @@ interface ChatStreamPayload {
   updated_at?: string;
 }
 
+interface ChatStreamEvent {
+  id?: number;
+  payload: ChatStreamPayload;
+}
+
 function parseChatStreamPayload(line: string): ChatStreamPayload | null {
   if (!line.startsWith('data: ')) return null;
 
@@ -1290,6 +1295,68 @@ function parseChatStreamPayload(line: string): ChatStreamPayload | null {
     started_at: typeof record.started_at === 'string' ? record.started_at : undefined,
     updated_at: typeof record.updated_at === 'string' ? record.updated_at : undefined,
   };
+}
+
+function parseChatStreamEventBlock(block: string): ChatStreamEvent | null {
+  const lines = block.split(/\r?\n/);
+  const idLine = lines.find((line) => line.startsWith('id:'));
+  const dataLine = lines.find((line) => line.startsWith('data: '));
+  const payload = dataLine ? parseChatStreamPayload(dataLine) : null;
+  if (!payload) return null;
+
+  const idValue = idLine ? Number(idLine.slice(3).trim()) : NaN;
+  return {
+    ...(Number.isFinite(idValue) ? { id: idValue } : {}),
+    payload,
+  };
+}
+
+async function readChatStreamEvents(
+  body: ReadableStream<Uint8Array>,
+  onEvent: (event: ChatStreamEvent) => boolean | void,
+) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let streamBuffer = '';
+  let receivedDone = false;
+
+  const processBlock = (block: string) => {
+    const event = parseChatStreamEventBlock(block.trim());
+    if (!event) return false;
+    const shouldStop = onEvent(event) === true;
+    if (shouldStop) {
+      receivedDone = true;
+    }
+    return shouldStop;
+  };
+
+  try {
+    streamLoop:
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      streamBuffer += decoder.decode(value, { stream: true });
+      const blocks = streamBuffer.split(/\r?\n\r?\n/);
+      streamBuffer = blocks.pop() || '';
+
+      for (const block of blocks) {
+        if (!block.trim()) continue;
+        if (processBlock(block)) {
+          break streamLoop;
+        }
+      }
+    }
+
+    const tail = `${streamBuffer}${decoder.decode()}`.trim();
+    if (tail) {
+      processBlock(tail);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return receivedDone;
 }
 
 function mergeChatToolCall(toolCalls: ChatToolCall[], nextToolCall: ChatToolCall) {
@@ -1674,6 +1741,8 @@ export default function WorkflowsPage() {
   const activeStepIdRef = useRef<string | null>(null);
   const activeChatRequestByStepIdRef = useRef<Record<string, AbortController>>({});
   const activeChatRunIdByStepIdRef = useRef<Record<string, string>>({});
+  const activeChatRunSubscriptionByStepIdRef = useRef<Record<string, { runId: string; controller: AbortController }>>({});
+  const chatRunEventSequenceByRunIdRef = useRef<Record<string, number>>({});
   const chatRunByStepIdRef = useRef<Record<string, ChatRunSummary>>({});
   const workflowsRef = useRef<Workflow[]>([]);
   const activeWorkflowRef = useRef<Workflow | null>(null);
@@ -1681,6 +1750,13 @@ export default function WorkflowsPage() {
   const validationStageTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const copiedChatMessageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const workflowStepDragSourceRef = useRef<string | null>(null);
+
+  useEffect(() => () => {
+    for (const subscription of Object.values(activeChatRunSubscriptionByStepIdRef.current)) {
+      subscription.controller.abort();
+    }
+    activeChatRunSubscriptionByStepIdRef.current = {};
+  }, []);
 
   useEffect(() => {
     workflowRouteStateRef.current = workflowRouteState;
@@ -1801,12 +1877,12 @@ export default function WorkflowsPage() {
       : []
   );
 
-  const setStepChatPersistenceStatus = (stepId: string, status: ChatPersistenceStatus) => {
+  const setStepChatPersistenceStatus = useCallback((stepId: string, status: ChatPersistenceStatus) => {
     setChatPersistenceByStepId((prev) => ({
       ...prev,
       [stepId]: status,
     }));
-  };
+  }, []);
 
   const syncWorkflowSupportingState = (workflow: Workflow, stepIndex: number) => {
     const visibleSteps = getVisibleSteps(workflow);
@@ -1977,6 +2053,198 @@ export default function WorkflowsPage() {
 
     return updatedWorkflow;
   }, [persistWorkflow]);
+
+  const subscribeChatRunEvents = useCallback((workflowId: string, stepId: string, run: ChatRunSummary) => {
+    const existingSubscription = activeChatRunSubscriptionByStepIdRef.current[stepId];
+    if (existingSubscription?.runId === run.id && !existingSubscription.controller.signal.aborted) {
+      return;
+    }
+    existingSubscription?.controller.abort();
+
+    const controller = new AbortController();
+    activeChatRunSubscriptionByStepIdRef.current[stepId] = { runId: run.id, controller };
+    activeChatRunIdByStepIdRef.current[stepId] = run.id;
+    setStepChatPersistenceStatus(stepId, 'streaming');
+
+    const startedAt = Date.parse(run.started_at);
+    if (Number.isFinite(startedAt)) {
+      setProcessingStartedAtByStepId((prev) => ({ ...prev, [stepId]: startedAt }));
+    }
+    setProcessingElapsedSecondsByStepId((prev) => ({ ...prev, [stepId]: run.elapsed_seconds || 0 }));
+    setStreamingByStepId((prev) => ({ ...prev, [stepId]: true }));
+
+    void (async () => {
+      const isCurrentSubscription = () => (
+        activeChatRunSubscriptionByStepIdRef.current[stepId]?.controller === controller
+      );
+      const workflowSnapshot = workflowsRef.current.find((workflow) => workflow.id === workflowId)
+        || (activeWorkflowRef.current?.id === workflowId ? activeWorkflowRef.current : null);
+      const stepMessages = workflowSnapshot ? getStepChatMessages(workflowSnapshot, stepId) : [];
+      const lastMessage = stepMessages[stepMessages.length - 1];
+      const baseMessages = lastMessage?.role === 'assistant' ? stepMessages.slice(0, -1) : stepMessages;
+      const assistantMessageCreatedAt = lastMessage?.role === 'assistant' && lastMessage.created_at
+        ? lastMessage.created_at
+        : new Date().toISOString();
+      let assistantContent = lastMessage?.role === 'assistant' ? lastMessage.content : '';
+      let activeToolCalls = lastMessage?.role === 'assistant' ? lastMessage.toolCalls || [] : [];
+      let persistedAssistantMessage: ChatMessage | null = null;
+
+      const publishAssistantDraft = () => {
+        const nextMessages = [
+          ...baseMessages,
+          buildAssistantChatMessage(assistantContent, assistantMessageCreatedAt, activeToolCalls),
+        ];
+        const latestWorkflow = workflowsRef.current.find((workflow) => workflow.id === workflowId)
+          || (activeWorkflowRef.current?.id === workflowId ? activeWorkflowRef.current : null);
+        if (latestWorkflow) {
+          saveStepChatMessages(latestWorkflow, stepId, nextMessages, { persist: false });
+        } else if (activeStepIdRef.current === stepId) {
+          setChatMessages(nextMessages);
+        }
+      };
+
+      if (lastMessage?.role !== 'assistant' && baseMessages[baseMessages.length - 1]?.role === 'user') {
+        publishAssistantDraft();
+      } else if (activeStepIdRef.current === stepId && stepMessages.length > 0) {
+        setChatMessages(stepMessages);
+      }
+
+      try {
+        const afterSequence = chatRunEventSequenceByRunIdRef.current[run.id] || 0;
+        const params = new URLSearchParams({ run_id: run.id });
+        if (afterSequence > 0) {
+          params.set('after_sequence', String(afterSequence));
+        }
+        const response = await fetch(`/api/chat?${params.toString()}`, {
+          cache: 'no-store',
+          signal: controller.signal,
+          ...(afterSequence > 0 ? { headers: { 'Last-Event-ID': String(afterSequence) } } : {}),
+        });
+
+        if (!response.ok) throw new Error(await getChatResponseError(response));
+        if (!response.body) throw new Error('Chat response body is missing');
+
+        const receivedDone = await readChatStreamEvents(response.body, ({ id, payload: data }) => {
+          if (id !== undefined) {
+            chatRunEventSequenceByRunIdRef.current[run.id] = Math.max(
+              chatRunEventSequenceByRunIdRef.current[run.id] || 0,
+              id,
+            );
+          }
+          if (data.run_id && data.status) {
+            const now = new Date().toISOString();
+            setChatRunByStepId((prev) => ({
+              ...prev,
+              [stepId]: {
+                id: data.run_id || run.id,
+                workflow_id: workflowId,
+                step_id: stepId,
+                status: data.status || 'running',
+                started_at: data.started_at || run.started_at || now,
+                updated_at: data.updated_at || now,
+              },
+            }));
+          }
+          if (data.message?.role === 'assistant') {
+            persistedAssistantMessage = data.message;
+          }
+          if (data.error) throw new ChatServerStreamError(data.error);
+          if (data.tool_call) {
+            activeToolCalls = mergeChatToolCall(activeToolCalls, data.tool_call);
+            publishAssistantDraft();
+          }
+          if (typeof data.content === 'string') {
+            const shouldReplaceAssistantContent = data.replace || data.event === 'assistant_final';
+            const nextAssistantContent = shouldReplaceAssistantContent
+              ? data.content
+              : assistantContent + data.content;
+            if (shouldReplaceAssistantContent && !nextAssistantContent.trim() && assistantContent.trim()) {
+              return false;
+            }
+            assistantContent = nextAssistantContent;
+            publishAssistantDraft();
+          }
+          if (data.done) {
+            return true;
+          }
+          return false;
+        });
+
+        if (!receivedDone) {
+          throw new Error('Chat stream ended before the completion signal was received');
+        }
+
+        const finalAssistantMessage = persistedAssistantMessage || buildAssistantChatMessage(
+          assistantContent,
+          assistantMessageCreatedAt,
+          activeToolCalls,
+        );
+        const finalMessages = [...baseMessages, finalAssistantMessage];
+        const latestWorkflow = workflowsRef.current.find((workflow) => workflow.id === workflowId)
+          || (activeWorkflowRef.current?.id === workflowId ? activeWorkflowRef.current : null);
+        if (latestWorkflow) {
+          saveStepChatMessages(latestWorkflow, stepId, finalMessages, { persist: false });
+        }
+        if (isCurrentSubscription()) {
+          setStreamingByStepId((prev) => {
+            const next = { ...prev };
+            delete next[stepId];
+            return next;
+          });
+          setProcessingStartedAtByStepId((prev) => {
+            const next = { ...prev };
+            delete next[stepId];
+            return next;
+          });
+          setProcessingElapsedSecondsByStepId((prev) => {
+            const next = { ...prev };
+            delete next[stepId];
+            return next;
+          });
+          setStepChatPersistenceStatus(stepId, 'saved');
+          delete activeChatRunIdByStepIdRef.current[stepId];
+        }
+        await refreshWorkflowById(workflowId);
+      } catch (error) {
+        if (isAbortError(error)) return;
+        if (isRecoverableChatStreamReadError(error, run.id)) {
+          activeChatRunIdByStepIdRef.current[stepId] = run.id;
+          setStreamingByStepId((prev) => ({ ...prev, [stepId]: true }));
+          setStepChatPersistenceStatus(stepId, 'streaming');
+          return;
+        }
+
+        console.error('Chat run resume error:', error);
+        const failedToolCalls = activeToolCalls.map((toolCall) => (
+          toolCall.status === 'running'
+            ? { ...toolCall, status: 'failed' as const, completed_at: new Date().toISOString() }
+            : toolCall
+        ));
+        const errorMessage: ChatMessage = persistedAssistantMessage || {
+          role: 'assistant',
+          content: getChatErrorContent(error),
+          created_at: new Date().toISOString(),
+          ...(failedToolCalls.length > 0 ? { toolCalls: failedToolCalls } : {}),
+        };
+        const latestWorkflow = workflowsRef.current.find((workflow) => workflow.id === workflowId)
+          || (activeWorkflowRef.current?.id === workflowId ? activeWorkflowRef.current : null);
+        if (latestWorkflow) {
+          saveStepChatMessages(latestWorkflow, stepId, [...baseMessages, errorMessage], { persist: false });
+        }
+        setStreamingByStepId((prev) => {
+          const next = { ...prev };
+          delete next[stepId];
+          return next;
+        });
+        setStepChatPersistenceStatus(stepId, 'failed');
+        await refreshWorkflowById(workflowId);
+      } finally {
+        if (isCurrentSubscription()) {
+          delete activeChatRunSubscriptionByStepIdRef.current[stepId];
+        }
+      }
+    })();
+  }, [refreshWorkflowById, saveStepChatMessages, setStepChatPersistenceStatus]);
 
   const openWorkflow = (
     workflow: Workflow,
@@ -2204,11 +2472,19 @@ export default function WorkflowsPage() {
                   : currentMessages;
               });
             }
+            if (!activeChatRequestByStepIdRef.current[stepId]) {
+              subscribeChatRunEvents(workflowId, stepId, run);
+            }
             continue;
           }
 
           if (activeChatRunIdByStepIdRef.current[stepId]) {
             delete activeChatRunIdByStepIdRef.current[stepId];
+          }
+          const activeSubscription = activeChatRunSubscriptionByStepIdRef.current[stepId];
+          if (activeSubscription) {
+            activeSubscription.controller.abort();
+            delete activeChatRunSubscriptionByStepIdRef.current[stepId];
           }
           if (run?.status === 'failed') {
             setStepChatPersistenceStatus(stepId, 'failed');
@@ -2234,7 +2510,7 @@ export default function WorkflowsPage() {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [activeWorkflow?.id, refreshWorkflowById]);
+  }, [activeWorkflow?.id, refreshWorkflowById, subscribeChatRunEvents, setStepChatPersistenceStatus]);
 
   useEffect(() => {
     if (loading) return;
@@ -3150,22 +3426,25 @@ export default function WorkflowsPage() {
       if (!response.ok) throw new Error(await getChatResponseError(response));
       if (!response.body) throw new Error('Chat response body is missing');
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let streamBuffer = '';
-      let receivedDone = false;
-
       updateVisibleChatMessagesForStep(currentStep.id, [
         ...visibleMessages,
         buildAssistantChatMessage('', assistantMessageCreatedAt),
       ]);
 
-      const handleChatStreamPayload = (data: ChatStreamPayload | null) => {
+      const handleChatStreamPayload = (event: ChatStreamEvent) => {
+        const data = event.payload;
         if (!data) return false;
 
         if (data.run_id && !activeRunId) {
           activeRunId = data.run_id;
           activeChatRunIdByStepIdRef.current[currentStep.id] = data.run_id;
+        }
+        if (event.id !== undefined && (data.run_id || activeRunId)) {
+          const sequenceRunId = data.run_id || activeRunId;
+          chatRunEventSequenceByRunIdRef.current[sequenceRunId] = Math.max(
+            chatRunEventSequenceByRunIdRef.current[sequenceRunId] || 0,
+            event.id,
+          );
         }
         if (data.run_id && data.status) {
           const now = new Date().toISOString();
@@ -3207,34 +3486,13 @@ export default function WorkflowsPage() {
           ]);
         }
         if (data.done) {
-          receivedDone = true;
           return true;
         }
 
         return false;
       };
 
-      streamLoop:
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        streamBuffer += decoder.decode(value, { stream: true });
-        const lines = streamBuffer.split(/\r?\n/);
-        streamBuffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          if (handleChatStreamPayload(parseChatStreamPayload(line))) {
-            break streamLoop;
-          }
-        }
-      }
-
-      const tail = `${streamBuffer}${decoder.decode()}`.trim();
-      if (tail) {
-        handleChatStreamPayload(parseChatStreamPayload(tail));
-      }
+      const receivedDone = await readChatStreamEvents(response.body, handleChatStreamPayload);
 
       if (!receivedDone) {
         throw new Error('Chat stream ended before the completion signal was received');
@@ -3422,6 +3680,7 @@ export default function WorkflowsPage() {
       });
     }
     activeChatRequestByStepIdRef.current[currentStep.id]?.abort();
+    activeChatRunSubscriptionByStepIdRef.current[currentStep.id]?.controller.abort();
   }, [activeWorkflow, activeStepIndex, chatRunByStepId]);
 
   const handleChatInputKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {

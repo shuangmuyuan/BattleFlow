@@ -1599,7 +1599,7 @@ export async function GET(request: NextRequest) {
     const runId = getString(searchParams.get('run_id') || searchParams.get('runId'));
     const workflowId = getString(searchParams.get('workflow_id') || searchParams.get('workflowId'));
     const stepId = getString(searchParams.get('step_id') || searchParams.get('stepId'));
-    const afterSequence = getNumber(Number(searchParams.get('after_sequence') || searchParams.get('afterSequence')))
+    const afterSequence = getNumber(Number(searchParams.get('after') || searchParams.get('after_sequence') || searchParams.get('afterSequence')))
       || getNumber(Number(request.headers.get('last-event-id')))
       || 0;
 
