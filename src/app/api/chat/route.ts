@@ -2,9 +2,16 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { NextRequest } from 'next/server';
 import { streamClaudeAgentSdkTurn } from '@/lib/agent-adapters/claude-agent-sdk';
-import type { AgentEvent, AgentInputAttachment, AgentToolCallEvent } from '@/lib/agent-adapters/types';
+import type { AgentEvent, AgentHumanInputRequest, AgentInputAttachment, AgentToolCallEvent } from '@/lib/agent-adapters/types';
 import { requireOrganizationContext, requirePermission } from '@/lib/auth/server';
 import { AuthError, ForbiddenError } from '@/lib/auth/types';
+import {
+  cancelChatHumanInputsForRun,
+  clearPendingChatHumanInput,
+  getPendingChatHumanInput,
+  setPendingChatHumanInput,
+  waitForChatHumanInput,
+} from '@/lib/chat-human-input';
 import {
   normalizeChatKnowledgeBaseContexts,
   selectKnowledgeBaseIdsFromChatBody,
@@ -114,6 +121,7 @@ interface ActiveChatRunRecord {
   userMessage: string;
   assistantContent: string;
   toolCalls: WorkflowChatToolCallRecord[];
+  metadata: Record<string, unknown>;
   startedAt: string;
   updatedAt: string;
   error?: string | null;
@@ -567,6 +575,7 @@ function isTerminalChatRunStatus(status: PersistedChatRunRecord['status']) {
 }
 
 function serializeChatRun(run: PersistedChatRunRecord) {
+  const pendingHumanInput = getPendingChatHumanInput(run.metadata);
   return {
     id: run.id,
     workflow_id: run.workflowId,
@@ -576,6 +585,9 @@ function serializeChatRun(run: PersistedChatRunRecord) {
     updated_at: run.updatedAt,
     elapsed_seconds: Math.max(0, Math.floor((Date.now() - Date.parse(run.startedAt)) / 1000)),
     error: run.error,
+    ...(run.status === 'waiting_human' && pendingHumanInput
+      ? { pending_human_input: pendingHumanInput }
+      : {}),
   };
 }
 
@@ -678,6 +690,13 @@ function sanitizeAgentToolCallEvent(
       : {}),
     ...(event.error ? { error: sanitizeDisplayPathText(event.error, displayPathRoot) } : {}),
   };
+}
+
+function sanitizeHumanInputRequest(
+  request: AgentHumanInputRequest,
+  displayPathRoot?: string,
+): AgentHumanInputRequest {
+  return sanitizeToolCallDisplayValue(request, displayPathRoot) as AgentHumanInputRequest;
 }
 
 function mergeToolCallEvent(
@@ -1374,6 +1393,51 @@ async function persistActiveRunSnapshot(run: ActiveChatRunRecord) {
     runId: run.id,
     assistantContent: run.assistantContent,
     toolCalls: run.toolCalls,
+    metadata: run.metadata,
+  });
+}
+
+async function markDetachedChatRunWaitingForHuman(
+  run: ActiveChatRunRecord,
+  request: AgentHumanInputRequest,
+  displayPathRoot: string,
+) {
+  const sanitizedRequest = sanitizeHumanInputRequest(request, displayPathRoot);
+  run.status = 'waiting_human';
+  run.metadata = setPendingChatHumanInput(run.metadata, sanitizedRequest);
+  run.updatedAt = nowIso();
+  await updateChatRun({
+    runId: run.id,
+    status: 'waiting_human',
+    metadata: run.metadata,
+  });
+  await appendAndPublishChatRunEvent(run.id, 'human_input_request', {
+    event: 'human_input_request',
+    run_id: run.id,
+    status: 'waiting_human',
+    human_input_request: sanitizedRequest,
+  });
+}
+
+async function markDetachedChatRunHumanInputResolved(
+  run: ActiveChatRunRecord,
+  requestId: string,
+  responseBehavior?: string,
+) {
+  run.status = 'running';
+  run.metadata = clearPendingChatHumanInput(run.metadata);
+  run.updatedAt = nowIso();
+  await updateChatRun({
+    runId: run.id,
+    status: 'running',
+    metadata: run.metadata,
+  });
+  await appendAndPublishChatRunEvent(run.id, 'human_input_result', {
+    event: 'human_input_result',
+    run_id: run.id,
+    status: 'running',
+    request_id: requestId,
+    ...(responseBehavior ? { response_behavior: responseBehavior } : {}),
   });
 }
 
@@ -1388,6 +1452,7 @@ async function finishDetachedChatRunSucceeded(run: ActiveChatRunRecord) {
     assistantContent: run.assistantContent,
     toolCalls: run.toolCalls,
     error: null,
+    metadata: clearPendingChatHumanInput(run.metadata),
     completedAt: run.updatedAt,
   });
   await appendAndPublishChatRunEvent(run.id, 'chat_done', {
@@ -1408,6 +1473,7 @@ async function finishDetachedChatRunCanceled(run: ActiveChatRunRecord) {
     assistantContent: run.assistantContent,
     toolCalls: run.toolCalls,
     error: null,
+    metadata: clearPendingChatHumanInput(run.metadata),
     completedAt: run.updatedAt,
   });
   await appendAndPublishChatRunEvent(run.id, 'chat_done', {
@@ -1434,6 +1500,7 @@ async function finishDetachedChatRunFailed(
     assistantContent: run.assistantContent,
     toolCalls: run.toolCalls,
     error: sanitizedError,
+    metadata: clearPendingChatHumanInput(run.metadata),
     completedAt: run.updatedAt,
   });
   await appendAndPublishChatRunEvent(run.id, 'chat_error', {
@@ -1501,6 +1568,14 @@ async function consumeDetachedChatRun(
             ...(sanitizedToolCallEvent.error ? { error: sanitizedToolCallEvent.error } : {}),
           },
         });
+      } else if (value.type === 'human_input_request') {
+        await markDetachedChatRunWaitingForHuman(run, value.request, displayPathRoot);
+      } else if (value.type === 'human_input_resolved') {
+        await markDetachedChatRunHumanInputResolved(
+          run,
+          value.requestId,
+          value.response?.behavior,
+        );
       } else if (value.type === 'session_status') {
         if (value.sessionId) {
           await updateChatRun({ runId: run.id, sessionId: value.sessionId });
@@ -1566,6 +1641,7 @@ function startDetachedChatRun(input: DetachedChatRunInput) {
     userMessage: input.run.userMessage,
     assistantContent: input.run.assistantContent,
     toolCalls: input.run.toolCalls,
+    metadata: input.run.metadata,
     startedAt: input.run.startedAt,
     updatedAt: input.run.updatedAt,
     error: input.run.error,
@@ -1583,6 +1659,11 @@ function startDetachedChatRun(input: DetachedChatRunInput) {
         attachments: input.attachments,
         readableDirectories: input.readableDirectories,
         writableRoot: input.nodeWorkspace.cwd,
+        onHumanInputRequest: (humanInputRequest, options) => waitForChatHumanInput({
+          runId: activeRun.id,
+          request: humanInputRequest,
+          signal: options.signal,
+        }),
         signal: abortController.signal,
       });
       await consumeDetachedChatRun(activeRun, agentStream, input.nodeWorkspace.cwd);
@@ -1680,12 +1761,15 @@ export async function DELETE(request: NextRequest) {
       updatedRun = await updateChatRun({
         runId: run.id,
         status: 'canceled',
+        metadata: clearPendingChatHumanInput(run.metadata),
         completedAt,
       }) || { ...run, status: 'canceled', completedAt, updatedAt: completedAt };
+      cancelChatHumanInputsForRun(run.id);
 
       const activeRun = activeChatRuns.get(runId);
-      if (activeRun && activeRun.status === 'running') {
+      if (activeRun && (activeRun.status === 'running' || activeRun.status === 'waiting_human')) {
         activeRun.status = 'canceled';
+        activeRun.metadata = clearPendingChatHumanInput(activeRun.metadata);
         activeRun.updatedAt = completedAt;
         activeRun.abortController.abort();
       } else {
@@ -1697,6 +1781,7 @@ export async function DELETE(request: NextRequest) {
           assistantContent: persistenceRun.assistantContent,
           toolCalls: persistenceRun.toolCalls,
           error: null,
+          metadata: clearPendingChatHumanInput(updatedRun.metadata),
           completedAt,
         }) || updatedRun;
         await appendAndPublishChatRunEvent(run.id, 'chat_done', {

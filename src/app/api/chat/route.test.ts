@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentEvent } from '@/lib/agent-adapters/types';
+import type { AgentEvent, AgentHumanInputRequest } from '@/lib/agent-adapters/types';
 import type { SkillRecord } from '@/lib/skill-registry';
 import type { WorkflowChatToolCallRecord, WorkflowRecord } from '@/lib/workflow-registry';
 
@@ -194,6 +194,8 @@ vi.mock('@/lib/chat-run-repository', () => ({
   listChatRunEvents: mocks.listChatRunEvents,
 }));
 
+vi.mock('@/lib/chat-human-input', async () => vi.importActual('../../../lib/chat-human-input'));
+
 vi.mock('@/lib/knowledge-repository', () => ({
   isKnowledgeDatabaseConfigured: mocks.isKnowledgeDatabaseConfigured,
   KnowledgeDatabaseConfigError: class KnowledgeDatabaseConfigError extends Error {},
@@ -233,7 +235,7 @@ vi.mock('@/lib/workflow-skill-draft', () => ({
   cleanExecutableSkillText: (value: string) => value,
 }));
 
-import { GET, POST } from './route';
+import { DELETE, GET, POST } from './route';
 
 const authContext = {
   user: { id: 'user-1' },
@@ -533,6 +535,158 @@ describe('Chat API route', () => {
       replace: true,
     }));
     expect(replayEvents).toContainEqual(expect.objectContaining({ done: true }));
+  });
+
+  it('persists and streams human input pending and resolved events', async () => {
+    const humanInputRequest: AgentHumanInputRequest = {
+      id: 'prompt-1',
+      kind: 'ask_user_question',
+      prompt: '请选择输出格式？',
+      dialogKind: 'ask_user_question',
+      questions: [{
+        question: '请选择输出格式？',
+        header: '格式',
+        options: [
+          { label: 'Markdown', description: '生成 Markdown' },
+          { label: 'DOCX', description: '生成 DOCX' },
+        ],
+      }],
+    };
+    mocks.streamClaudeAgentSdkTurn.mockReturnValue(streamAgentEvents([
+      { type: 'human_input_request', request: humanInputRequest },
+      {
+        type: 'human_input_resolved',
+        requestId: 'prompt-1',
+        response: { behavior: 'completed', result: { answers: { '请选择输出格式？': 'Markdown' } } },
+      },
+      { type: 'assistant_final', text: '继续生成。' },
+      { type: 'session_status', status: 'done' },
+    ]));
+
+    const response = await POST(postRequest({
+      workflowId: 'workflow-1',
+      workflow_step_id: 'step-1',
+      messages: [{ role: 'user', content: '生成前先问我。' }],
+    }));
+    const events = parseSse(await response.text());
+
+    expect(response.status).toBe(200);
+    expect(events).toContainEqual(expect.objectContaining({
+      event: 'human_input_request',
+      status: 'waiting_human',
+      human_input_request: humanInputRequest,
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      event: 'human_input_result',
+      status: 'running',
+      request_id: 'prompt-1',
+      response_behavior: 'completed',
+    }));
+    const runId = events[0]?.run_id as string;
+    expect(mocks.chatRunStore.get(runId)).toEqual(expect.objectContaining({
+      status: 'succeeded',
+      metadata: expect.not.objectContaining({
+        pending_human_input: expect.anything(),
+      }),
+    }));
+
+    const agentInput = mocks.streamClaudeAgentSdkTurn.mock.calls[0][0] as {
+      onHumanInputRequest?: unknown;
+    };
+    expect(agentInput.onHumanInputRequest).toEqual(expect.any(Function));
+  });
+
+  it('includes pending human input in run lists for refresh recovery', async () => {
+    const humanInputRequest: AgentHumanInputRequest = {
+      id: 'prompt-list',
+      kind: 'tool_permission',
+      prompt: 'Write requires approval.',
+      toolName: 'Write',
+      input: { file_path: 'draft.md' },
+    };
+    const now = new Date().toISOString();
+    mocks.chatRunStore.set('run-waiting', {
+      id: 'run-waiting',
+      organizationId: 'org-1',
+      workflowId: 'workflow-1',
+      stepId: 'step-1',
+      status: 'waiting_human',
+      userMessage: 'Create a draft',
+      assistantContent: '',
+      toolCalls: [],
+      error: null,
+      sessionId: null,
+      metadata: { pending_human_input: humanInputRequest },
+      createdBy: 'user-1',
+      startedAt: now,
+      completedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const response = await GET(new NextRequest('http://localhost/api/chat?workflow_id=workflow-1', {
+      method: 'GET',
+    }));
+    const json = await response.json() as { runs: Array<Record<string, unknown>> };
+
+    expect(response.status).toBe(200);
+    expect(json.runs).toEqual([
+      expect.objectContaining({
+        id: 'run-waiting',
+        status: 'waiting_human',
+        pending_human_input: humanInputRequest,
+      }),
+    ]);
+  });
+
+  it('cancels waiting human runs and clears pending metadata', async () => {
+    const humanInputRequest: AgentHumanInputRequest = {
+      id: 'prompt-cancel',
+      kind: 'ask_user_question',
+      prompt: 'Continue?',
+    };
+    const now = new Date().toISOString();
+    mocks.chatRunStore.set('run-cancel', {
+      id: 'run-cancel',
+      organizationId: 'org-1',
+      workflowId: 'workflow-1',
+      stepId: 'step-1',
+      status: 'waiting_human',
+      userMessage: 'Create a draft',
+      assistantContent: '',
+      toolCalls: [],
+      error: null,
+      sessionId: null,
+      metadata: { pending_human_input: humanInputRequest },
+      createdBy: 'user-1',
+      startedAt: now,
+      completedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const response = await DELETE(new NextRequest('http://localhost/api/chat?run_id=run-cancel', {
+      method: 'DELETE',
+    }));
+    const json = await response.json() as { run: Record<string, unknown> };
+
+    expect(response.status).toBe(200);
+    expect(json.run).toEqual(expect.objectContaining({
+      id: 'run-cancel',
+      status: 'canceled',
+    }));
+    expect(mocks.chatRunStore.get('run-cancel')).toEqual(expect.objectContaining({
+      status: 'canceled',
+      metadata: expect.not.objectContaining({
+        pending_human_input: expect.anything(),
+      }),
+    }));
+    expect(mocks.chatRunEventStore.get('run-cancel')).toEqual([
+      expect.objectContaining({
+        eventType: 'chat_done',
+        payload: expect.objectContaining({ done: true }),
+      }),
+    ]);
   });
 
   it('hides the node cwd from streamed and persisted tool calls', async () => {
