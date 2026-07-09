@@ -2,7 +2,36 @@ import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from '@/lib/agent-adapters/types';
 import type { SkillRecord } from '@/lib/skill-registry';
-import type { WorkflowRecord } from '@/lib/workflow-registry';
+import type { WorkflowChatToolCallRecord, WorkflowRecord } from '@/lib/workflow-registry';
+
+type MockChatRunStatus = 'running' | 'waiting_human' | 'succeeded' | 'failed' | 'canceled';
+
+interface MockChatRunRecord {
+  id: string;
+  organizationId: string;
+  workflowId: string;
+  stepId: string;
+  status: MockChatRunStatus;
+  userMessage: string;
+  assistantContent: string;
+  toolCalls: WorkflowChatToolCallRecord[];
+  error: string | null;
+  sessionId: string | null;
+  metadata: Record<string, unknown>;
+  createdBy: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface MockChatRunEventRecord {
+  runId: string;
+  sequence: number;
+  eventType: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
 
 const mocks = vi.hoisted(() => ({
   streamClaudeAgentSdkTurn: vi.fn(),
@@ -15,6 +44,104 @@ const mocks = vi.hoisted(() => ({
   searchKnowledgeDocuments: vi.fn(),
   requireSkillIdAccess: vi.fn(),
   requireWorkflowAccess: vi.fn(),
+  chatRunStore: new Map<string, MockChatRunRecord>(),
+  chatRunEventStore: new Map<string, MockChatRunEventRecord[]>(),
+  createChatRun: vi.fn(async (input: {
+    id: string;
+    organizationId: string;
+    workflowId: string;
+    stepId: string;
+    userMessage: string;
+    createdBy?: string | null;
+    metadata?: Record<string, unknown>;
+  }) => {
+    const now = new Date().toISOString();
+    const run: MockChatRunRecord = {
+      id: input.id,
+      organizationId: input.organizationId,
+      workflowId: input.workflowId,
+      stepId: input.stepId,
+      status: 'running',
+      userMessage: input.userMessage,
+      assistantContent: '',
+      toolCalls: [],
+      error: null,
+      sessionId: null,
+      metadata: input.metadata || {},
+      createdBy: input.createdBy || null,
+      startedAt: now,
+      completedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    mocks.chatRunStore.set(run.id, run);
+    return run;
+  }),
+  getChatRun: vi.fn(async (runId: string) => mocks.chatRunStore.get(runId) || null),
+  listChatRuns: vi.fn(async (input: {
+    organizationId: string;
+    workflowId: string;
+    stepId?: string;
+    limit?: number;
+  }) => [...mocks.chatRunStore.values()]
+    .filter((run) => (
+      run.organizationId === input.organizationId
+      && run.workflowId === input.workflowId
+      && (!input.stepId || run.stepId === input.stepId)
+    ))
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+    .slice(0, input.limit || 50)),
+  updateChatRun: vi.fn(async (input: {
+    runId: string;
+    status?: MockChatRunStatus;
+    assistantContent?: string;
+    toolCalls?: WorkflowChatToolCallRecord[];
+    error?: string | null;
+    sessionId?: string | null;
+    metadata?: Record<string, unknown>;
+    completedAt?: string | null;
+  }) => {
+    const current = mocks.chatRunStore.get(input.runId);
+    if (!current) return null;
+    const updated: MockChatRunRecord = {
+      ...current,
+      ...(input.status !== undefined ? { status: input.status } : {}),
+      ...(input.assistantContent !== undefined ? { assistantContent: input.assistantContent } : {}),
+      ...(input.toolCalls !== undefined ? { toolCalls: input.toolCalls } : {}),
+      ...(input.error !== undefined ? { error: input.error } : {}),
+      ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
+      ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+      ...(input.completedAt !== undefined ? { completedAt: input.completedAt } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    mocks.chatRunStore.set(updated.id, updated);
+    return updated;
+  }),
+  appendChatRunEvent: vi.fn(async (input: {
+    runId: string;
+    eventType: string;
+    payload: Record<string, unknown>;
+    createdAt?: string;
+  }) => {
+    const events = mocks.chatRunEventStore.get(input.runId) || [];
+    const event: MockChatRunEventRecord = {
+      runId: input.runId,
+      sequence: events.length + 1,
+      eventType: input.eventType,
+      payload: input.payload,
+      createdAt: input.createdAt || new Date().toISOString(),
+    };
+    events.push(event);
+    mocks.chatRunEventStore.set(input.runId, events);
+    return event;
+  }),
+  listChatRunEvents: vi.fn(async (input: {
+    runId: string;
+    afterSequence?: number;
+    limit?: number;
+  }) => (mocks.chatRunEventStore.get(input.runId) || [])
+    .filter((event) => event.sequence > (input.afterSequence || 0))
+    .slice(0, input.limit || 500)),
   getSkill: vi.fn(),
   findWorkflowAttachment: vi.fn(),
   materializeNodeWorkspace: vi.fn(),
@@ -56,6 +183,15 @@ vi.mock('@/lib/auth/types', () => {
 vi.mock('@/lib/chat-knowledge-context', () => ({
   normalizeChatKnowledgeBaseContexts: mocks.normalizeChatKnowledgeBaseContexts,
   selectKnowledgeBaseIdsFromChatBody: mocks.selectKnowledgeBaseIdsFromChatBody,
+}));
+
+vi.mock('@/lib/chat-run-repository', () => ({
+  createChatRun: mocks.createChatRun,
+  getChatRun: mocks.getChatRun,
+  listChatRuns: mocks.listChatRuns,
+  updateChatRun: mocks.updateChatRun,
+  appendChatRunEvent: mocks.appendChatRunEvent,
+  listChatRunEvents: mocks.listChatRunEvents,
 }));
 
 vi.mock('@/lib/knowledge-repository', () => ({
@@ -198,11 +334,17 @@ function parseSse(text: string) {
     .trim()
     .split('\n\n')
     .filter(Boolean)
-    .map((chunk) => JSON.parse(chunk.replace(/^data:\s*/, '')) as Record<string, unknown>);
+    .map((chunk) => {
+      const dataLine = chunk.split(/\r?\n/).find((line) => line.startsWith('data: '));
+      if (!dataLine) throw new Error(`SSE data line missing: ${chunk}`);
+      return JSON.parse(dataLine.slice(6)) as Record<string, unknown>;
+    });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.chatRunStore.clear();
+  mocks.chatRunEventStore.clear();
 
   mocks.requireOrganizationContext.mockResolvedValue(authContext);
   mocks.requirePermission.mockReturnValue(undefined);
@@ -245,12 +387,29 @@ describe('Chat API route', () => {
     const events = parseSse(await response.text());
 
     expect(response.status).toBe(200);
+    expect(mocks.createChatRun).toHaveBeenCalledWith(expect.objectContaining({
+      organizationId: 'org-1',
+      workflowId: 'workflow-1',
+      stepId: 'step-1',
+      createdBy: 'user-1',
+    }));
+    expect(events[0]).toEqual(expect.objectContaining({
+      event: 'chat_run',
+      workflow_id: 'workflow-1',
+      step_id: 'step-1',
+      status: 'running',
+    }));
     expect(events).toContainEqual(expect.objectContaining({ content: '这是一段' }));
     expect(events).toContainEqual(expect.objectContaining({ content: '产品规划。' }));
     expect(events).toContainEqual(expect.objectContaining({
       event: 'assistant_final',
       content: '最终输出：关键风险。',
       replace: true,
+    }));
+    const runId = events[0]?.run_id as string;
+    expect(mocks.chatRunStore.get(runId)).toEqual(expect.objectContaining({
+      status: 'succeeded',
+      assistantContent: '最终输出：关键风险。',
     }));
 
     const agentInput = mocks.streamClaudeAgentSdkTurn.mock.calls[0][0] as {

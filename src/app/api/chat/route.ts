@@ -11,6 +11,16 @@ import {
   type ChatKnowledgeBaseContext,
 } from '@/lib/chat-knowledge-context';
 import {
+  appendChatRunEvent,
+  createChatRun,
+  getChatRun,
+  listChatRunEvents,
+  listChatRuns,
+  updateChatRun,
+  type ChatRunEventRecord,
+  type ChatRunRecord as PersistedChatRunRecord,
+} from '@/lib/chat-run-repository';
+import {
   isKnowledgeDatabaseConfigured,
   KnowledgeDatabaseConfigError,
   listKnowledgeBases,
@@ -95,20 +105,39 @@ interface UploadedFileContext {
   extractedTextPath?: string;
 }
 
-type ChatRunStatus = 'running' | 'succeeded' | 'failed' | 'canceled';
-
-interface ChatRunRecord {
+interface ActiveChatRunRecord {
   id: string;
+  organizationId: string;
   workflowId: string;
   stepId: string;
-  status: ChatRunStatus;
+  status: PersistedChatRunRecord['status'];
   userMessage: string;
   assistantContent: string;
   toolCalls: WorkflowChatToolCallRecord[];
   startedAt: string;
   updatedAt: string;
-  error?: string;
+  error?: string | null;
   abortController: AbortController;
+}
+
+interface ChatPersistenceRun {
+  id: string;
+  workflowId: string;
+  stepId: string;
+  assistantContent: string;
+  toolCalls: WorkflowChatToolCallRecord[];
+  startedAt: string;
+  updatedAt: string;
+  error?: string | null;
+}
+
+interface DetachedChatRunInput {
+  run: PersistedChatRunRecord;
+  messages: ChatMessage[];
+  systemPrompt: string;
+  attachments: AgentInputAttachment[];
+  readableDirectories: string[];
+  nodeWorkspace: MaterializedNodeWorkspace;
 }
 
 const CLAUDE_RUNTIME_SKILL_MISFIRE_MARKERS = [
@@ -162,13 +191,13 @@ const MAX_IMAGE_ATTACHMENT_COUNT = 6;
 const MAX_IMAGE_ATTACHMENT_BYTES = 2 * 1024 * 1024;
 const MAX_TOOL_CALL_DISPLAY_SANITIZE_DEPTH = 8;
 const WORKFLOW_ARTIFACT_MANIFEST_NODE_PATH = '../../artifacts/manifest.json';
-const CHAT_RUN_RETENTION_MS = 30 * 60 * 1000;
-const MAX_RETAINED_CHAT_RUNS = 100;
 
-const chatRuns = new Map<string, ChatRunRecord>();
+const activeChatRuns = new Map<string, ActiveChatRunRecord>();
+const chatRunSubscribers = new Map<string, Set<(event: ChatRunEventRecord) => void>>();
 
-function sse(payload: Record<string, unknown>) {
-  return `data: ${JSON.stringify(payload)}\n\n`;
+function sse(payload: Record<string, unknown>, sequence?: number) {
+  const idLine = typeof sequence === 'number' ? `id: ${sequence}\n` : '';
+  return `${idLine}data: ${JSON.stringify(payload)}\n\n`;
 }
 
 function isChatMessage(value: unknown): value is ChatMessage {
@@ -533,30 +562,11 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function isRunningChatRun(run: ChatRunRecord) {
-  return run.status === 'running';
+function isTerminalChatRunStatus(status: PersistedChatRunRecord['status']) {
+  return status === 'succeeded' || status === 'failed' || status === 'canceled';
 }
 
-function pruneChatRuns() {
-  const cutoff = Date.now() - CHAT_RUN_RETENTION_MS;
-  for (const [id, run] of chatRuns.entries()) {
-    if (isRunningChatRun(run)) continue;
-    if (Date.parse(run.updatedAt) < cutoff) {
-      chatRuns.delete(id);
-    }
-  }
-
-  if (chatRuns.size <= MAX_RETAINED_CHAT_RUNS) return;
-
-  const removableRuns = [...chatRuns.values()]
-    .filter((run) => !isRunningChatRun(run))
-    .sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt));
-  for (const run of removableRuns.slice(0, chatRuns.size - MAX_RETAINED_CHAT_RUNS)) {
-    chatRuns.delete(run.id);
-  }
-}
-
-function serializeChatRun(run: ChatRunRecord) {
+function serializeChatRun(run: PersistedChatRunRecord) {
   return {
     id: run.id,
     workflow_id: run.workflowId,
@@ -733,11 +743,11 @@ function finalizeRunningToolCalls(
   ));
 }
 
-function getPersistedToolCalls(run: ChatRunRecord) {
+function getPersistedToolCalls(run: ChatPersistenceRun) {
   return run.toolCalls.length > 0 ? { toolCalls: run.toolCalls } : {};
 }
 
-function getChatCancelledContent(run: ChatRunRecord) {
+function getChatCancelledContent(run: Pick<ChatPersistenceRun, 'startedAt'>) {
   const displaySeconds = Math.max(1, Math.round((Date.now() - Date.parse(run.startedAt)) / 1000));
   return `你在 ${displaySeconds}s 后停止了`;
 }
@@ -749,7 +759,7 @@ function getChatErrorContent(error: unknown) {
 }
 
 async function appendWorkflowAssistantMessage(
-  run: ChatRunRecord,
+  run: ChatPersistenceRun,
   message: WorkflowChatMessageRecord,
 ) {
   const workflow = await getWorkflow(run.workflowId);
@@ -781,7 +791,7 @@ async function appendWorkflowAssistantMessage(
   });
 }
 
-async function persistCompletedChatRun(run: ChatRunRecord): Promise<WorkflowChatMessageRecord | null> {
+async function persistCompletedChatRun(run: ChatPersistenceRun): Promise<WorkflowChatMessageRecord | null> {
   const content = normalizeAiGeneratedText('chat.completed', run.assistantContent).trim();
   if (!content) return null;
   run.assistantContent = content;
@@ -796,7 +806,7 @@ async function persistCompletedChatRun(run: ChatRunRecord): Promise<WorkflowChat
   return message;
 }
 
-async function persistCanceledChatRun(run: ChatRunRecord): Promise<WorkflowChatMessageRecord> {
+async function persistCanceledChatRun(run: ChatPersistenceRun): Promise<WorkflowChatMessageRecord> {
   run.toolCalls = finalizeRunningToolCalls(run.toolCalls, 'canceled');
   const message: WorkflowChatMessageRecord = {
     role: 'assistant',
@@ -808,7 +818,7 @@ async function persistCanceledChatRun(run: ChatRunRecord): Promise<WorkflowChatM
   return message;
 }
 
-async function persistFailedChatRun(run: ChatRunRecord, error: unknown): Promise<WorkflowChatMessageRecord> {
+async function persistFailedChatRun(run: ChatPersistenceRun, error: unknown): Promise<WorkflowChatMessageRecord> {
   run.toolCalls = finalizeRunningToolCalls(run.toolCalls, 'failed');
   const message: WorkflowChatMessageRecord = {
     role: 'assistant',
@@ -1185,20 +1195,55 @@ function buildSystemPrompt(body: Record<string, unknown>) {
   return systemPrompt;
 }
 
-function streamAgentEventsAsSse(
-  agentStream: ReadableStream<AgentEvent>,
-  run?: ChatRunRecord,
-  displayPathRoot?: string,
-) {
-  const encoder = new TextEncoder();
-  let reader: ReadableStreamDefaultReader<AgentEvent> | null = null;
-  let assistantContent = '';
-  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+function addChatRunSubscriber(runId: string, subscriber: (event: ChatRunEventRecord) => void) {
+  let subscribers = chatRunSubscribers.get(runId);
+  if (!subscribers) {
+    subscribers = new Set();
+    chatRunSubscribers.set(runId, subscribers);
+  }
+  subscribers.add(subscriber);
 
-  const readable = new ReadableStream({
+  return () => {
+    const current = chatRunSubscribers.get(runId);
+    if (!current) return;
+    current.delete(subscriber);
+    if (current.size === 0) {
+      chatRunSubscribers.delete(runId);
+    }
+  };
+}
+
+function publishChatRunEvent(event: ChatRunEventRecord) {
+  const subscribers = chatRunSubscribers.get(event.runId);
+  if (!subscribers) return;
+
+  for (const subscriber of [...subscribers]) {
+    subscriber(event);
+  }
+}
+
+async function appendAndPublishChatRunEvent(
+  runId: string,
+  eventType: string,
+  payload: Record<string, unknown>,
+) {
+  const event = await appendChatRunEvent({ runId, eventType, payload });
+  publishChatRunEvent(event);
+  return event;
+}
+
+function isTerminalChatRunPayload(payload: Record<string, unknown>) {
+  return payload.done === true || typeof payload.error === 'string';
+}
+
+function streamPersistedChatRunEventsAsSse(runId: string, afterSequence = 0) {
+  const encoder = new TextEncoder();
+  let unsubscribe: (() => void) | null = null;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  const sentSequences = new Set<number>();
+
+  const readable = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const activeReader = agentStream.getReader();
-      reader = activeReader;
       let closed = false;
 
       const stopHeartbeat = () => {
@@ -1207,28 +1252,51 @@ function streamAgentEventsAsSse(
         heartbeatTimer = null;
       };
 
-      const closeWith = (payload: Record<string, unknown>) => {
+      const close = () => {
         if (closed) return;
         closed = true;
         stopHeartbeat();
-        try {
-          controller.enqueue(encoder.encode(sse(payload)));
-        } catch {
-          // The browser may have cancelled the request after a long generation.
-        }
+        unsubscribe?.();
+        unsubscribe = null;
         try {
           controller.close();
         } catch {
-          // Ignore duplicate close attempts from child process shutdown races.
+          // Ignore duplicate close attempts from stream races.
         }
       };
 
-      const emit = (payload: Record<string, unknown>) => {
+      const closeWith = (payload: Record<string, unknown>, sequence?: number) => {
         if (closed) return;
         try {
-          controller.enqueue(encoder.encode(sse(payload)));
+          controller.enqueue(encoder.encode(sse(payload, sequence)));
         } catch {
           closed = true;
+          stopHeartbeat();
+          unsubscribe?.();
+          unsubscribe = null;
+          return;
+        }
+        close();
+      };
+
+      const emit = (payload: Record<string, unknown>, sequence?: number) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(sse(payload, sequence)));
+        } catch {
+          closed = true;
+          stopHeartbeat();
+          unsubscribe?.();
+          unsubscribe = null;
+        }
+      };
+
+      const emitEvent = (event: ChatRunEventRecord) => {
+        if (event.sequence <= afterSequence || sentSequences.has(event.sequence)) return;
+        sentSequences.add(event.sequence);
+        emit(event.payload, event.sequence);
+        if (isTerminalChatRunPayload(event.payload)) {
+          close();
         }
       };
 
@@ -1236,164 +1304,34 @@ function streamAgentEventsAsSse(
         emit({ event: 'heartbeat', ts: Date.now() });
       }, 15_000);
 
-      if (run) {
-        emit({
-          event: 'chat_run',
-          run_id: run.id,
-          workflow_id: run.workflowId,
-          step_id: run.stepId,
-          status: run.status,
-          started_at: run.startedAt,
-        });
-      }
-
       try {
-        while (true) {
-          const { done, value } = await activeReader.read();
-          if (done) break;
-          if (!value) continue;
-          if (value.type === 'assistant_message') {
-            const simplifiedText = sanitizeDisplayPathText(
-              toSimplifiedChinese(value.text),
-              displayPathRoot,
-            );
-            assistantContent += simplifiedText;
-            emit({ content: simplifiedText });
-          } else if (value.type === 'assistant_final') {
-            assistantContent = sanitizeDisplayPathText(
-              normalizeAiGeneratedText('chat.final', value.text),
-              displayPathRoot,
-            );
-            emit({
-              event: 'assistant_final',
-              content: assistantContent,
-              replace: true,
-            });
-          } else if (value.type === 'tool_call') {
-            let toolCall: WorkflowChatToolCallRecord | undefined;
-            const sanitizedToolCallEvent = sanitizeAgentToolCallEvent(value, displayPathRoot);
-            if (run) {
-              run.toolCalls = mergeToolCallEvent(run.toolCalls, value, displayPathRoot);
-              toolCall = run.toolCalls.find((item) => item.id === sanitizedToolCallEvent.id);
-            }
-            emit({
-              event: 'tool_call',
-              tool_call: toolCall || {
-                id: sanitizedToolCallEvent.id,
-                name: sanitizedToolCallEvent.name,
-                status: sanitizedToolCallEvent.status,
-                ...(sanitizedToolCallEvent.input ? { input: sanitizedToolCallEvent.input } : {}),
-                ...(sanitizedToolCallEvent.inputText ? { inputText: sanitizedToolCallEvent.inputText } : {}),
-                ...(sanitizedToolCallEvent.result !== undefined ? { result: sanitizedToolCallEvent.result } : {}),
-                ...(sanitizedToolCallEvent.resultPreview ? { resultPreview: sanitizedToolCallEvent.resultPreview } : {}),
-                ...(sanitizedToolCallEvent.error ? { error: sanitizedToolCallEvent.error } : {}),
-              },
-            });
-          } else if (value.type === 'session_status') {
-            if (value.status === 'done') {
-              let message: WorkflowChatMessageRecord | null = null;
-              if (run) {
-                run.assistantContent = assistantContent;
-                run.status = 'succeeded';
-                run.updatedAt = nowIso();
-                message = await persistCompletedChatRun(run);
-                pruneChatRuns();
-              }
-              closeWith({ done: true, ...(message ? { message } : {}) });
-              return;
-            }
-            if (value.status === 'aborted' && run) {
-              run.status = 'canceled';
-              run.updatedAt = nowIso();
-              const message = await persistCanceledChatRun(run);
-              pruneChatRuns();
-              closeWith({ done: true, message });
-              return;
-            }
-            emit({
-              event: 'session_status',
-              status: value.status,
-              session_id: value.sessionId,
-              done: false,
-            });
-          } else if (value.type === 'usage') {
-            emit({
-              event: 'usage',
-              input_tokens: value.inputTokens,
-              output_tokens: value.outputTokens,
-              cost_usd: value.costUsd,
-              model: value.model,
-            });
-          } else if (value.type === 'terminal_output') {
-            emit({
-              event: 'terminal_output',
-              stream: value.stream,
-              text: sanitizeDisplayPathText(value.text, displayPathRoot),
-            });
-          } else if (value.type === 'error') {
-            const sanitizedError = sanitizeDisplayPathText(value.error, displayPathRoot);
-            if (run) {
-              run.status = 'failed';
-              run.error = getSafeChatErrorMessage(sanitizedError);
-              run.updatedAt = nowIso();
-              const message = await persistFailedChatRun(run, sanitizedError);
-              pruneChatRuns();
-              closeWith({ error: getSafeChatErrorMessage(sanitizedError), message });
-              return;
-            }
-            closeWith({ error: getSafeChatErrorMessage(sanitizedError) });
-            return;
+        unsubscribe = addChatRunSubscriber(runId, emitEvent);
+        const replayEvents = await listChatRunEvents({ runId, afterSequence });
+        for (const event of replayEvents) {
+          emitEvent(event);
+          if (closed) return;
+        }
+
+        const run = await getChatRun(runId);
+        if (!closed && run && isTerminalChatRunStatus(run.status)) {
+          if (run.status === 'failed') {
+            closeWith({ error: run.error || 'Chat failed' });
+          } else {
+            closeWith({ done: true });
           }
-        }
-        if (run) {
-          run.assistantContent = assistantContent;
-          run.status = run.abortController.signal.aborted ? 'canceled' : 'succeeded';
-          run.updatedAt = nowIso();
-          const message = run.status === 'canceled'
-            ? await persistCanceledChatRun(run)
-            : await persistCompletedChatRun(run);
-          pruneChatRuns();
-          closeWith({ done: true, ...(message ? { message } : {}) });
           return;
         }
-        closeWith({ done: true });
       } catch (error) {
-        if (run) {
-          run.status = run.abortController.signal.aborted ? 'canceled' : 'failed';
-          const sanitizedError = sanitizeDisplayPathText(getSafeChatErrorMessage(error), displayPathRoot);
-          run.error = run.status === 'failed' ? sanitizedError : undefined;
-          run.updatedAt = nowIso();
-          const message = run.status === 'canceled'
-            ? await persistCanceledChatRun(run)
-            : await persistFailedChatRun(run, sanitizedError);
-          pruneChatRuns();
-          closeWith({
-            ...(run.status === 'failed' ? { error: sanitizedError } : { done: true }),
-            message,
-          });
-          return;
-        }
-        closeWith({
-          error: error instanceof Error
-            ? sanitizeDisplayPathText(error.message, displayPathRoot)
-            : 'Agent stream interrupted',
-        });
-      } finally {
-        stopHeartbeat();
-        activeReader.releaseLock();
-        reader = null;
+        closeWith({ error: getSafeChatErrorMessage(error) });
       }
     },
-    async cancel() {
+    cancel() {
       if (heartbeatTimer) {
         clearInterval(heartbeatTimer);
         heartbeatTimer = null;
       }
-      try {
-        await reader?.cancel();
-      } catch {
-        // The client-side branch can be gone while the server persistence branch continues.
-      }
+      unsubscribe?.();
+      unsubscribe = null;
     },
   });
 
@@ -1408,33 +1346,274 @@ function streamAgentEventsAsSse(
   });
 }
 
-function streamClaudeAgentSdk(
-  run: ChatRunRecord,
-  messages: ChatMessage[],
-  systemPrompt: string,
-  attachments: AgentInputAttachment[],
-  readableDirectories: string[],
-  nodeWorkspace: MaterializedNodeWorkspace,
-) {
-  const agentStream = streamClaudeAgentSdkTurn({
-    messages,
-    systemPrompt,
-    cwd: nodeWorkspace.cwd,
-    skills: [nodeWorkspace.skillName],
-    attachments,
-    readableDirectories,
-    writableRoot: nodeWorkspace.cwd,
-    signal: run.abortController.signal,
+function toPersistenceRun(run: PersistedChatRunRecord): ChatPersistenceRun {
+  return {
+    id: run.id,
+    workflowId: run.workflowId,
+    stepId: run.stepId,
+    assistantContent: run.assistantContent,
+    toolCalls: run.toolCalls,
+    startedAt: run.startedAt,
+    updatedAt: run.updatedAt,
+    error: run.error,
+  };
+}
+
+async function isChatRunCanceledInStore(runId: string) {
+  try {
+    const run = await getChatRun(runId);
+    return run?.status === 'canceled';
+  } catch (error) {
+    console.error('Chat run cancel-state check error:', error);
+    return false;
+  }
+}
+
+async function persistActiveRunSnapshot(run: ActiveChatRunRecord) {
+  await updateChatRun({
+    runId: run.id,
+    assistantContent: run.assistantContent,
+    toolCalls: run.toolCalls,
   });
-  return streamAgentEventsAsSse(agentStream, run, nodeWorkspace.cwd);
+}
+
+async function finishDetachedChatRunSucceeded(run: ActiveChatRunRecord) {
+  if (!activeChatRuns.has(run.id)) return;
+  run.status = 'succeeded';
+  run.updatedAt = nowIso();
+  const message = await persistCompletedChatRun(run);
+  await updateChatRun({
+    runId: run.id,
+    status: 'succeeded',
+    assistantContent: run.assistantContent,
+    toolCalls: run.toolCalls,
+    error: null,
+    completedAt: run.updatedAt,
+  });
+  await appendAndPublishChatRunEvent(run.id, 'chat_done', {
+    done: true,
+    ...(message ? { message } : {}),
+  });
+  activeChatRuns.delete(run.id);
+}
+
+async function finishDetachedChatRunCanceled(run: ActiveChatRunRecord) {
+  if (!activeChatRuns.has(run.id)) return;
+  run.status = 'canceled';
+  run.updatedAt = nowIso();
+  const message = await persistCanceledChatRun(run);
+  await updateChatRun({
+    runId: run.id,
+    status: 'canceled',
+    assistantContent: run.assistantContent,
+    toolCalls: run.toolCalls,
+    error: null,
+    completedAt: run.updatedAt,
+  });
+  await appendAndPublishChatRunEvent(run.id, 'chat_done', {
+    done: true,
+    message,
+  });
+  activeChatRuns.delete(run.id);
+}
+
+async function finishDetachedChatRunFailed(
+  run: ActiveChatRunRecord,
+  error: unknown,
+  displayPathRoot?: string,
+) {
+  if (!activeChatRuns.has(run.id)) return;
+  const sanitizedError = sanitizeDisplayPathText(getSafeChatErrorMessage(error), displayPathRoot);
+  run.status = 'failed';
+  run.error = sanitizedError;
+  run.updatedAt = nowIso();
+  const message = await persistFailedChatRun(run, sanitizedError);
+  await updateChatRun({
+    runId: run.id,
+    status: 'failed',
+    assistantContent: run.assistantContent,
+    toolCalls: run.toolCalls,
+    error: sanitizedError,
+    completedAt: run.updatedAt,
+  });
+  await appendAndPublishChatRunEvent(run.id, 'chat_error', {
+    error: sanitizedError,
+    message,
+  });
+  activeChatRuns.delete(run.id);
+}
+
+async function consumeDetachedChatRun(
+  run: ActiveChatRunRecord,
+  agentStream: ReadableStream<AgentEvent>,
+  displayPathRoot: string,
+) {
+  const reader = agentStream.getReader();
+
+  try {
+    while (true) {
+      if (await isChatRunCanceledInStore(run.id)) {
+        run.abortController.abort();
+        await finishDetachedChatRunCanceled(run);
+        return;
+      }
+
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+
+      if (value.type === 'assistant_message') {
+        const simplifiedText = sanitizeDisplayPathText(
+          toSimplifiedChinese(value.text),
+          displayPathRoot,
+        );
+        run.assistantContent += simplifiedText;
+        run.updatedAt = nowIso();
+        await persistActiveRunSnapshot(run);
+        await appendAndPublishChatRunEvent(run.id, 'assistant_message', { content: simplifiedText });
+      } else if (value.type === 'assistant_final') {
+        run.assistantContent = sanitizeDisplayPathText(
+          normalizeAiGeneratedText('chat.final', value.text),
+          displayPathRoot,
+        );
+        run.updatedAt = nowIso();
+        await persistActiveRunSnapshot(run);
+        await appendAndPublishChatRunEvent(run.id, 'assistant_final', {
+          event: 'assistant_final',
+          content: run.assistantContent,
+          replace: true,
+        });
+      } else if (value.type === 'tool_call') {
+        const sanitizedToolCallEvent = sanitizeAgentToolCallEvent(value, displayPathRoot);
+        run.toolCalls = mergeToolCallEvent(run.toolCalls, value, displayPathRoot);
+        run.updatedAt = nowIso();
+        await persistActiveRunSnapshot(run);
+        await appendAndPublishChatRunEvent(run.id, 'tool_call', {
+          event: 'tool_call',
+          tool_call: run.toolCalls.find((item) => item.id === sanitizedToolCallEvent.id) || {
+            id: sanitizedToolCallEvent.id,
+            name: sanitizedToolCallEvent.name,
+            status: sanitizedToolCallEvent.status,
+            ...(sanitizedToolCallEvent.input ? { input: sanitizedToolCallEvent.input } : {}),
+            ...(sanitizedToolCallEvent.inputText ? { inputText: sanitizedToolCallEvent.inputText } : {}),
+            ...(sanitizedToolCallEvent.result !== undefined ? { result: sanitizedToolCallEvent.result } : {}),
+            ...(sanitizedToolCallEvent.resultPreview ? { resultPreview: sanitizedToolCallEvent.resultPreview } : {}),
+            ...(sanitizedToolCallEvent.error ? { error: sanitizedToolCallEvent.error } : {}),
+          },
+        });
+      } else if (value.type === 'session_status') {
+        if (value.sessionId) {
+          await updateChatRun({ runId: run.id, sessionId: value.sessionId });
+        }
+        if (value.status === 'done') {
+          await finishDetachedChatRunSucceeded(run);
+          return;
+        }
+        if (value.status === 'aborted') {
+          await finishDetachedChatRunCanceled(run);
+          return;
+        }
+        await appendAndPublishChatRunEvent(run.id, 'session_status', {
+          event: 'session_status',
+          status: value.status,
+          session_id: value.sessionId,
+          done: false,
+        });
+      } else if (value.type === 'usage') {
+        await appendAndPublishChatRunEvent(run.id, 'usage', {
+          event: 'usage',
+          input_tokens: value.inputTokens,
+          output_tokens: value.outputTokens,
+          cost_usd: value.costUsd,
+          model: value.model,
+        });
+      } else if (value.type === 'terminal_output') {
+        await appendAndPublishChatRunEvent(run.id, 'terminal_output', {
+          event: 'terminal_output',
+          stream: value.stream,
+          text: sanitizeDisplayPathText(value.text, displayPathRoot),
+        });
+      } else if (value.type === 'error') {
+        await finishDetachedChatRunFailed(run, value.error, displayPathRoot);
+        return;
+      }
+    }
+
+    if (run.abortController.signal.aborted || await isChatRunCanceledInStore(run.id)) {
+      await finishDetachedChatRunCanceled(run);
+      return;
+    }
+    await finishDetachedChatRunSucceeded(run);
+  } catch (error) {
+    if (run.abortController.signal.aborted || await isChatRunCanceledInStore(run.id)) {
+      await finishDetachedChatRunCanceled(run);
+      return;
+    }
+    await finishDetachedChatRunFailed(run, error, displayPathRoot);
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function startDetachedChatRun(input: DetachedChatRunInput) {
+  const abortController = new AbortController();
+  const activeRun: ActiveChatRunRecord = {
+    id: input.run.id,
+    organizationId: input.run.organizationId,
+    workflowId: input.run.workflowId,
+    stepId: input.run.stepId,
+    status: input.run.status,
+    userMessage: input.run.userMessage,
+    assistantContent: input.run.assistantContent,
+    toolCalls: input.run.toolCalls,
+    startedAt: input.run.startedAt,
+    updatedAt: input.run.updatedAt,
+    error: input.run.error,
+    abortController,
+  };
+  activeChatRuns.set(activeRun.id, activeRun);
+
+  void (async () => {
+    try {
+      const agentStream = streamClaudeAgentSdkTurn({
+        messages: input.messages,
+        systemPrompt: input.systemPrompt,
+        cwd: input.nodeWorkspace.cwd,
+        skills: [input.nodeWorkspace.skillName],
+        attachments: input.attachments,
+        readableDirectories: input.readableDirectories,
+        writableRoot: input.nodeWorkspace.cwd,
+        signal: abortController.signal,
+      });
+      await consumeDetachedChatRun(activeRun, agentStream, input.nodeWorkspace.cwd);
+    } catch (error) {
+      await finishDetachedChatRunFailed(activeRun, error, input.nodeWorkspace.cwd);
+    }
+  })();
 }
 
 export async function GET(request: NextRequest) {
   try {
     const context = await requireOrganizationContext(request);
     const { searchParams } = new URL(request.url);
+    const runId = getString(searchParams.get('run_id') || searchParams.get('runId'));
     const workflowId = getString(searchParams.get('workflow_id') || searchParams.get('workflowId'));
     const stepId = getString(searchParams.get('step_id') || searchParams.get('stepId'));
+    const afterSequence = getNumber(Number(searchParams.get('after_sequence') || searchParams.get('afterSequence')))
+      || getNumber(Number(request.headers.get('last-event-id')))
+      || 0;
+
+    if (runId) {
+      const run = await getChatRun(runId);
+      if (!run) {
+        return new Response(JSON.stringify({ error: 'Chat run not found' }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      await requireWorkflowAccess(context, run.workflowId, 'workflow.read');
+      return streamPersistedChatRunEventsAsSse(run.id, afterSequence);
+    }
 
     if (!workflowId) {
       return new Response(JSON.stringify({ error: 'Workflow ID is required' }), {
@@ -1444,12 +1623,12 @@ export async function GET(request: NextRequest) {
     }
 
     await requireWorkflowAccess(context, workflowId, 'workflow.read');
-    pruneChatRuns();
-
-    const runs = [...chatRuns.values()]
-      .filter((run) => run.workflowId === workflowId && (!stepId || run.stepId === stepId))
-      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
-      .map(serializeChatRun);
+    const runs = (await listChatRuns({
+      organizationId: context.activeOrganization.id,
+      workflowId,
+      ...(stepId ? { stepId } : {}),
+      limit: 100,
+    })).map(serializeChatRun);
 
     return new Response(JSON.stringify({ runs }), {
       headers: {
@@ -1484,7 +1663,7 @@ export async function DELETE(request: NextRequest) {
       });
     }
 
-    const run = chatRuns.get(runId);
+    const run = await getChatRun(runId);
     if (!run) {
       return new Response(JSON.stringify({ success: true, missing: true }), {
         headers: {
@@ -1495,13 +1674,39 @@ export async function DELETE(request: NextRequest) {
     }
 
     await requireWorkflowAccess(context, run.workflowId, 'workflow.update');
-    if (run.status === 'running') {
-      run.status = 'canceled';
-      run.updatedAt = nowIso();
-      run.abortController.abort();
+    let updatedRun = run;
+    if (!isTerminalChatRunStatus(run.status)) {
+      const completedAt = nowIso();
+      updatedRun = await updateChatRun({
+        runId: run.id,
+        status: 'canceled',
+        completedAt,
+      }) || { ...run, status: 'canceled', completedAt, updatedAt: completedAt };
+
+      const activeRun = activeChatRuns.get(runId);
+      if (activeRun && activeRun.status === 'running') {
+        activeRun.status = 'canceled';
+        activeRun.updatedAt = completedAt;
+        activeRun.abortController.abort();
+      } else {
+        const persistenceRun = toPersistenceRun(updatedRun);
+        const message = await persistCanceledChatRun(persistenceRun);
+        updatedRun = await updateChatRun({
+          runId: run.id,
+          status: 'canceled',
+          assistantContent: persistenceRun.assistantContent,
+          toolCalls: persistenceRun.toolCalls,
+          error: null,
+          completedAt,
+        }) || updatedRun;
+        await appendAndPublishChatRunEvent(run.id, 'chat_done', {
+          done: true,
+          message,
+        });
+      }
     }
 
-    return new Response(JSON.stringify({ success: true, run: serializeChatRun(run) }), {
+    return new Response(JSON.stringify({ success: true, run: serializeChatRun(updatedRun) }), {
       headers: {
         'Content-Type': 'application/json',
         'Cache-Control': 'no-store',
@@ -1635,30 +1840,37 @@ export async function POST(request: NextRequest) {
       ...getAttachmentReadableDirectories(trustedUploadedFiles),
       ...artifactReadableDirectories,
     ]));
-    const startedAt = nowIso();
-    const run: ChatRunRecord = {
+    const run = await createChatRun({
       id: randomUUID(),
+      organizationId: context.activeOrganization.id,
       workflowId,
       stepId,
-      status: 'running',
       userMessage: getString(body.visible_user_message, getLastUserMessage(messages)),
-      assistantContent: '',
-      toolCalls: [],
-      startedAt,
-      updatedAt: startedAt,
-      abortController: new AbortController(),
-    };
-    chatRuns.set(run.id, run);
-    pruneChatRuns();
-
-    return streamClaudeAgentSdk(
+      createdBy: context.user.id,
+      metadata: {
+        provider,
+        workflow_step_id: stepId,
+      },
+    });
+    await appendAndPublishChatRunEvent(run.id, 'chat_run', {
+      event: 'chat_run',
+      run_id: run.id,
+      workflow_id: run.workflowId,
+      step_id: run.stepId,
+      status: run.status,
+      started_at: run.startedAt,
+      updated_at: run.updatedAt,
+    });
+    startDetachedChatRun({
       run,
-      claudeMessages,
+      messages: claudeMessages,
       systemPrompt,
-      getImageAttachments(currentTurnUploadedFiles),
+      attachments: getImageAttachments(currentTurnUploadedFiles),
       readableDirectories,
       nodeWorkspace,
-    );
+    });
+
+    return streamPersistedChatRunEventsAsSse(run.id);
   } catch (error) {
     console.error('Chat API error:', error);
     if (error instanceof AuthError) {
