@@ -7,7 +7,7 @@ BattleFlow API route handlers.
 | Route | Responsibility |
 | --- | --- |
 | `agent-runtime` | Reports Claude Code CLI adapter availability and configured defaults. |
-| `chat` | Streams product-planning chat responses with Skill, workflow, knowledge, and uploaded-file context. |
+| `chat` | Starts, resumes, stops, and answers HITL prompts for product-planning chat runs with Skill, workflow, knowledge, and uploaded-file context. |
 | `dashboard/stats` | Provides dashboard overview counts and recent workflow state. |
 | `demos/handoffs` | Creates and reads workflow-node Demo handoff links through the external Frieren Demo integration after workflow authorization. |
 | `knowledge` | Provides knowledge-base data for the dashboard. Document indexing/search uses direct Postgres when configured. |
@@ -27,6 +27,18 @@ Successful responses return `{ handoff, workflow }`. If a step already has a han
 `GET /api/demos/handoffs?workflowId=...&stepId=...` requires `workflow.read` and returns saved handoff records for the workflow or selected step.
 
 The route depends on server-only `FRIEREN_DEMO_BASE_URL` and `FRIEREN_DEMO_HMAC_SECRET`; neither value may be returned to the browser.
+
+## Chat Route
+
+`POST /api/chat` accepts workflow chat messages, requires `workflow.update`, creates a detached `chat_runs` row, starts the Claude Agent SDK in the current server process, and returns an SSE subscription backed by persisted `chat_run_events`.
+
+`GET /api/chat?workflow_id=...` requires `workflow.read` and returns recent run summaries, including `waiting_human` runs with `pending_human_input` so the dashboard can recover pending cards after refresh.
+
+`GET /api/chat?run_id=...` requires `workflow.read` against the stored run workflow and replays persisted SSE events after `Last-Event-ID`, `after`, `after_sequence`, or `afterSequence`.
+
+`DELETE /api/chat?run_id=...` requires `workflow.update`, marks the run canceled, clears pending HITL state, and aborts only if the current process owns the SDK controller.
+
+`POST /api/chat/respond` accepts `{ runId|run_id, promptId|prompt_id, answer|result|response|decision|cancelled }`, loads the run first, requires `workflow.update` on the stored workflow, verifies the pending prompt id, and resolves only an active in-process deferred. Cross-instance deployments may return a conflict if the request reaches a non-owner process; the pending state remains visible in Postgres.
 
 ## Patterns
 

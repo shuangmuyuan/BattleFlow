@@ -11,6 +11,7 @@ Shared application logic.
 - `knowledge-repository.ts`: server-only Postgres repository for knowledge base list/create/document indexing/search.
 - `agent-adapters/types.ts`: provider/runtime event and status types.
 - `agent-adapters/claude-code-cli.ts`: Claude Code CLI availability checks and streaming adapter.
+- `chat-human-input.ts`: in-process HITL deferred registry and pending metadata helpers for detached workflow chat runs.
 - `utils.ts`: shared `cn` utility.
 
 ## Registry Rules
@@ -52,4 +53,5 @@ Shared application logic.
 
 - Keep CLI permissions conservative.
 - Preserve stream-json parsing and error events.
-- Do not enable tools or persistent sessions without updating `docs/SECURITY.md`.
+- Do not enable tools, HITL surfaces, or persistent sessions without updating `docs/SECURITY.md`.
+- Keep HITL pending state display-oriented and tied to authorized chat runs; `/api/chat/respond` must authorize from the stored run workflow, not client-supplied workflow IDs.
