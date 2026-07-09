@@ -1,6 +1,16 @@
 packages:
   - .
 
+allowBuilds:
+  msw: false
+
 overrides:
+  '@modelcontextprotocol/sdk>@hono/node-server': 1.19.13
+  '@modelcontextprotocol/sdk>ajv': 8.18.0
+  '@modelcontextprotocol/sdk>hono': 4.12.25
+  ajv-formats>ajv: 8.18.0
+  body-parser>qs: 6.15.2
+  express>qs: 6.15.2
   lodash: 4.18.1
   postcss: 8.5.10
+  router>path-to-regexp: 8.4.0
