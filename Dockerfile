@@ -3,6 +3,7 @@ FROM public.ecr.aws/docker/library/node:20-bookworm-slim
 WORKDIR /app
 
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV BATTLEFLOW_CLAUDE_TOOLS=Read,Grep,Glob,WebSearch,WebFetch,Write,Edit
 
 RUN sed -i 's|http://deb.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g; s|http://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g' /etc/apt/sources.list.d/debian.sources
 

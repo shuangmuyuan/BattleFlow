@@ -4,7 +4,7 @@ import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { AgentEvent } from './types';
-import { getConfiguredClaudeTools } from './claude-code-tools';
+import { buildClaudeToolsArgs, getConfiguredClaudeTools } from './claude-code-tools';
 
 const mocks = vi.hoisted(() => ({
   query: vi.fn(),
@@ -101,6 +101,13 @@ describe('getConfiguredClaudeTools', () => {
       ...process.env,
       BATTLEFLOW_CLAUDE_TOOLS: 'Read Write Edit MultiEdit Bash Nope',
     })).toEqual(['Read', 'Write', 'Edit']);
+  });
+
+  it('keeps legacy CLI tool args read-only even when SDK write tools are configured', () => {
+    expect(buildClaudeToolsArgs({
+      ...process.env,
+      BATTLEFLOW_CLAUDE_TOOLS: 'Read,Grep,Write,Edit',
+    })).toEqual(['--tools', 'Read,Grep', '--allowedTools', 'Read,Grep']);
   });
 });
 
@@ -529,6 +536,20 @@ describe('streamClaudeAgentSdkTurn', () => {
     expect(status.available).toBe(false);
     expect(status.auth.anthropicTokenConfigured).toBe(false);
     expect(status.error).toContain('CLAUDE_CODE_OAUTH_TOKEN');
+  });
+
+  it('reports configured write tools and the server-side write guard', async () => {
+    process.env.BATTLEFLOW_CLAUDE_TOOLS = 'Read,Grep,Glob,WebSearch,WebFetch,Write,Edit';
+    process.env.ANTHROPIC_AUTH_TOKEN = 'runtime-token';
+
+    const status = await checkClaudeAgentSdkRuntime();
+
+    expect(status.available).toBe(true);
+    expect(status.toolsEnabled).toBe(true);
+    expect(status.tools).toEqual(['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch', 'Write', 'Edit']);
+    expect(status.writeToolsEnabled).toBe(true);
+    expect(status.writeTools).toEqual(['Write', 'Edit']);
+    expect(status.writeGuardEnabled).toBe(true);
   });
 
   it('loads Claude settings env for SDK subprocess credentials', async () => {

@@ -7,6 +7,7 @@ const SUPPORTED_CLAUDE_TOOLS = new Map([
   ['write', 'Write'],
   ['edit', 'Edit'],
 ]);
+const CLI_SAFE_TOOL_NAMES = new Set(['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch']);
 
 export function getConfiguredClaudeTools(env: NodeJS.ProcessEnv = process.env) {
   const raw = env.BATTLEFLOW_CLAUDE_TOOLS || '';
@@ -26,7 +27,9 @@ export function getConfiguredClaudeTools(env: NodeJS.ProcessEnv = process.env) {
 }
 
 export function getConfiguredClaudeToolsArg(env: NodeJS.ProcessEnv = process.env) {
-  return getConfiguredClaudeTools(env).join(',');
+  return getConfiguredClaudeTools(env)
+    .filter((tool) => CLI_SAFE_TOOL_NAMES.has(tool))
+    .join(',');
 }
 
 export function buildClaudeToolsArgs(env: NodeJS.ProcessEnv = process.env) {

@@ -27,7 +27,7 @@ set +a
 BATTLEFLOW_WORKSPACE_PATH="$(pwd)" \
 CLAUDE_WORKSPACE_DIR="$(pwd)" \
 CLAUDE_COMMAND=claude \
-BATTLEFLOW_CLAUDE_TOOLS=Read,Grep,Glob,WebSearch,WebFetch \
+BATTLEFLOW_CLAUDE_TOOLS=Read,Grep,Glob,WebSearch,WebFetch,Write,Edit \
 DEPLOY_RUN_PORT=5101 \
 pnpm dev
 ```
@@ -43,7 +43,7 @@ DEPLOY_RUN_PORT=5101 \
 BATTLEFLOW_WORKSPACE_PATH="$(pwd)" \
 CLAUDE_WORKSPACE_DIR="$(pwd)" \
 CLAUDE_COMMAND=claude \
-BATTLEFLOW_CLAUDE_TOOLS=Read,Grep,Glob,WebSearch,WebFetch \
+BATTLEFLOW_CLAUDE_TOOLS=Read,Grep,Glob,WebSearch,WebFetch,Write,Edit \
 ./node_modules/.bin/tsx watch src/server.ts
 ```
 
@@ -79,7 +79,7 @@ The build script:
 BATTLEFLOW_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start
 ```
 
-`scripts/start.sh` runs `node dist/server.js`, so `pnpm build` must run first. Production start defaults `BATTLEFLOW_CLAUDE_TOOLS` to `Read,Grep,Glob,WebSearch,WebFetch`; override the variable only when the deployment needs to disable or restrict Claude Code file-read or web tools.
+`scripts/start.sh` runs `node dist/server.js`, so `pnpm build` must run first. Production start defaults `BATTLEFLOW_CLAUDE_TOOLS` to `Read,Grep,Glob,WebSearch,WebFetch,Write,Edit`; override the variable only when the deployment needs to disable or restrict Claude Code file-read, web, or guarded node-local write tools.
 
 ## Docker Compose
 
@@ -87,9 +87,9 @@ BATTLEFLOW_PROJECT_ENV=PROD DEPLOY_RUN_PORT=5100 pnpm start
 docker compose up -d --build
 ```
 
-The Docker image starts through `pnpm start`, not `node dist/server.js`, so the same production defaults from `scripts/start.sh` are applied. `docker-compose.yml` also passes `BATTLEFLOW_CLAUDE_TOOLS` explicitly as `Read,Grep,Glob,WebSearch,WebFetch` by default.
+The Docker image starts through `pnpm start`, not `node dist/server.js`, so the same production defaults from `scripts/start.sh` are applied. `docker-compose.yml` also passes `BATTLEFLOW_CLAUDE_TOOLS` explicitly as `Read,Grep,Glob,WebSearch,WebFetch,Write,Edit` by default.
 
-Docker deployments must inject Claude authentication through environment variables. Do not rely on reading `~/.claude/settings.json` inside the container. At minimum, compose deployments provide `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`; deployments that use another supported auth mechanism may provide `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` through the container environment instead. After deployment, verify `GET /api/agent-runtime` reports `toolsEnabled: true`, `auth.anthropicTokenConfigured: true`, and includes `Read`, `Grep`, `Glob`, `WebSearch`, and `WebFetch`.
+Docker deployments must inject Claude authentication through environment variables. Do not rely on reading `~/.claude/settings.json` inside the container. At minimum, compose deployments provide `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`; deployments that use another supported auth mechanism may provide `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` through the container environment instead. After deployment, verify `GET /api/agent-runtime` reports `toolsEnabled: true`, `writeToolsEnabled: true`, `writeGuardEnabled: true`, `auth.anthropicTokenConfigured: true`, and includes `Read`, `Grep`, `Glob`, `WebSearch`, `WebFetch`, `Write`, and `Edit`.
 
 ## Database Bootstrap
 
@@ -134,5 +134,5 @@ The local route is `POST /api/demos/handoffs` with `{ workflowId, stepId }`. It 
 | `CLAUDE_MODEL` | Claude model alias, defaults to `sonnet`. |
 | `CLAUDE_MAX_BUDGET_USD` | Per-turn CLI budget, defaults to `1.00`. |
 | `CLAUDE_WORKSPACE_DIR` | Working directory for Claude CLI turns. |
-| `BATTLEFLOW_CLAUDE_TOOLS` | Optional comma-separated Claude Code tools for CLI-backed chat and Skill tuning. Only `Read`, `Grep`, `Glob`, `WebSearch`, and `WebFetch` are accepted, for example `Read,Grep,Glob,WebSearch,WebFetch`. Local `pnpm dev` and production `pnpm start` default to that approved tool set unless the variable is explicitly overridden. |
+| `BATTLEFLOW_CLAUDE_TOOLS` | Optional comma-separated Claude Code tools for SDK-backed workflow chat and CLI-backed helper flows. `Read`, `Grep`, `Glob`, `WebSearch`, `WebFetch`, `Write`, and `Edit` are accepted for SDK workflow chat; `Write` and `Edit` are guarded to the active node cwd. Legacy CLI helper calls filter this value back to the read/web subset. `MultiEdit`, `Bash`, and unknown tools are ignored. Local `pnpm dev` and production `pnpm start` default to `Read,Grep,Glob,WebSearch,WebFetch,Write,Edit` unless explicitly overridden. |
 | `BATTLEFLOW_CLAUDE_SETTINGS_PATH` | Optional local-development fallback path for a Claude settings JSON file whose `env` block should be merged into the SDK subprocess environment. Do not use this as the Docker/production secret source; inject Anthropic credentials as environment variables instead. |

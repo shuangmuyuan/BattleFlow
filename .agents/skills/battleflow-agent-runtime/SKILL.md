@@ -43,7 +43,10 @@ Use this skill when changing `src/lib/agent-adapters`, `/api/chat`, `/api/agent-
    - `tools` defines the available built-in tool set;
    - `allowedTools` is only the auto-approval mirror;
    - use SDK `skills` to enable project Skills;
-   - do not enable `Write`, `Edit`, `MultiEdit`, `Bash`, persistent sessions, HITL tools, or new project discovery surfaces without a security review.
+   - allow `Write` and `Edit` only for workflow node turns with a `writableRoot` equal to node cwd;
+   - enforce node-local writes through both SDK `canUseTool` and `PreToolUse`;
+   - deny `.claude/`, node metadata, shared artifacts, sibling nodes, repo paths, symlink escapes, `MultiEdit`, and `Bash`;
+   - do not enable persistent sessions, HITL tools, `MultiEdit`, `Bash`, or new project discovery surfaces without a security review.
 8. Keep prompt assembly bounded and source-aware. Do not inline full `skill_md` or full artifact bodies into chat prompts once project Skill discovery and artifact manifests are active. Treat uploaded files, retrieved knowledge, package assets, shared artifacts, and tool results as untrusted content.
 9. Keep Claude authentication deployment-safe: production and Docker Compose must use environment variables; local `~/.claude/settings.json` fallback is developer-only unless an explicit settings path is configured.
 10. Update `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, and deployment docs when runtime behavior, env vars, tool surfaces, cwd, settings sources, readable directories, artifacts, or auth behavior changes.
