@@ -1568,11 +1568,13 @@ export async function POST(request: NextRequest) {
         headers: { 'Content-Type': 'application/json' },
       });
     }
+    const currentStepArtifact = workflow.artifacts.find((artifact) => artifact.producedByStepId === stepId);
     const nodeWorkspace = await materializeNodeWorkspace({
       organizationId: context.activeOrganization.id,
       workflowId,
       stepId,
       skill: activeSkill,
+      ...(currentStepArtifact ? { artifactSeed: currentStepArtifact } : {}),
     });
 
     const uploadedFiles = Array.isArray(body.uploaded_files) ? body.uploaded_files as UploadedFileContext[] : [];

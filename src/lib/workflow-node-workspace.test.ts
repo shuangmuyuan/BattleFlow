@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SkillRecord } from './skill-registry';
+import type { WorkflowArtifactRecord } from './workflow-registry';
 import { materializeNodeWorkspace } from './workflow-node-workspace';
 
 const originalEnv = { ...process.env };
@@ -44,6 +45,40 @@ function createPackage(name: string, skillMd: string) {
   writeFileSync(path.join(packagePath, 'skill.md'), skillMd);
   writeFileSync(path.join(packagePath, 'assets', 'template.md'), 'Template');
   return packagePath;
+}
+
+function createArtifact(overrides: Partial<WorkflowArtifactRecord> = {}): WorkflowArtifactRecord {
+  return {
+    id: 'artifact-step-1',
+    workflowId: 'workflow-1',
+    producedByStepId: 'step-1',
+    producedByStepName: 'Requirement Clarification',
+    title: 'Draft Output',
+    summary: 'Draft summary.',
+    fileName: 'step-1-Draft-Output.md',
+    path: 'artifacts/step-1-Draft-Output.md',
+    format: 'markdown',
+    mimeType: 'text/markdown; charset=utf-8',
+    size: 64,
+    checksum: 'sha256-1',
+    version: 1,
+    created_at: '2026-07-08T00:00:00.000Z',
+    updated_at: '2026-07-08T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function writeArtifactFile(artifact: WorkflowArtifactRecord, content = '# Draft Output\n\nCurrent artifact.') {
+  const artifactPath = path.join(
+    tempRoot,
+    'runtime',
+    'org-1',
+    'workflow-1',
+    artifact.path.replace(/^artifacts\//, 'artifacts/'),
+  );
+  mkdirSync(path.dirname(artifactPath), { recursive: true });
+  writeFileSync(artifactPath, content);
+  return artifactPath;
 }
 
 beforeEach(() => {
@@ -178,5 +213,63 @@ describe('materializeNodeWorkspace', () => {
 
     expect(readFileSync(path.join(workspace.skillDirectory, 'SKILL.md'), 'utf8')).toContain('Registry Skill Markdown');
     expect(JSON.parse(readFileSync(workspace.metadataPath, 'utf8'))).not.toHaveProperty('sourcePackagePath');
+  });
+
+  it('seeds the current promoted artifact into the node cwd as an editable draft', async () => {
+    const artifact = createArtifact();
+    writeArtifactFile(artifact);
+
+    const workspace = await materializeNodeWorkspace({
+      organizationId: 'org-1',
+      workflowId: 'workflow-1',
+      stepId: 'step-1',
+      skill: createSkill(),
+      artifactSeed: artifact,
+    });
+
+    const seededPath = path.join(workspace.cwd, 'step-1-Draft-Output.md');
+    expect(workspace.seededArtifactPath).toBe(seededPath);
+    expect(readFileSync(seededPath, 'utf8')).toBe('# Draft Output\n\nCurrent artifact.');
+    expect(JSON.parse(readFileSync(workspace.metadataPath, 'utf8'))).toEqual(expect.objectContaining({
+      seededArtifactPath: seededPath,
+      seededArtifactId: 'artifact-step-1',
+      seededArtifactChecksum: 'sha256-1',
+      seededArtifactUpdatedAt: '2026-07-08T00:00:00.000Z',
+    }));
+  });
+
+  it('replaces a stale draft symlink without writing through it', async () => {
+    const artifact = createArtifact();
+    writeArtifactFile(artifact, '# Safe Artifact\n');
+    const nodeCwd = path.join(tempRoot, 'runtime', 'org-1', 'workflow-1', 'nodes', 'step-1');
+    const outsidePath = path.join(tempRoot, 'outside.md');
+    mkdirSync(nodeCwd, { recursive: true });
+    writeFileSync(outsidePath, 'outside-original');
+    symlinkSync(outsidePath, path.join(nodeCwd, artifact.fileName));
+
+    const workspace = await materializeNodeWorkspace({
+      organizationId: 'org-1',
+      workflowId: 'workflow-1',
+      stepId: 'step-1',
+      skill: createSkill(),
+      artifactSeed: artifact,
+    });
+
+    const seededPath = path.join(workspace.cwd, artifact.fileName);
+    expect(lstatSync(seededPath).isSymbolicLink()).toBe(false);
+    expect(readFileSync(seededPath, 'utf8')).toBe('# Safe Artifact\n');
+    expect(readFileSync(outsidePath, 'utf8')).toBe('outside-original');
+  });
+
+  it('rejects artifact seed paths that escape the workflow artifacts directory', async () => {
+    await expect(materializeNodeWorkspace({
+      organizationId: 'org-1',
+      workflowId: 'workflow-1',
+      stepId: 'step-1',
+      skill: createSkill(),
+      artifactSeed: createArtifact({
+        path: 'artifacts/../outside.md',
+      }),
+    })).rejects.toThrow('outside the artifacts directory');
   });
 });

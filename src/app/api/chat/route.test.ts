@@ -656,6 +656,59 @@ describe('Chat API route', () => {
     expect(agentInput.systemPrompt).not.toContain('/tmp/battleflow-runtime/org-1/workflow-1/artifacts/step-1-Previous-Requirements.md');
   });
 
+  it('passes only the current step artifact as the node workspace seed', async () => {
+    const currentArtifact = {
+      id: 'artifact-step-1',
+      workflowId: 'workflow-1',
+      producedByStepId: 'step-1',
+      producedByStepName: 'Current step',
+      title: 'Current Draft',
+      summary: 'Current step draft.',
+      fileName: 'step-1-Current-Draft.md',
+      path: 'artifacts/step-1-Current-Draft.md',
+      format: 'markdown' as const,
+      mimeType: 'text/markdown; charset=utf-8',
+      size: 1024,
+      checksum: 'sha256-current',
+      version: 2,
+      created_at: '2026-07-04T00:00:00.000Z',
+      updated_at: '2026-07-05T00:00:00.000Z',
+    };
+    const otherArtifact = {
+      ...currentArtifact,
+      id: 'artifact-step-2',
+      producedByStepId: 'step-2',
+      producedByStepName: 'Other step',
+      title: 'Other Draft',
+      fileName: 'step-2-Other-Draft.md',
+      path: 'artifacts/step-2-Other-Draft.md',
+      checksum: 'sha256-other',
+    };
+    mocks.getWorkflow.mockResolvedValue(workflow({
+      artifacts: [otherArtifact, currentArtifact],
+    }));
+    mocks.streamClaudeAgentSdkTurn.mockReturnValue(streamAgentEvents([
+      { type: 'assistant_final', text: 'ok' },
+      { type: 'session_status', status: 'done' },
+    ]));
+
+    const response = await POST(postRequest({
+      workflowId: 'workflow-1',
+      workflow_step_id: 'step-1',
+      messages: [{ role: 'user', content: '继续编辑当前节点产物' }],
+    }));
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(mocks.materializeNodeWorkspace).toHaveBeenCalledWith({
+      organizationId: 'org-1',
+      workflowId: 'workflow-1',
+      stepId: 'step-1',
+      skill: expect.objectContaining({ id: 'skill-1' }),
+      artifactSeed: currentArtifact,
+    });
+  });
+
   it('only passes enabled prior-step attachments from supplemental context as file references', async () => {
     mocks.getWorkflow.mockResolvedValue(workflow({
       steps: [

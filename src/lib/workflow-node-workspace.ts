@@ -1,6 +1,8 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { SkillRecord, SkillVersion } from './skill-registry';
+import { resolveWorkflowArtifactPath } from './workflow-artifacts';
+import type { WorkflowArtifactRecord } from './workflow-registry';
 import {
   getWorkflowNodeRuntimeDirectory,
   isPathInsideRoot,
@@ -15,6 +17,7 @@ export interface MaterializeNodeWorkspaceInput {
   workflowId: string;
   stepId: string;
   skill: Pick<SkillRecord, 'id' | 'skill_id' | 'name' | 'display_name' | 'version' | 'skill_md' | 'versions'>;
+  artifactSeed?: Pick<WorkflowArtifactRecord, 'path' | 'fileName' | 'checksum' | 'id' | 'updated_at'>;
 }
 
 export interface MaterializedNodeWorkspace {
@@ -24,6 +27,7 @@ export interface MaterializedNodeWorkspace {
   skillDirectory: string;
   skillFilePath: string;
   metadataPath: string;
+  seededArtifactPath?: string;
 }
 
 interface NodeWorkspaceMetadata {
@@ -34,6 +38,10 @@ interface NodeWorkspaceMetadata {
   skillVersion: string;
   skillName: string;
   sourcePackagePath?: string;
+  seededArtifactPath?: string;
+  seededArtifactId?: string;
+  seededArtifactChecksum?: string;
+  seededArtifactUpdatedAt?: string;
   materializedAt: string;
 }
 
@@ -68,6 +76,17 @@ function resolveSkillName(skill: MaterializeNodeWorkspaceInput['skill']) {
     skill.skill_id || skill.id || skill.name || skill.display_name || 'skill',
     'skill',
   );
+}
+
+function sanitizeDraftFileName(fileName: string | undefined, fallback: string) {
+  const baseName = path.basename((fileName || '').trim());
+  const sanitized = baseName
+    .replace(/[<>:"/\\|?*\u0000-\u001F]+/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 120);
+  const candidate = sanitized && sanitized !== '.' && sanitized !== '..' ? sanitized : fallback;
+  return /\.md$/i.test(candidate) ? candidate : `${candidate}.md`;
 }
 
 async function pathExists(filePath: string) {
@@ -168,6 +187,41 @@ async function writeSkillMd(
   return targetSkillMdPath;
 }
 
+async function seedArtifactDraft(
+  input: MaterializeNodeWorkspaceInput,
+  cwd: string,
+) {
+  if (!input.artifactSeed) return undefined;
+
+  const sourcePath = resolveWorkflowArtifactPath({
+    organizationId: input.organizationId,
+    workflowId: input.workflowId,
+    artifact: input.artifactSeed,
+  });
+  if (!(await pathExists(sourcePath))) {
+    throw new Error('Workflow artifact source file does not exist.');
+  }
+
+  const targetFileName = sanitizeDraftFileName(
+    input.artifactSeed.fileName,
+    `${sanitizePathSegment(input.stepId, 'stepId')}-artifact.md`,
+  );
+  const targetPath = path.resolve(cwd, targetFileName);
+  if (!isPathInsideRoot(targetPath, cwd)) {
+    throw new Error('Seeded artifact draft path is outside the node workspace.');
+  }
+
+  const existing = await fs.lstat(targetPath).catch(() => null);
+  if (existing?.isDirectory()) {
+    throw new Error('Seeded artifact draft path already exists as a directory.');
+  }
+  if (existing) {
+    await fs.rm(targetPath, { force: true });
+  }
+  await fs.copyFile(sourcePath, targetPath);
+  return targetPath;
+}
+
 export async function materializeNodeWorkspace(
   input: MaterializeNodeWorkspaceInput,
 ): Promise<MaterializedNodeWorkspace> {
@@ -195,6 +249,7 @@ export async function materializeNodeWorkspace(
 
   await fs.rm(skillsRoot, { recursive: true, force: true });
   await fs.rename(tempSkillsRoot, skillsRoot);
+  const seededArtifactPath = await seedArtifactDraft(input, cwd);
 
   const metadataPath = path.join(cwd, NODE_WORKSPACE_METADATA_FILE);
   const metadata: NodeWorkspaceMetadata = {
@@ -205,6 +260,12 @@ export async function materializeNodeWorkspace(
     skillVersion: resolveSkillVersion(input.skill),
     skillName,
     ...(allowedSourcePackagePath ? { sourcePackagePath: allowedSourcePackagePath } : {}),
+    ...(seededArtifactPath ? {
+      seededArtifactPath,
+      seededArtifactId: input.artifactSeed?.id,
+      seededArtifactChecksum: input.artifactSeed?.checksum,
+      seededArtifactUpdatedAt: input.artifactSeed?.updated_at,
+    } : {}),
     materializedAt: new Date().toISOString(),
   };
   await fs.writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
@@ -216,5 +277,6 @@ export async function materializeNodeWorkspace(
     skillDirectory,
     skillFilePath: path.join(skillDirectory, path.basename(skillFilePath)),
     metadataPath,
+    ...(seededArtifactPath ? { seededArtifactPath } : {}),
   };
 }
