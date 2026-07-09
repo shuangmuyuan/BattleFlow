@@ -34,7 +34,7 @@ Use this skill when changing `src/lib/agent-adapters`, `/api/chat`, `/api/agent-
    - enforce realpath containment under `SKILL_REGISTRY_DIR/packages` or `skills/official`;
    - keep `data/workflows/` runtime data gitignored.
 6. Keep shared artifacts server-controlled:
-   - promote artifacts only after validation passes;
+   - promote artifacts only after output is confirmed into durable `step.output`;
    - store files under `data/workflows/<orgId>/<workflowId>/artifacts/`;
    - expose only compact artifact manifests and node-relative paths in prompts;
    - add artifacts as readable directories only, never as writable tool roots;

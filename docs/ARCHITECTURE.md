@@ -96,20 +96,20 @@ The workflow step status values are:
 - `self_checking`: Skill self-check is running;
 - `agent_validating`: independent Agent validation is running;
 - `validation_failed`: current candidate did not pass and the user must revise or retry;
-- `completed`: candidate passed validation and became durable step output.
+- `completed`: candidate was accepted by the completion gate and became durable step output.
 
 Each workflow stores `validationAttempts` with criteria, candidate hash, candidate snapshot ID, self-check result, optional Agent validation result, final attempt status, and timestamps. The dashboard reads these records to show blockers and retry actions.
 
 ## Workflow Shared Artifacts
 
-Validated workflow outputs are also promoted into a workflow-level shared artifact area:
+Confirmed workflow outputs are also promoted into a workflow-level shared artifact area:
 
 - files live under `data/workflows/<orgId>/<workflowId>/artifacts/`;
 - metadata lives in `WorkflowRecord.artifacts`;
 - `artifacts/manifest.json` mirrors compact metadata for agent-readable discovery;
 - each artifact records the producing step, title, summary, file name, relative path, MIME type, byte size, checksum, version, and timestamps.
 
-Only server-side validation code calls `promoteWorkflowStepArtifact()`. Client requests cannot directly write shared artifact paths. Re-validating the same step updates that step's artifact in place, keeps the artifact id stable, and increments the version.
+Only server-side output confirmation code calls `promoteWorkflowStepArtifact()`. In the current product flow this happens inside the existing workflow validation route after the candidate has become `step.output`; this phase does not change validation semantics. Client requests cannot directly write shared artifact paths. Confirming the same step again updates that step's artifact in place, keeps the artifact id stable, and increments the version.
 
 Downstream chat turns can read promoted artifacts through Claude Agent SDK file tools because the artifact directory is passed as an additional read-only directory. The prompt lists node-relative paths instead of absolute runtime paths so chat output and tool-call UI do not expose local deployment roots such as `/app` or a developer home directory.
 

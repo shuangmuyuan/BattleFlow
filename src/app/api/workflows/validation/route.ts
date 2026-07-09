@@ -475,7 +475,7 @@ async function persistValidationState(workflow: WorkflowRecord) {
   return updated;
 }
 
-async function promoteValidatedStepArtifact(
+async function promoteConfirmedStepArtifact(
   workflow: WorkflowRecord,
   stepId: string,
   output: string,
@@ -517,7 +517,7 @@ async function runValidation(
       validationStatus: 'passed',
       validationSummary: undefined,
     }, completedAt);
-    const workflowWithArtifact = await promoteValidatedStepArtifact(completedWorkflow, step.id, normalizedOutput, {
+    const workflowWithArtifact = await promoteConfirmedStepArtifact(completedWorkflow, step.id, normalizedOutput, {
       organizationId: options.organizationId,
       completedAt,
     });
@@ -610,7 +610,7 @@ async function runValidation(
       validationSummary: gateResult.summary || (gateResult.shouldPromoteCandidate ? '验证通过' : '验证未通过'),
     }, selfCheckedAt), finalAttempt, selfCheckedAt);
     const workflowWithArtifact = gateResult.shouldPromoteCandidate
-      ? await promoteValidatedStepArtifact(finalState, step.id, normalizedOutput, {
+      ? await promoteConfirmedStepArtifact(finalState, step.id, normalizedOutput, {
         organizationId: options.organizationId,
         completedAt: selfCheckedAt,
       })
@@ -666,7 +666,7 @@ async function runValidation(
     validationSummary: gateResult.summary || (gateResult.shouldPromoteCandidate ? '验证通过' : '验证未通过'),
   }, completedAt), finalAttempt, completedAt);
   const workflowWithArtifact = gateResult.shouldPromoteCandidate
-    ? await promoteValidatedStepArtifact(finalState, step.id, normalizedOutput, {
+    ? await promoteConfirmedStepArtifact(finalState, step.id, normalizedOutput, {
       organizationId: options.organizationId,
       completedAt,
     })

@@ -614,7 +614,7 @@ describe('Chat API route', () => {
         producedByStepId: 'step-1',
         producedByStepName: 'Previous step',
         title: 'Previous Requirements',
-        summary: 'Validated upstream requirements.',
+        summary: 'Confirmed upstream requirements.',
         fileName: 'step-1-Previous-Requirements.md',
         path: 'artifacts/step-1-Previous-Requirements.md',
         format: 'markdown',

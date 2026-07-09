@@ -136,7 +136,7 @@ function artifact(): WorkflowArtifactRecord {
     producedByStepId: 'step-1',
     producedByStepName: 'Requirement Clarification',
     title: 'Validation workflow',
-    summary: 'Validated output.',
+    summary: 'Confirmed output.',
     fileName: 'step-1-Validation-workflow.md',
     path: 'artifacts/step-1-Validation-workflow.md',
     format: 'markdown',
@@ -181,7 +181,7 @@ beforeEach(() => {
 });
 
 describe('Workflow validation route', () => {
-  it('promotes a passed candidate output to a workflow artifact', async () => {
+  it('promotes a confirmed step output to a workflow artifact', async () => {
     const response = await POST(postRequest({
       action: 'start_step_validation',
       workflowId: 'workflow-1',

@@ -6738,7 +6738,7 @@ export default function WorkflowsPage() {
                     renderStepOutputPreview(currentStep)
                   ) : (
                     <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
-                      当前步骤验证通过后，会在这里展示本步骤产出。
+                      当前步骤产物确认后，会在这里展示本步骤产出。
                     </p>
                   )}
                 </div>
@@ -6752,7 +6752,7 @@ export default function WorkflowsPage() {
                     workflowArtifacts.map((artifact) => renderWorkflowArtifactPreview(artifact))
                   ) : (
                     <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
-                      节点产物验证通过后，会在这里形成可下载的共享产物。
+                      节点产物确认后，会在这里形成可下载的共享产物。
                     </p>
                   )}
                 </div>
@@ -6808,7 +6808,7 @@ export default function WorkflowsPage() {
                     </div>
                   ) : (
                     <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
-                      最后一个步骤验证通过后，这里会自动汇总为工作流最终产出。
+                      最后一个步骤产物确认后，这里会自动汇总为工作流最终产出。
                     </p>
                   )}
                 </div>

@@ -77,11 +77,11 @@ Validation failures and runtime errors are stored as bounded summaries and findi
 
 ## Workflow Shared Artifacts
 
-Server-promoted workflow artifacts are durable outputs created only after validation passes. The shared area is intentionally read-only for agent chat turns:
+Server-promoted workflow artifacts are durable outputs created only after a candidate has been confirmed into `step.output`. The shared area is intentionally read-only for agent chat turns:
 
 - artifact files are stored under `data/workflows/<orgId>/<workflowId>/artifacts/`;
 - metadata is stored in `WorkflowRecord.artifacts` and mirrored into `artifacts/manifest.json`;
-- failed validation candidates remain in candidate fields and must not be promoted to `step.output` or shared artifacts;
+- failed or unconfirmed candidates remain in candidate fields and must not be promoted to `step.output` or shared artifacts;
 - chat prompts include compact artifact metadata and node-relative paths, not full artifact bodies or absolute runtime roots;
 - Claude Agent SDK receives the artifacts directory as an additional readable directory only when promoted artifacts exist.
 
