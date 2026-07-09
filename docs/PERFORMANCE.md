@@ -7,6 +7,7 @@
 - Workflow page state, context files, snapshots, and chat panels.
 - Workflow validation gates through `/api/workflows/validation`.
 - Chat streaming through `/api/chat`.
+- Detached chat run persistence through `chat_runs` and `chat_run_events`.
 - Claude CLI Skill tuning through `/api/skills/tune`.
 - File-backed registry read/write paths.
 - Direct Postgres pool usage in server routes and repositories.
@@ -41,9 +42,13 @@ File-backed registries are simple and inspectable but not meant for high-concurr
 ## Chat and Agent Runtime
 
 - Stream responses instead of buffering full model output.
+- Workflow chat runs are detached from browser SSE connections. Keep the server-side SDK consumer writing incremental events to Postgres so refreshes and route changes can resume without restarting the model call.
+- Use `Last-Event-ID`/`after` replay for run subscriptions instead of replaying already delivered events to the browser.
+- Keep `chat_run_events` payloads bounded and display-oriented. Store concise tool call summaries, sanitized paths, status, usage, terminal snippets, and final messages; do not persist unbounded raw prompts or full private documents as event payloads.
 - Truncate workflow, knowledge, and file context before prompt construction.
 - Keep Skill package assets under a separate prompt budget from uploaded workflow files.
 - Keep prompt/context budgets conservative; BattleFlow does not set a per-turn Claude spend cap.
 - Surface adapter availability through `/api/agent-runtime` without blocking dashboard rendering.
+- Browser disconnects should not be used as a runtime cancellation mechanism. Use explicit DELETE stop semantics so long generations are not restarted or lost because of refreshes, mobile network changes, or tab navigation.
 - Validation prompts use bounded candidate, Skill, previous-step, and recent-message context. Keep those budgets conservative because each validation can make two CLI calls plus one repair call when JSON parsing fails.
 - `/api/workflows/validation` is currently synchronous from the browser's perspective. Long Claude CLI runs can hold the request open; if usage grows, move validation into a queued/background job with polling rather than increasing prompt size or route timeouts.

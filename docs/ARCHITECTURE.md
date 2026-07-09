@@ -35,6 +35,7 @@ BattleFlow currently has two storage styles:
    - `src/storage/database/postgres-client.ts` creates a server-only Postgres pool from `BATTLEFLOW_DATABASE_URL`.
    - `scripts/database/001_knowledge_store.sql` bootstraps organizations, knowledge bases, knowledge documents, and lexical/trigram search indexes.
    - `scripts/database/002_account_org_permissions.sql` bootstraps first-party accounts, sessions, organizations, resource grants, snapshots, milestones, and PRD documents.
+   - `scripts/database/006_chat_runs.sql` bootstraps detached workflow chat runs and replayable run events.
 
 Agents must preserve the distinction between source files and runtime registry data.
 
@@ -48,7 +49,7 @@ All API handlers use App Router route handlers under `src/app/api`.
 - `/api/workflows/artifacts` streams server-promoted workflow artifacts after `workflow.read` authorization and artifact path containment checks.
 - `/api/workflows/snapshots` manages workflow step snapshots.
 - `/api/workflows/milestones` manages milestones.
-- `/api/chat` streams product-planning chat responses with knowledge and workflow context.
+- `/api/chat` starts and resumes product-planning chat runs with knowledge and workflow context. POST creates a detached Postgres `chat_runs` record, starts Claude Agent SDK work in the server process, and returns an SSE subscription to persisted `chat_run_events`. GET with `workflow_id` lists authorized runs; GET with `run_id` replays events after `Last-Event-ID` or `after`; DELETE marks a run canceled and aborts only when the current process owns its controller.
 - `/api/demos/handoffs` creates and reads node-level Demo handoff records after workflow authorization. `POST` requires `workflow.update`, sends the current completed step's durable `step.output` to the external Demo platform, and stores the returned link in `workflow.demoHandoffs`; `GET` requires `workflow.read`.
 - `/api/agent-runtime` reports Claude Code CLI adapter availability.
 - `/api/prd` reads and writes PRD documents through direct Postgres.
@@ -65,7 +66,7 @@ Skill registry identity has two layers: `skill_id` is the logical Skill identity
 Workflow chat uses the Claude Agent SDK adapter in `src/lib/agent-adapters/claude-agent-sdk.ts`.
 
 - It streams SDK messages from `query()` and maps them into BattleFlow `AgentEvent` values.
-- It keeps `persistSession: false` in the current implementation, preserving the previous per-turn prompt assembly behavior until detached runs and session resume are introduced.
+- It keeps `persistSession: false` in the current implementation, preserving the previous per-turn prompt assembly behavior until session resume is introduced.
 - It uses `tools` to restrict the available built-in tool set to the explicit `BATTLEFLOW_CLAUDE_TOOLS` allowlist, and mirrors that list in `allowedTools` only for auto-approval.
 - Workflow chat turns resolve the active Skill from the workflow step server-side, materialize that Skill under `data/workflows/<orgId>/<workflowId>/nodes/<stepId>/.claude/skills/<skill>/SKILL.md`, set SDK `cwd` to the node directory, enable `settingSources: ['project']`, and pass `skills: [currentSkillName]` so only the current node Skill is enabled.
 - When a workflow has promoted artifacts, chat turns add `data/workflows/<orgId>/<workflowId>/artifacts/` as an additional read-only directory and inject only a compact artifact manifest with node-relative paths such as `../../artifacts/manifest.json`.
@@ -75,6 +76,15 @@ Workflow chat uses the Claude Agent SDK adapter in `src/lib/agent-adapters/claud
 - It uses `CLAUDE_COMMAND` only when a custom Claude executable is configured; otherwise the SDK bundled executable is used. It also uses `CLAUDE_MODEL` and `CLAUDE_WORKSPACE_DIR`. BattleFlow does not set a per-turn Claude budget cap.
 - It can enable the approved Claude Code `Read`, `Grep`, `Glob`, `WebSearch`, `WebFetch`, `Write`, and `Edit` tools when configured through `BATTLEFLOW_CLAUDE_TOOLS`. Unsupported tool names, including `MultiEdit` and `Bash`, are ignored. Production start through `scripts/start.sh` supplies that approved tool list by default so deployments that run `pnpm start` get workflow attachment reads, web access, and node-local draft writes without a manual environment edit.
 - It uses deployment environment variables for Claude authentication. Docker Compose injects Anthropic variables directly into the container; the local `~/.claude/settings.json` fallback is only enabled for `BATTLEFLOW_PROJECT_ENV=DEV`, or when an explicit `BATTLEFLOW_CLAUDE_SETTINGS_PATH` is provided.
+
+Workflow chat run lifecycle is detached from the browser SSE connection:
+
+- `POST /api/chat` requires `workflow.update`, creates a `chat_runs` row, appends a `chat_run` event, starts the SDK consumer in the server process, and returns a subscription stream.
+- The SDK consumer appends every assistant, tool, status, usage, terminal, error, and done payload to `chat_run_events` before publishing it to in-process subscribers.
+- `GET /api/chat?run_id=...` requires `workflow.read`, replays persisted events after `Last-Event-ID`, `after`, `after_sequence`, or `afterSequence`, emits `id: <sequence>` for each event, and then subscribes to new events.
+- Browser disconnects only remove the SSE subscriber. They do not cancel the SDK run.
+- `DELETE /api/chat?run_id=...` requires `workflow.update`, updates the run status to `canceled`, and aborts the SDK only when the current Node process owns the run controller. In multi-instance deployments, other instances observe the canceled DB status between events and stop cooperatively.
+- Successful, failed, and canceled terminal states persist an assistant or error message back to the workflow step chat so a later workflow refresh can recover the final user-visible state.
 
 The legacy Claude Code CLI adapter in `src/lib/agent-adapters/claude-code-cli.ts` remains available for workflow validation and helper flows such as `runClaudeCodeCliPrompt`. Do not grant SDK/CLI write tools, broaden permissions, or add new project discovery surfaces without a security review.
 Even when `BATTLEFLOW_CLAUDE_TOOLS` includes `Write` and `Edit` for SDK workflow chat, legacy CLI helper argument construction filters the tool list back to the read/web subset.

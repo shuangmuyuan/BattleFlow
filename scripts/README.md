@@ -14,6 +14,7 @@ Repository automation scripts.
 - `apply-postgres-migration.mjs`: applies static SQL migrations to `BATTLEFLOW_DATABASE_URL`.
 - `migrate-resource-metadata.mjs`: backfills Skill/workflow business metadata and owner grants from file-backed runtime registries into Postgres.
 - `database/005_workflow_private_grants.sql`: removes legacy organization-wide workflow grants so user-created workflows stay private by default.
+- `database/006_chat_runs.sql`: creates detached workflow chat run state and replayable SSE event tables used by `/api/chat`.
 
 ## Rules
 

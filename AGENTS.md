@@ -91,10 +91,12 @@ Required flow:
    - if `GET /api/auth/me` returns `503` with `Authentication storage is not configured`, treat it as a missing runtime env problem first, not as a database bootstrap problem;
    - a healthy unauthenticated local service should return `401 Authentication required` from `/api/auth/me`, not `503`.
 6. Run the local database initialization scripts only when the local `battleflow` database or tables are actually missing:
+   - `pnpm db:postgres:init` for the full local Postgres bootstrap; or run the targeted scripts below when only one schema area is missing.
    - `pnpm db:knowledge:init`
    - `pnpm db:accounts:init`
    - `pnpm db:sso:init`
    - `pnpm db:notifications:init`
+   - `pnpm db:chat-runs:init`
    - `pnpm db:resources:migrate` after auth/user bootstrap when resource metadata is needed.
 7. Run the repository validation gate before handing the app back:
    - `pnpm validate`
@@ -106,6 +108,8 @@ Required flow:
 Remote deployment is no longer the default verification path. Use `ssh boxhub-r` and `/root/data/BattleFlow` only when the user explicitly asks to deploy or verify on the shared remote Linux host.
 
 Remote production deployments that use `pnpm start` do not need a manual tool environment edit: `scripts/start.sh` defaults `BATTLEFLOW_CLAUDE_TOOLS` to `Read,Grep,Glob,WebSearch,WebFetch,Write,Edit`. Docker deployments must also keep `Dockerfile` pointed at `pnpm start` and keep `docker-compose.yml` passing `BATTLEFLOW_CLAUDE_TOOLS: "${BATTLEFLOW_CLAUDE_TOOLS:-Read,Grep,Glob,WebSearch,WebFetch,Write,Edit}"`. Codex still needs to ensure the remote host has Claude Code CLI installed/authenticated, outbound network access from the host, and the repository `.agents/settings.json` with `skipWebFetchPreflight: true`.
+
+Production and Docker deployments that use workflow chat must run `pnpm db:postgres:init` or at least `pnpm db:chat-runs:init` against the target `BATTLEFLOW_DATABASE_URL` before serving traffic. `/api/chat` stores detached run state in Postgres tables from `scripts/database/006_chat_runs.sql`; missing tables will make chat start/list/resume fail even when auth and workflow registries are healthy.
 
 After any production or Docker deployment, verify `GET /api/agent-runtime` returns `toolsEnabled: true`, `writeToolsEnabled: true`, `writeGuardEnabled: true`, and includes `Read`, `Grep`, `Glob`, `WebSearch`, `WebFetch`, `Write`, and `Edit`. This catches cases where the image or compose entrypoint bypasses `scripts/start.sh`.
 

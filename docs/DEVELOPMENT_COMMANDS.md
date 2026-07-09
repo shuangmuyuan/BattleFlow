@@ -94,10 +94,28 @@ Docker deployments must inject Claude authentication through environment variabl
 ## Database Bootstrap
 
 ```bash
-BATTLEFLOW_DATABASE_URL=postgresql://... pnpm db:knowledge:init
+BATTLEFLOW_DATABASE_URL=postgresql://... pnpm db:postgres:init
 ```
 
-This applies the direct Postgres knowledge-store bootstrap in `scripts/database/001_knowledge_store.sql`.
+This applies the full direct Postgres bootstrap:
+
+1. `scripts/database/001_knowledge_store.sql` for organizations, knowledge bases, documents, and search indexes.
+2. `scripts/database/002_account_org_permissions.sql` for accounts, sessions, organizations, grants, snapshots, milestones, and PRD documents.
+3. `scripts/database/002_sso_users.sql` for SSO user compatibility.
+4. `scripts/database/004_notifications.sql` for notifications.
+5. `scripts/database/006_chat_runs.sql` for detached workflow chat runs and replayable run events.
+
+Targeted bootstrap commands are also available when only one area is missing:
+
+```bash
+BATTLEFLOW_DATABASE_URL=postgresql://... pnpm db:knowledge:init
+BATTLEFLOW_DATABASE_URL=postgresql://... pnpm db:accounts:init
+BATTLEFLOW_DATABASE_URL=postgresql://... pnpm db:sso:init
+BATTLEFLOW_DATABASE_URL=postgresql://... pnpm db:notifications:init
+BATTLEFLOW_DATABASE_URL=postgresql://... pnpm db:chat-runs:init
+```
+
+Run `pnpm db:chat-runs:init` before enabling workflow chat in any Postgres-backed deployment. `/api/chat` creates `chat_runs` and `chat_run_events` rows before starting Claude Agent SDK work; missing chat run tables will break chat start, run listing, and SSE resume.
 
 ## Demo Handoff Integration
 

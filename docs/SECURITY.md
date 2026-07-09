@@ -26,6 +26,7 @@ Never commit:
 - Super admin product access can view and administer organization content, but it must still be blocked from secret material such as connection strings, service role keys, environment variables, and raw auth tokens.
 - Super admin grant and revoke changes must write audit events, and the last enabled super admin must not be revoked through normal management APIs.
 - Skill, workflow, knowledge-base, PRD, snapshot, milestone, chat, and workflow artifact routes must resolve first-party auth and Postgres-backed resource permissions before returning file-backed package assets, workflow outputs, artifacts, or prompt context.
+- Chat run subscriptions require `workflow.read` on the persisted run's workflow. Starting a chat run and stopping a run require `workflow.update`. Do not trust a client-supplied workflow ID for run subscription or stop; load the run first, then authorize against its stored workflow ID.
 - Demo handoff routes must resolve organization context and workflow resource permissions before reading workflow outputs or writing returned Demo links.
 
 ## Database Access
@@ -33,6 +34,7 @@ Never commit:
 - Keep direct Postgres access in server-only modules and route handlers.
 - Use parameterized queries for runtime SQL.
 - Keep static migration SQL in `scripts/database/`.
+- Initialize `scripts/database/006_chat_runs.sql` before enabling workflow chat in Postgres-backed deployments. Chat run rows and event rows may contain user prompts, assistant output, tool call summaries, and bounded runtime errors, so they inherit workflow content confidentiality requirements.
 - Prefer least-privilege application roles for runtime access.
 - Do not log connection strings, database passwords, or raw SQL errors that include credentials.
 - Treat stored knowledge documents as untrusted user content when retrieving them into prompts or rendering previews.
@@ -66,6 +68,10 @@ Workflow chat runs through the Claude Agent SDK adapter in `src/lib/agent-adapte
 - no BattleFlow-managed per-turn Claude budget cap is set.
 
 Skill materialization copies the server-side registry package into the node workspace instead of symlinking it. Symlinks inside Skill packages are skipped so a package cannot smuggle reads to files outside the package once the node cwd is active. Client-supplied `skill_definition` fields do not control the active Skill, package path, prompt content, or readable directories; the workflow step `skill_id` and server-side registry record are authoritative.
+
+Workflow chat runs are detached from browser SSE connections. A browser refresh, route change, dropped network connection, or subscription cancellation only removes that subscriber; it must not abort the Claude Agent SDK run. The only user-facing stop path is `DELETE /api/chat?run_id=...`, which requires `workflow.update`, marks the persisted run `canceled`, and aborts the current-process controller only when available. Cross-instance deployments rely on the persisted canceled status so the owning process can stop cooperatively between SDK events.
+
+Replayable run events are served through `GET /api/chat?run_id=...` after `workflow.read` authorization. The route must use the run's stored workflow ID for authorization, support `Last-Event-ID`/`after` replay without exposing other workflow runs, and never allow clients to choose arbitrary event files or filesystem paths.
 
 Claude authentication for deployed environments must be injected through server environment variables such as `ANTHROPIC_BASE_URL` plus `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN`. Docker Compose already passes the Anthropic variables from the compose environment into the container. The adapter may read the `env` block from `~/.claude/settings.json` only when `BATTLEFLOW_PROJECT_ENV=DEV`, or from an explicitly configured `BATTLEFLOW_CLAUDE_SETTINGS_PATH`; that local fallback is for developer machines and must not be treated as a production secret source.
 

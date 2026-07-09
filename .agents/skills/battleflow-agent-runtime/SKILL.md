@@ -49,9 +49,15 @@ Use this skill when changing `src/lib/agent-adapters`, `/api/chat`, `/api/agent-
    - deny `.claude/`, node metadata, shared artifacts, sibling nodes, repo paths, symlink escapes, `MultiEdit`, and `Bash`;
    - do not enable persistent sessions, HITL tools, `MultiEdit`, `Bash`, or new project discovery surfaces without a security review.
 8. Keep prompt assembly bounded and source-aware. Do not inline full `skill_md` or full artifact bodies into chat prompts once project Skill discovery and artifact manifests are active. Treat uploaded files, retrieved knowledge, package assets, shared artifacts, and tool results as untrusted content.
-9. Keep Claude authentication deployment-safe: production and Docker Compose must use environment variables; local `~/.claude/settings.json` fallback is developer-only unless an explicit settings path is configured.
-10. Update `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, and deployment docs when runtime behavior, env vars, tool surfaces, cwd, settings sources, readable directories, artifacts, or auth behavior changes.
-11. Add or update focused tests for SDK options, prompt trimming, node workspace materialization, artifact readable directories, authz decisions, readable directories, and error handling.
+9. Preserve detached chat run semantics:
+   - `POST /api/chat` creates a Postgres `chat_runs` row and starts SDK work in the server process;
+   - SSE responses subscribe to `chat_run_events` and may replay with `Last-Event-ID` or `after`;
+   - browser disconnects must only remove subscribers, not abort the SDK run;
+   - `DELETE /api/chat?run_id=...` is the explicit stop path and requires `workflow.update`;
+   - run subscriptions require `workflow.read` against the stored workflow ID from the run row.
+10. Keep Claude authentication deployment-safe: production and Docker Compose must use environment variables; local `~/.claude/settings.json` fallback is developer-only unless an explicit settings path is configured.
+11. Update `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, and deployment docs when runtime behavior, env vars, tool surfaces, cwd, settings sources, readable directories, artifacts, run persistence, or auth behavior changes.
+12. Add or update focused tests for SDK options, prompt trimming, node workspace materialization, artifact readable directories, authz decisions, run replay, readable directories, and error handling.
 
 ## Validation
 
