@@ -38,6 +38,7 @@ Use this skill when changing `src/lib/agent-adapters`, `/api/chat`, `/api/agent-
    - store files under `data/workflows/<orgId>/<workflowId>/artifacts/`;
    - expose only compact artifact manifests and node-relative paths in prompts;
    - add artifacts as readable directories only, never as writable tool roots;
+   - seed the current step artifact back into the node cwd as a draft for reruns; never edit the shared artifact source in place;
    - route downloads through `GET /api/workflows/artifacts` with `workflow.read` and path containment.
 7. Keep SDK tool policy explicit:
    - `tools` defines the available built-in tool set;
@@ -55,7 +56,7 @@ Use this skill when changing `src/lib/agent-adapters`, `/api/chat`, `/api/agent-
 ## Validation
 
 ```bash
-pnpm test -- --run src/lib/agent-adapters/claude-agent-sdk.test.ts src/app/api/chat/route.test.ts src/lib/workflow-artifacts.test.ts
+pnpm test -- --run src/lib/agent-adapters/claude-agent-sdk.test.ts src/app/api/chat/route.test.ts src/lib/workflow-artifacts.test.ts src/lib/workflow-node-workspace.test.ts
 pnpm validate
 ```
 
