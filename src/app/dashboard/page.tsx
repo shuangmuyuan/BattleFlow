@@ -13,12 +13,16 @@ import {
   TrendingUp,
   Clock,
   CheckCircle2,
+  LayoutDashboard,
+  Plus,
 } from 'lucide-react';
 import Link from 'next/link';
 import {
   ProductEmptyState,
+  SectionTitle,
   StatusBadge,
   appCardClassName,
+  appPageClassName,
 } from '@/components/battleflow/ui';
 
 interface DashboardStats {
@@ -113,18 +117,35 @@ export default function DashboardPage() {
   }, []);
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto p-3 md:p-4">
-      <div className="flex shrink-0 flex-col gap-1 border-b border-border/60 pb-3">
-        <h1 className="truncate text-2xl font-semibold tracking-tight text-foreground">工作台</h1>
-        <p className="text-sm text-muted-foreground">汇总 Skill、工作流和知识资产状态，快速进入产品规划核心任务。</p>
+    <div className={`${appPageClassName} content-enter`}>
+      <div className="flex shrink-0 flex-col gap-4 border-b border-border/70 bg-card/45 px-4 py-4 sm:flex-row sm:items-center sm:justify-between md:px-5">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-md border border-brand/20 bg-brand/10 text-brand shadow-sm">
+            <LayoutDashboard className="size-5" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-info">PRODUCT PLANNING DESK</p>
+            <h1 className="truncate text-xl font-semibold text-foreground md:text-2xl">工作台</h1>
+            <p className="mt-1 text-sm text-muted-foreground">掌握团队资产与执行状态，继续最重要的产品规划任务。</p>
+          </div>
+        </div>
+        <Button asChild className="w-full sm:w-auto">
+          <Link href="/dashboard/workflows">
+            <Plus className="size-4" />
+            新建工作流
+          </Link>
+        </Button>
       </div>
+
+      <div className="min-h-0 flex-1 overflow-auto p-4 md:p-5">
+        <div className="flex min-h-full flex-col gap-4">
 
       {/* Stats */}
       <div className="grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <Card className={appCardClassName}>
+        <Card className={`${appCardClassName} overflow-hidden`}>
           <CardContent className="flex h-20 items-center gap-3 p-3">
-            <div className="rounded-lg bg-primary/10 p-2">
-              <FileCode2 className="h-5 w-5 text-primary" />
+            <div className="rounded-md border border-info/20 bg-info/10 p-2">
+              <FileCode2 className="h-5 w-5 text-info" />
             </div>
             <div>
               <p className="text-2xl font-bold">{stats.totalSkills}</p>
@@ -134,7 +155,7 @@ export default function DashboardPage() {
         </Card>
         <Card className={appCardClassName}>
           <CardContent className="flex h-20 items-center gap-3 p-3">
-            <div className="rounded-lg bg-brand/10 p-2">
+            <div className="rounded-md border border-brand/20 bg-brand/10 p-2">
               <Play className="h-5 w-5 text-brand" />
             </div>
             <div>
@@ -145,7 +166,7 @@ export default function DashboardPage() {
         </Card>
         <Card className={appCardClassName}>
           <CardContent className="flex h-20 items-center gap-3 p-3">
-            <div className="rounded-lg bg-warning/10 p-2">
+            <div className="rounded-md border border-warning/20 bg-warning/10 p-2">
               <TrendingUp className="h-5 w-5 text-warning" />
             </div>
             <div>
@@ -156,7 +177,7 @@ export default function DashboardPage() {
         </Card>
         <Card className={appCardClassName}>
           <CardContent className="flex h-20 items-center gap-3 p-3">
-            <div className="rounded-lg bg-success/10 p-2">
+            <div className="rounded-md border border-success/20 bg-success/10 p-2">
               <BookOpen className="h-5 w-5 text-success" />
             </div>
             <div>
@@ -167,8 +188,8 @@ export default function DashboardPage() {
         </Card>
         <Card className={appCardClassName}>
           <CardContent className="flex h-20 items-center gap-3 p-3">
-            <div className="rounded-lg bg-muted p-2">
-              <FileText className="h-5 w-5 text-muted-foreground" />
+            <div className="rounded-md border border-border bg-muted p-2">
+              <FileText className="h-5 w-5 text-foreground/70" />
             </div>
             <div>
               <p className="text-2xl font-bold">{stats.completedPrds}</p>
@@ -179,12 +200,14 @@ export default function DashboardPage() {
       </div>
 
       {/* Quick Actions */}
-      <div className="grid shrink-0 grid-cols-1 gap-3 md:grid-cols-3">
+      <div className="space-y-3">
+        <SectionTitle title="快捷入口" description="从高频任务直接开始，不必穿过多层页面。" />
+        <div className="grid shrink-0 grid-cols-1 gap-3 md:grid-cols-3">
         <Link href="/dashboard/workflows">
           <Card className={`${appCardClassName} cursor-pointer group`}>
             <CardContent className="flex h-20 min-w-0 items-center justify-between gap-3 p-4">
               <div className="flex min-w-0 items-center gap-3">
-                <div className="rounded-lg bg-primary/10 p-2.5">
+                <div className="rounded-md border border-brand/20 bg-brand/10 p-2.5">
                   <Play className="h-5 w-5 text-primary" />
                 </div>
                 <div className="min-w-0">
@@ -200,8 +223,8 @@ export default function DashboardPage() {
           <Card className={`${appCardClassName} cursor-pointer group`}>
             <CardContent className="flex h-20 min-w-0 items-center justify-between gap-3 p-4">
               <div className="flex min-w-0 items-center gap-3">
-                <div className="rounded-lg bg-brand/10 p-2.5">
-                  <FileCode2 className="h-5 w-5 text-brand" />
+                <div className="rounded-md border border-info/20 bg-info/10 p-2.5">
+                  <FileCode2 className="h-5 w-5 text-info" />
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-semibold">管理 Skills</p>
@@ -216,7 +239,7 @@ export default function DashboardPage() {
           <Card className={`${appCardClassName} cursor-pointer group`}>
             <CardContent className="flex h-20 min-w-0 items-center justify-between gap-3 p-4">
               <div className="flex min-w-0 items-center gap-3">
-                <div className="rounded-lg bg-success/10 p-2.5">
+                <div className="rounded-md border border-success/20 bg-success/10 p-2.5">
                   <BookOpen className="h-5 w-5 text-success" />
                 </div>
                 <div className="min-w-0">
@@ -228,14 +251,18 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
         </Link>
+        </div>
       </div>
 
       {/* Recent Workflows & Skills */}
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-2 lg:[grid-auto-rows:minmax(0,1fr)]">
+      <div className="grid min-h-[22rem] flex-1 grid-cols-1 gap-4 lg:grid-cols-2 lg:[grid-auto-rows:minmax(0,1fr)]">
         <Card className={`${appCardClassName} flex min-h-0 flex-col overflow-hidden`}>
           <CardHeader className="shrink-0 px-4 py-3">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-base">最近工作流</CardTitle>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <span className="flex size-7 items-center justify-center rounded-sm bg-brand/10 text-brand"><Play className="size-4" /></span>
+                最近工作流
+              </CardTitle>
               <Button variant="ghost" size="sm" asChild>
                 <Link href="/dashboard/workflows">查看全部</Link>
               </Button>
@@ -255,7 +282,7 @@ export default function DashboardPage() {
                   <Link
                     key={wf.id}
                     href={getWorkflowHref(wf)}
-                    className="group flex min-w-0 items-center justify-between gap-3 rounded-lg p-2.5 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                    className="group flex min-w-0 items-center justify-between gap-3 rounded-md border border-transparent p-2.5 transition-colors hover:border-border/60 hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                     aria-label={`打开工作流 ${wf.name}`}
                   >
                     <div className="flex min-w-0 items-center gap-3">
@@ -289,7 +316,10 @@ export default function DashboardPage() {
         <Card className={`${appCardClassName} flex min-h-0 flex-col overflow-hidden`}>
           <CardHeader className="shrink-0 px-4 py-3">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-base">最近使用的 Skills</CardTitle>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <span className="flex size-7 items-center justify-center rounded-sm bg-info/10 text-info"><FileCode2 className="size-4" /></span>
+                最近使用的 Skills
+              </CardTitle>
               <Button variant="ghost" size="sm" asChild>
                 <Link href="/dashboard/skills">查看全部</Link>
               </Button>
@@ -306,7 +336,7 @@ export default function DashboardPage() {
                     className="min-h-32 border-0 bg-muted/30"
                   />
                 ) : recentSkills.map((skill) => (
-                  <div key={skill.id} className="flex min-w-0 items-center justify-between gap-3 rounded-lg p-2.5 transition-colors hover:bg-muted/50">
+                  <div key={skill.id} className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-transparent p-2.5 transition-colors hover:border-border/60 hover:bg-muted/50">
                     <div className="flex min-w-0 items-center gap-3">
                       <FileCode2 className="h-4 w-4 text-muted-foreground" />
                       <div className="min-w-0">
@@ -323,6 +353,8 @@ export default function DashboardPage() {
             </ScrollArea>
           </CardContent>
         </Card>
+      </div>
+        </div>
       </div>
     </div>
   );

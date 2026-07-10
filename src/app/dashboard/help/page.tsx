@@ -17,7 +17,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import { PageHeader, appCardClassName } from '@/components/battleflow/ui';
+import { PageHeader, appCardClassName, appPageClassName } from '@/components/battleflow/ui';
 import { cn } from '@/lib/utils';
 
 const guideSections = [
@@ -55,8 +55,9 @@ const quickTips = [
 
 export default function DashboardHelpPage() {
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border/60 bg-background">
+    <div className={`${appPageClassName} content-enter`}>
       <PageHeader
+        icon={<BookOpen />}
         title="使用说明"
         description="按 Skill、知识、工作流、产物四个环节组织产品规划工作。"
         meta={<Badge variant="secondary">BattleFlow Guide</Badge>}

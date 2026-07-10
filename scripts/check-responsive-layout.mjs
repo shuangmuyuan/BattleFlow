@@ -44,7 +44,7 @@ const layoutContracts = [
     name: 'Workflow list contains workspace selector and workflow cards inside bounded scroll regions',
     file: 'src/app/dashboard/workflows/page.tsx',
     requiredTokenSets: [
-      ['flex', 'h-full', 'min-h-0', 'flex-col'],
+      ['appPageClassName'],
       ['max-h-[calc(100dvh-260px)]', 'overflow-y-auto'],
       ['min-h-0', 'flex-1', 'overflow-auto'],
       ['grid-cols-1', 'sm:grid-cols-2'],
@@ -54,14 +54,15 @@ const layoutContracts = [
     name: 'Dashboard overview owns internal scrolling',
     file: 'src/app/dashboard/page.tsx',
     requiredTokenSets: [
-      ['h-full', 'min-h-0', 'overflow-auto'],
+      ['appPageClassName'],
+      ['min-h-0', 'flex-1', 'overflow-auto'],
     ],
   },
   {
     name: 'Skill registry owns internal scrolling and mobile filters',
     file: 'src/app/dashboard/skills/page.tsx',
     requiredTokenSets: [
-      ['flex', 'h-full', 'min-h-0', 'flex-col'],
+      ['appPageClassName'],
       ['shrink-0', 'border-b'],
       ['min-h-0', 'flex-1', 'overflow-auto'],
       ['max-w-full', 'overflow-x-auto'],
@@ -71,7 +72,7 @@ const layoutContracts = [
     name: 'Knowledge base owns internal scrolling and responsive header',
     file: 'src/app/dashboard/knowledge/page.tsx',
     requiredTokenSets: [
-      ['flex', 'h-full', 'min-h-0', 'flex-col'],
+      ['appPageClassName'],
       ['shrink-0', 'border-b'],
       ['min-h-0', 'flex-1', 'overflow-auto'],
       ['flex-col', 'sm:flex-row'],
@@ -81,7 +82,8 @@ const layoutContracts = [
     name: 'Demo generator owns internal scrolling and responsive option grids',
     file: 'src/app/dashboard/demos/page.tsx',
     requiredTokenSets: [
-      ['h-full', 'min-h-0', 'overflow-auto'],
+      ['appPageClassName'],
+      ['min-h-0', 'flex-1', 'overflow-auto'],
       ['grid-cols-1', 'sm:grid-cols-3'],
       ['max-h-[calc(100dvh-2rem)]', 'overflow-hidden'],
     ],
