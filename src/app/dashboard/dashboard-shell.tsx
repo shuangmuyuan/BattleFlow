@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import {
   Bell,
-  Building2,
   CheckCheck,
   ChevronLeft,
   CircleHelp,
@@ -578,7 +577,6 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
               <BattleFlowBrand
                 className="min-w-0 flex-1"
                 markClassName="size-9"
-                subtitle={activeOrganization.name}
               />
               <Button
                 variant="ghost"
@@ -628,13 +626,6 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         </nav>
 
         <div className="shrink-0 border-t border-sidebar-border p-2">
-          {!collapsed && (
-            <div className="mb-1 flex min-w-0 items-center gap-2 rounded-md px-2 py-2 text-xs text-muted-foreground">
-              <Building2 className="size-3.5 shrink-0 text-info" />
-              <span className="truncate">{activeOrganization.name}</span>
-              <span className="ml-auto size-1.5 shrink-0 rounded-full bg-success" aria-label="组织在线" />
-            </div>
-          )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -680,7 +671,6 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             <BattleFlowBrand showName={false} markClassName="size-8" className="md:hidden" />
             <div className="min-w-0">
               <span className="block truncate text-sm font-medium text-foreground">{dashboardTitle(pathname)}</span>
-              <span className="hidden truncate text-xs text-muted-foreground sm:block">{activeOrganization.name}</span>
             </div>
           </div>
           <div className="flex min-w-0 items-center gap-2">
