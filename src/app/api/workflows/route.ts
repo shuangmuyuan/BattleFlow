@@ -148,6 +148,37 @@ export async function POST(request: NextRequest) {
       return jsonOk({ workflow, steps: workflow.steps }, 201);
     }
 
+    if (action === 'clone_workflow') {
+      requireOwnedCreatePermission(context, 'workflow.create');
+      const sourceWorkflowId = String(body.sourceWorkflowId || body.source_workflow_id || '');
+      if (!sourceWorkflowId) return jsonError('Source workflow ID is required', 400);
+
+      await requireWorkflowAccess(context, sourceWorkflowId, 'workflow.read');
+      const sourceWorkflow = await getWorkflow(sourceWorkflowId);
+      if (!sourceWorkflow) return jsonError('Workflow not found', 404);
+
+      const workflow = await createWorkflow({
+        workspaceId: sourceWorkflow.workspaceId,
+        name: `${sourceWorkflow.name} 副本`,
+        description: sourceWorkflow.description,
+        agentValidationEnabled: sourceWorkflow.agentValidationEnabled,
+        steps: sourceWorkflow.steps
+          .filter((step) => !step.isRemoved)
+          .map((step) => ({
+            name: step.name,
+            skill_id: step.skill_id,
+            step_index: step.step_index,
+            runMode: step.runMode,
+            parallelGroupId: step.parallelGroupId,
+            parallelGroupName: step.parallelGroupName,
+            parallelGroupBreakBefore: step.parallelGroupBreakBefore,
+          })),
+        ...creatorInput(context),
+      });
+      await upsertWorkflowBusinessMetadata(context, workflow);
+      return jsonOk({ workflow, steps: workflow.steps }, 201);
+    }
+
     return jsonError(`Unsupported action: ${action}`, 400);
   } catch (error) {
     console.error('Workflows POST error:', error);

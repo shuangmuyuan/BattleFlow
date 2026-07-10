@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, AgentHumanInputRequest } from '@/lib/agent-adapters/types';
 import type { SkillRecord } from '@/lib/skill-registry';
-import type { WorkflowChatToolCallRecord, WorkflowRecord } from '@/lib/workflow-registry';
+import type { WorkflowArtifactRecord, WorkflowChatToolCallRecord, WorkflowRecord } from '@/lib/workflow-registry';
 
 type MockChatRunStatus = 'running' | 'waiting_human' | 'succeeded' | 'failed' | 'canceled';
 
@@ -144,8 +144,8 @@ const mocks = vi.hoisted(() => ({
     .slice(0, input.limit || 500)),
   getSkill: vi.fn(),
   findWorkflowAttachment: vi.fn(),
+  listWorkflowNodeOutputDocuments: vi.fn(),
   materializeNodeWorkspace: vi.fn(),
-  getWorkflowArtifactsDirectory: vi.fn(),
   getWorkflow: vi.fn(),
   upsertWorkflow: vi.fn(),
 }));
@@ -226,8 +226,8 @@ vi.mock('@/lib/workflow-node-workspace', () => ({
   materializeNodeWorkspace: mocks.materializeNodeWorkspace,
 }));
 
-vi.mock('@/lib/workflow-runtime-paths', () => ({
-  getWorkflowArtifactsDirectory: mocks.getWorkflowArtifactsDirectory,
+vi.mock('@/lib/workflow-node-outputs', () => ({
+  listWorkflowNodeOutputDocuments: mocks.listWorkflowNodeOutputDocuments,
 }));
 
 vi.mock('@/lib/workflow-registry', () => ({
@@ -364,14 +364,39 @@ beforeEach(() => {
   mocks.searchKnowledgeDocuments.mockResolvedValue([]);
   mocks.getSkill.mockResolvedValue(skillRecord());
   mocks.findWorkflowAttachment.mockReturnValue(null);
-  mocks.getWorkflowArtifactsDirectory.mockReturnValue('/tmp/battleflow-runtime/org-1/workflow-1/artifacts');
-  mocks.materializeNodeWorkspace.mockResolvedValue({
-    cwd: '/tmp/battleflow-runtime/org-1/workflow-1/nodes/step-1',
-    skillsRoot: '/tmp/battleflow-runtime/org-1/workflow-1/nodes/step-1/.claude/skills',
-    skillName: 'user-needs-breakdown',
-    skillDirectory: '/tmp/battleflow-runtime/org-1/workflow-1/nodes/step-1/.claude/skills/user-needs-breakdown',
-    skillFilePath: '/tmp/battleflow-runtime/org-1/workflow-1/nodes/step-1/.claude/skills/user-needs-breakdown/SKILL.md',
-    metadataPath: '/tmp/battleflow-runtime/org-1/workflow-1/nodes/step-1/.battleflow-node-workspace.json',
+  mocks.listWorkflowNodeOutputDocuments.mockResolvedValue([]);
+  mocks.materializeNodeWorkspace.mockImplementation(async (input: {
+    stepId: string;
+    inputArtifacts?: Array<{ artifact: WorkflowArtifactRecord; legacyNodeOutput?: { relativePath: string } }>;
+  }) => {
+    const cwd = `/tmp/battleflow-runtime/org-1/workflow-1/nodes/${input.stepId}`;
+    const inputArtifacts = (input.inputArtifacts || []).map(({ artifact, legacyNodeOutput }) => ({
+      id: artifact.id,
+      sourceStepId: artifact.producedByStepId,
+      sourceStepName: artifact.producedByStepName,
+      title: artifact.title,
+      summary: artifact.summary,
+      fileName: legacyNodeOutput?.relativePath || artifact.fileName,
+      format: artifact.format,
+      mimeType: artifact.mimeType,
+      size: artifact.size,
+      checksum: artifact.checksum,
+      version: artifact.version,
+      updatedAt: artifact.updated_at,
+      nodeRelativePath: `inputs/previous-step-outputs/${artifact.producedByStepId}/${legacyNodeOutput?.relativePath || artifact.fileName}`,
+    }));
+    return {
+      cwd,
+      skillsRoot: `${cwd}/.claude/skills`,
+      skillName: 'user-needs-breakdown',
+      skillDirectory: `${cwd}/.claude/skills/user-needs-breakdown`,
+      skillFilePath: `${cwd}/.claude/skills/user-needs-breakdown/SKILL.md`,
+      metadataPath: `${cwd}/.battleflow-node-workspace.json`,
+      inputsDirectory: `${cwd}/inputs`,
+      inputManifestPath: `${cwd}/inputs/manifest.json`,
+      inputArtifacts,
+      contextFingerprint: inputArtifacts.length > 0 ? 'context-with-inputs' : 'context-without-inputs',
+    };
   });
   mocks.getWorkflow.mockResolvedValue(workflow());
   mocks.upsertWorkflow.mockImplementation(async (record: WorkflowRecord) => record);
@@ -907,6 +932,10 @@ describe('Chat API route', () => {
       skillDirectory: `${nodeCwd}/.claude/skills/user-needs-breakdown`,
       skillFilePath: absoluteSkillPath,
       metadataPath: `${nodeCwd}/.battleflow-node-workspace.json`,
+      inputsDirectory: `${nodeCwd}/inputs`,
+      inputManifestPath: `${nodeCwd}/inputs/manifest.json`,
+      inputArtifacts: [],
+      contextFingerprint: 'context-without-inputs',
     });
     mocks.streamClaudeAgentSdkTurn.mockReturnValue(streamAgentEvents([
       {
@@ -988,6 +1017,10 @@ describe('Chat API route', () => {
       skillDirectory: `${nodeCwd}/.claude/skills/user-needs-breakdown`,
       skillFilePath: `${nodeCwd}/${relativeSkillPath}`,
       metadataPath: `${nodeCwd}/.battleflow-node-workspace.json`,
+      inputsDirectory: `${nodeCwd}/inputs`,
+      inputManifestPath: `${nodeCwd}/inputs/manifest.json`,
+      inputArtifacts: [],
+      contextFingerprint: 'context-without-inputs',
     });
     mocks.streamClaudeAgentSdkTurn.mockReturnValue(streamAgentEvents([
       {
@@ -1053,7 +1086,7 @@ describe('Chat API route', () => {
     ]);
   });
 
-  it('passes workflow files as readable references instead of inlining previous-step output', async () => {
+  it('does not reuse legacy generated document attachments as previous-step inputs', async () => {
     mocks.getWorkflow.mockResolvedValue(workflow({
       steps: [
         {
@@ -1106,7 +1139,6 @@ describe('Chat API route', () => {
       { type: 'assistant_final', text: 'ok' },
       { type: 'session_status', status: 'done' },
     ]));
-
     const response = await POST(postRequest({
       workflowId: 'workflow-1',
       workflow_step_id: 'step-2',
@@ -1123,15 +1155,14 @@ describe('Chat API route', () => {
       systemPrompt: string;
       readableDirectories: string[];
     };
-    expect(agentInput.systemPrompt).toContain('Workflow Attachment Context');
-    expect(agentInput.systemPrompt).toContain('absolute_path="/tmp/battleflow-attachments/previous-step.md"');
-    expect(agentInput.systemPrompt).toContain('step_id="step-1"');
+    expect(agentInput.systemPrompt).not.toContain('Workflow Attachment Context');
+    expect(agentInput.systemPrompt).not.toContain('/tmp/battleflow-attachments/previous-step.md');
     expect(agentInput.systemPrompt).not.toContain('INLINE_CONTEXT_SHOULD_NOT_APPEAR');
     expect(agentInput.systemPrompt).not.toContain('Previous Steps Output');
-    expect(agentInput.readableDirectories).toContain('/tmp/battleflow-attachments');
+    expect(agentInput.readableDirectories).not.toContain('/tmp/battleflow-attachments');
   });
 
-  it('passes promoted workflow artifacts as shared read-only context', async () => {
+  it('materializes promoted previous-step artifacts as node-local read-only inputs', async () => {
     mocks.getWorkflow.mockResolvedValue(workflow({
       steps: [
         {
@@ -1179,6 +1210,24 @@ describe('Chat API route', () => {
       { type: 'assistant_final', text: 'ok' },
       { type: 'session_status', status: 'done' },
     ]));
+    mocks.chatRunStore.set('legacy-artifact-session', {
+      id: 'legacy-artifact-session',
+      organizationId: 'org-1',
+      workflowId: 'workflow-1',
+      stepId: 'step-2',
+      status: 'succeeded',
+      userMessage: 'old turn',
+      assistantContent: 'old answer',
+      toolCalls: [],
+      error: null,
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      metadata: {},
+      createdBy: 'user-1',
+      startedAt: '2026-07-04T00:00:00.000Z',
+      completedAt: '2026-07-04T00:01:00.000Z',
+      createdAt: '2026-07-04T00:00:00.000Z',
+      updatedAt: '2026-07-04T00:01:00.000Z',
+    });
 
     const response = await POST(postRequest({
       workflowId: 'workflow-1',
@@ -1188,21 +1237,104 @@ describe('Chat API route', () => {
     await response.text();
 
     expect(response.status).toBe(200);
-    expect(mocks.getWorkflowArtifactsDirectory).toHaveBeenCalledWith({
+    expect(mocks.materializeNodeWorkspace).toHaveBeenCalledWith(expect.objectContaining({
       organizationId: 'org-1',
       workflowId: 'workflow-1',
-    });
+      stepId: 'step-2',
+      inputArtifacts: [{
+        artifact: expect.objectContaining({ id: 'artifact-step-1' }),
+      }],
+    }));
     const agentInput = mocks.streamClaudeAgentSdkTurn.mock.calls[0][0] as {
       systemPrompt: string;
       readableDirectories: string[];
+      resumeSessionId?: string;
     };
-    expect(agentInput.readableDirectories).toContain('/tmp/battleflow-runtime/org-1/workflow-1/artifacts');
-    expect(agentInput.systemPrompt).toContain('Workflow Shared Artifacts');
-    expect(agentInput.systemPrompt).toContain('node_relative_path="../../artifacts/step-1-Previous-Requirements.md"');
-    expect(agentInput.systemPrompt).toContain('../../artifacts/manifest.json');
+    expect(agentInput.resumeSessionId).toBeUndefined();
+    expect(agentInput.readableDirectories).not.toContain('/tmp/battleflow-runtime/org-1/workflow-1/artifacts');
+    expect(agentInput.systemPrompt).toContain('Previous Step Inputs');
+    expect(agentInput.systemPrompt).toContain('node_relative_path="inputs/previous-step-outputs/step-1/step-1-Previous-Requirements.md"');
+    expect(agentInput.systemPrompt).toContain('inputs/manifest.json');
     expect(agentInput.systemPrompt).toContain('Previous Requirements');
     expect(agentInput.systemPrompt).not.toContain('PROMOTED_ARTIFACT_BODY_SHOULD_NOT_BE_INLINED');
     expect(agentInput.systemPrompt).not.toContain('/tmp/battleflow-runtime/org-1/workflow-1/artifacts/step-1-Previous-Requirements.md');
+  });
+
+  it('uses the real node document when a completed previous step still has a legacy summary artifact', async () => {
+    mocks.getWorkflow.mockResolvedValue(workflow({
+      steps: [
+        {
+          id: 'step-1',
+          skill_id: 'skill-1',
+          step_index: 0,
+          runMode: 'serial',
+          name: 'Previous step',
+          status: 'completed',
+          output: '已写入文件：`full-output.md`',
+          created_at: '2026-07-04T00:00:00.000Z',
+          updated_at: '2026-07-04T00:00:00.000Z',
+        },
+        {
+          id: 'step-2',
+          skill_id: 'skill-2',
+          step_index: 1,
+          runMode: 'serial',
+          name: 'Current step',
+          status: 'in_progress',
+          output: '',
+          created_at: '2026-07-04T00:00:00.000Z',
+          updated_at: '2026-07-04T00:00:00.000Z',
+        },
+      ],
+      artifacts: [{
+        id: 'artifact-step-1',
+        workflowId: 'workflow-1',
+        producedByStepId: 'step-1',
+        producedByStepName: 'Previous step',
+        title: 'Legacy summary',
+        summary: 'Only a generated summary.',
+        fileName: 'legacy-summary.md',
+        path: 'artifacts/legacy-summary.md',
+        format: 'markdown',
+        mimeType: 'text/markdown; charset=utf-8',
+        size: 128,
+        checksum: 'legacy-checksum',
+        version: 1,
+        created_at: '2026-07-04T00:00:00.000Z',
+        updated_at: '2026-07-04T00:00:00.000Z',
+      }],
+    }));
+    mocks.listWorkflowNodeOutputDocuments.mockResolvedValue([{
+      relativePath: 'full-output.md',
+      fileName: 'full-output.md',
+      mimeType: 'text/markdown; charset=utf-8',
+      size: 4096,
+      updatedAt: '2026-07-04T01:00:00.000Z',
+    }]);
+    mocks.streamClaudeAgentSdkTurn.mockReturnValue(streamAgentEvents([
+      { type: 'assistant_final', text: 'ok' },
+      { type: 'session_status', status: 'done' },
+    ]));
+
+    const response = await POST(postRequest({
+      workflowId: 'workflow-1',
+      workflow_step_id: 'step-2',
+      messages: [{ role: 'user', content: '读取前序产物' }],
+    }));
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(mocks.materializeNodeWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+      inputArtifacts: [{
+        artifact: expect.objectContaining({ id: 'artifact-step-1' }),
+        legacyNodeOutput: {
+          stepId: 'step-1',
+          relativePath: 'full-output.md',
+        },
+      }],
+    }));
+    const agentInput = mocks.streamClaudeAgentSdkTurn.mock.calls[0][0] as { systemPrompt: string };
+    expect(agentInput.systemPrompt).toContain('inputs/previous-step-outputs/step-1/full-output.md');
   });
 
   it('passes only the current step artifact as the node workspace seed', async () => {
@@ -1254,11 +1386,12 @@ describe('Chat API route', () => {
       workflowId: 'workflow-1',
       stepId: 'step-1',
       skill: expect.objectContaining({ id: 'skill-1' }),
+      inputArtifacts: [],
       artifactSeed: currentArtifact,
     });
   });
 
-  it('only passes enabled prior-step attachments from supplemental context as file references', async () => {
+  it('always passes all prior-step attachments and ignores the removed disable override', async () => {
     mocks.getWorkflow.mockResolvedValue(workflow({
       steps: [
         {
@@ -1266,7 +1399,7 @@ describe('Chat API route', () => {
           skill_id: 'skill-1',
           step_index: 0,
           runMode: 'serial',
-          name: 'Enabled previous step',
+          name: 'First previous step',
           status: 'completed',
           output: 'ENABLED_PREVIOUS_OUTPUT_SHOULD_NOT_BE_INLINED',
           created_at: '2026-07-04T00:00:00.000Z',
@@ -1277,7 +1410,7 @@ describe('Chat API route', () => {
           skill_id: 'skill-2',
           step_index: 1,
           runMode: 'serial',
-          name: 'Disabled previous step',
+          name: 'Second previous step',
           status: 'completed',
           output: 'DISABLED_PREVIOUS_OUTPUT_SHOULD_NOT_APPEAR',
           created_at: '2026-07-04T00:00:00.000Z',
@@ -1308,9 +1441,8 @@ describe('Chat API route', () => {
       ],
       stepChats: {
         'step-1': [{
-          role: 'assistant',
-          content: '已生成文档附件：Enabled previous step.md',
-          kind: 'document',
+          role: 'user',
+          content: 'Enabled previous step attachment',
           created_at: '2026-07-04T00:00:00.000Z',
           attachments: [{
             id: 'attachment-enabled',
@@ -1328,14 +1460,13 @@ describe('Chat API route', () => {
           }],
         }],
         'step-2': [{
-          role: 'assistant',
-          content: '已生成文档附件：Disabled previous step.md',
-          kind: 'document',
+          role: 'user',
+          content: 'Second previous step attachment',
           created_at: '2026-07-04T00:00:00.000Z',
           attachments: [{
             id: 'attachment-disabled',
             stepId: 'step-2',
-            name: 'Disabled previous step.md',
+            name: 'Second previous step.md',
             type: 'text/markdown',
             size: 128,
             isImage: false,
@@ -1348,9 +1479,8 @@ describe('Chat API route', () => {
           }],
         }],
         'step-4': [{
-          role: 'assistant',
-          content: '已生成文档附件：Future step.md',
-          kind: 'document',
+          role: 'user',
+          content: 'Future step attachment',
           created_at: '2026-07-04T00:00:00.000Z',
           attachments: [{
             id: 'attachment-future',
@@ -1377,7 +1507,7 @@ describe('Chat API route', () => {
     const response = await POST(postRequest({
       workflowId: 'workflow-1',
       workflow_step_id: 'step-3',
-      messages: [{ role: 'user', content: '请按勾选的前序产物继续' }],
+      messages: [{ role: 'user', content: '请基于全部前序产物继续' }],
       disabled_auto_injected_step_ids: ['step-2'],
     }));
     await response.text();
@@ -1388,7 +1518,7 @@ describe('Chat API route', () => {
       readableDirectories: string[];
     };
     expect(agentInput.systemPrompt).toContain('absolute_path="/tmp/battleflow-attachments/enabled-step.md"');
-    expect(agentInput.systemPrompt).not.toContain('/tmp/battleflow-attachments/disabled-step.md');
+    expect(agentInput.systemPrompt).toContain('absolute_path="/tmp/battleflow-attachments/disabled-step.md"');
     expect(agentInput.systemPrompt).not.toContain('/tmp/battleflow-attachments/future-step.md');
     expect(agentInput.systemPrompt).not.toContain('ENABLED_PREVIOUS_OUTPUT_SHOULD_NOT_BE_INLINED');
     expect(agentInput.systemPrompt).not.toContain('DISABLED_PREVIOUS_OUTPUT_SHOULD_NOT_APPEAR');
@@ -1444,6 +1574,7 @@ describe('Chat API route', () => {
       workflowId: 'workflow-1',
       stepId: 'step-1',
       skill: serverSkill,
+      inputArtifacts: [],
     });
     const agentInput = mocks.streamClaudeAgentSdkTurn.mock.calls[0][0] as {
       systemPrompt: string;

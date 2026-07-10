@@ -25,7 +25,7 @@ const guideSections = [
     title: '准备 Skill 和知识',
     description: '从 Skill 仓库选择方法包，知识库中补充 PDF、Excel、Word 或 Markdown 资料。',
     icon: Database,
-    steps: ['导入或发布可复用 Skill', '上传业务资料到知识库', '进入工作流后按步骤选择需要注入的上下文'],
+    steps: ['导入或发布可复用 Skill', '上传业务资料到知识库', '进入工作流后按步骤选择需要检索的知识库'],
   },
   {
     title: '创建工作流',
@@ -34,8 +34,8 @@ const guideSections = [
     steps: ['连续并行步骤会组成同一任务组', '点击“新组”可拆分为下一阶段并行组', '后续串行步骤会等待上一组完成后继续'],
   },
   {
-    title: '补充上下文并对话',
-    description: '在每个步骤里发送问题、附件或截图，系统会把可读资料交给运行时处理。',
+    title: '选择知识库并对话',
+    description: '在每个步骤里选择知识库，并发送问题、附件或截图；前序产物会由系统自动提供。',
     icon: MessageSquare,
     steps: ['发送后输入框会清空附件和文本', '切换步骤或刷新页面后会恢复当前工作流位置', '正在执行的步骤会保留聊天记录和处理状态'],
   },
@@ -112,7 +112,7 @@ export default function DashboardHelpPage() {
               </CardHeader>
               <CardContent className="space-y-3 text-sm text-muted-foreground">
                 <div className="rounded-lg border border-border/60 bg-muted/20 p-3 leading-6">
-                  先进入工作流目录，选择一个空间并创建工作流；进入步骤后补充上下文，再发送问题或附件生成产物。
+                  先进入工作流目录，选择一个空间并创建工作流；进入步骤后按需选择知识库，再发送问题或附件生成产物。
                 </div>
                 <div className="rounded-lg border border-border/60 bg-muted/20 p-3 leading-6">
                   如需跨阶段并行，在连续并行步骤之间打开“新组”，即可表达“2、3 并行，完成后 4、5 并行”。

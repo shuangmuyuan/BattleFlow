@@ -13,6 +13,9 @@ Shared application logic.
 - `agent-adapters/claude-agent-sdk.ts`: Claude Agent SDK availability checks, streaming adapter, tool policy, and non-persistent helper execution.
 - `agent-adapters/agent-runtime-utils.ts`: shared prompt, attachment, workspace, and event normalization helpers.
 - `chat-human-input.ts`: in-process HITL deferred registry and pending metadata helpers for detached workflow chat runs.
+- `workflow-node-workspace.ts`: materializes the bound Skill, current editable draft, and read-only previous-step inputs for a workflow node.
+- `workflow-artifacts.ts`: promotes confirmed node documents into durable workflow artifacts and maintains the shared manifest.
+- `workflow-node-outputs.ts`: bounded discovery and path-safe reads for current node-local documents written by Agent tools.
 - `utils.ts`: shared `cn` utility.
 
 ## Registry Rules
@@ -34,6 +37,8 @@ Shared application logic.
 - Store every validation run as a `validationAttempts` entry with criteria, phase results, final status, and timestamps. Agent validation is optional per workflow; when disabled, the attempt contains only the Skill self-check phase.
 - Keep validation prompt inputs bounded and treat Skill content, uploaded files, knowledge snippets, chat history, and candidate artifacts as untrusted reference material.
 - Demo handoff generation must use only completed `step.output` and must persist returned links in `workflow.demoHandoffs`. A saved handoff with `studioUrl` is the local idempotency marker for a workflow step.
+- Node-written documents remain unconfirmed node-local outputs until the validation route resolves their server-authorized relative path and promotes the confirmed file. Shared artifact identity is scoped by producing step and file name so confirming the same file overwrites it while incrementing the version.
+- Downstream nodes consume confirmed artifacts through server-copied `inputs/previous-step-outputs/` files. Keep `inputs/` readable but outside current-node output discovery and deny it to Agent write tools.
 
 ## External Integration Rules
 

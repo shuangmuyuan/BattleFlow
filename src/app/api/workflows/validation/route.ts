@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { promises as fs } from 'node:fs';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireOrganizationContext } from '@/lib/auth/server';
 import { AuthError } from '@/lib/auth/types';
@@ -7,6 +6,10 @@ import { requireWorkflowAccess } from '@/lib/resource-metadata-repository';
 import { getSkill } from '@/lib/skill-registry';
 import { normalizeAiGeneratedText } from '@/lib/simplified-chinese';
 import { promoteWorkflowStepArtifact } from '@/lib/workflow-artifacts';
+import {
+  readWorkflowNodeOutputDocument,
+  WorkflowNodeOutputValidationError,
+} from '@/lib/workflow-node-outputs';
 import {
   getWorkflow,
   upsertWorkflow,
@@ -25,13 +28,6 @@ import {
   runWorkflowStepSelfCheck,
   shouldRunWorkflowStepAgentValidation,
 } from '@/lib/workflow-validation';
-import {
-  findWorkflowAttachment,
-  MAX_WORKFLOW_ATTACHMENT_BYTES,
-  persistWorkflowGeneratedMarkdownAttachment,
-  resolveWorkflowAttachmentPath,
-  WorkflowAttachmentValidationError,
-} from '@/lib/workflow-attachments';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -40,16 +36,13 @@ export const revalidate = 0;
 type ValidationAction = 'start_step_validation' | 'retry_step_validation' | 'clear_failed_validation';
 
 const MAX_CANDIDATE_OUTPUT_CHARS = 250_000;
-const MAX_DOCUMENT_TITLE_SCAN_CHARS = 16_000;
 const WORKFLOW_OUTPUT_VALIDATION_ENABLED = false;
 
 interface ValidationRequestBody {
   action: ValidationAction;
   workflowId: string;
   stepId: string;
-  candidateOutput?: string;
-  candidateAttachmentId?: string;
-  createCandidateAttachment: boolean;
+  candidateNodeOutputPath?: string;
   agentValidationEnabled: boolean;
 }
 
@@ -107,27 +100,21 @@ function parseValidationRequest(value: unknown): ValidationRequestBody | string 
   if (!workflowId) return 'workflowId is required';
   if (!stepId) return 'stepId is required';
 
-  const candidateOutput = getString(body.candidateOutput || body.candidate_output || body.output);
-  const candidateAttachmentId = getString(body.candidateAttachmentId || body.candidate_attachment_id);
-  if (action !== 'clear_failed_validation' && !candidateOutput && !candidateAttachmentId) {
-    return 'candidateOutput or candidateAttachmentId is required';
-  }
-  if (candidateOutput.length > MAX_CANDIDATE_OUTPUT_CHARS) {
-    return `candidateOutput must be ${MAX_CANDIDATE_OUTPUT_CHARS.toLocaleString('en-US')} characters or fewer`;
+  const candidateNodeOutputPath = getString(
+    body.candidateNodeOutputPath
+    || body.candidate_node_output_path
+    || body.nodeOutputPath
+    || body.node_output_path,
+  );
+  if (action !== 'clear_failed_validation' && !candidateNodeOutputPath) {
+    return 'candidateNodeOutputPath is required';
   }
 
   return {
     action,
     workflowId,
     stepId,
-    candidateOutput: candidateOutput || undefined,
-    candidateAttachmentId: candidateAttachmentId || undefined,
-    createCandidateAttachment: getBoolean(
-      body.createCandidateAttachment
-      ?? body.create_candidate_attachment
-      ?? body.generateCandidateAttachment
-      ?? body.generate_candidate_attachment,
-    ) ?? false,
+    candidateNodeOutputPath: candidateNodeOutputPath || undefined,
     agentValidationEnabled: getBoolean(
       body.agentValidationEnabled
       ?? body.enableAgentValidation
@@ -235,27 +222,6 @@ function normalizeWorkflowExecutionPlan(workflow: WorkflowRecord, updatedAt: str
   };
 }
 
-function normalizeCandidateOutput(workflow: WorkflowRecord, step: WorkflowStepRecord, output: string) {
-  const trimmed = normalizeAiGeneratedText('workflow-validation.candidate-output', output).trim();
-  if (/^#\s+\S/.test(trimmed)) return trimmed;
-  return `# ${workflow.name}\n\n## ${step.name}\n\n${trimmed}`;
-}
-
-function getMarkdownDocumentTitle(content: string, fallback: string) {
-  const sample = content.length > MAX_DOCUMENT_TITLE_SCAN_CHARS
-    ? content.slice(0, MAX_DOCUMENT_TITLE_SCAN_CHARS)
-    : content;
-  const heading = sample.match(/^\s*#{1,3}\s+(.+)$/m)?.[1]?.trim();
-  if (heading) return heading.slice(0, 64);
-
-  const firstLine = sample
-    .split('\n')
-    .map((line) => line.replace(/^[>\s#*-]+/, '').trim())
-    .find(Boolean);
-
-  return (firstLine || fallback).slice(0, 64);
-}
-
 function getValidationAttempts(
   workflow: WorkflowRecord,
   stepId?: string,
@@ -267,99 +233,10 @@ function getValidationAttempts(
 
 function ensureCandidateOutputSize(output: string) {
   if (output.length > MAX_CANDIDATE_OUTPUT_CHARS) {
-    throw new WorkflowAttachmentValidationError(
+    throw new WorkflowNodeOutputValidationError(
       `candidateOutput must be ${MAX_CANDIDATE_OUTPUT_CHARS.toLocaleString('en-US')} characters or fewer`,
     );
   }
-}
-
-function isTextReadableAttachment(attachment: NonNullable<ReturnType<typeof findWorkflowAttachment>>) {
-  if (attachment.extractedTextRelativePath || attachment.extractedTextPath) return true;
-  if (attachment.sourceType === 'text' || attachment.sourceType === 'markdown') return true;
-  if (attachment.extension === '.txt' || attachment.extension === '.md' || attachment.extension === '.markdown') return true;
-  return attachment.type.includes('text/') || attachment.type.includes('markdown');
-}
-
-function resolveCandidateAttachmentTextPath(attachment: NonNullable<ReturnType<typeof findWorkflowAttachment>>) {
-  if (attachment.extractedTextRelativePath || attachment.extractedTextPath) {
-    return resolveWorkflowAttachmentPath({
-      ...attachment,
-      relativePath: attachment.extractedTextRelativePath,
-      absolutePath: attachment.extractedTextRelativePath ? undefined : attachment.extractedTextPath,
-    });
-  }
-  return resolveWorkflowAttachmentPath(attachment);
-}
-
-async function readCandidateAttachmentOutput(workflow: WorkflowRecord, attachmentId: string) {
-  const attachment = findWorkflowAttachment(workflow, attachmentId);
-  if (!attachment) {
-    throw new WorkflowAttachmentValidationError('Candidate attachment not found');
-  }
-  if (!isTextReadableAttachment(attachment)) {
-    throw new WorkflowAttachmentValidationError('Candidate attachment is not readable text');
-  }
-
-  const filePath = resolveCandidateAttachmentTextPath(attachment);
-  const stat = await fs.stat(filePath);
-  if (stat.size > MAX_WORKFLOW_ATTACHMENT_BYTES) {
-    throw new WorkflowAttachmentValidationError('Candidate attachment exceeds the maximum supported size');
-  }
-
-  const output = (await fs.readFile(filePath, 'utf8')).trim();
-  if (!output) {
-    throw new WorkflowAttachmentValidationError('Candidate attachment is empty');
-  }
-  ensureCandidateOutputSize(output);
-  return output;
-}
-
-async function persistConfirmedOutputAttachment(
-  workflow: WorkflowRecord,
-  step: WorkflowStepRecord,
-  content: string,
-) {
-  const documentContent = content.trim();
-  if (!documentContent) {
-    throw new WorkflowAttachmentValidationError('Candidate output is empty');
-  }
-
-  const createdAt = new Date().toISOString();
-  const messageId = createId('confirmed-output');
-  const title = getMarkdownDocumentTitle(documentContent, `${step.name || 'Workflow step'} output`);
-  const attachment = await persistWorkflowGeneratedMarkdownAttachment({
-    workflowId: workflow.id,
-    workspaceId: workflow.workspaceId,
-    stepId: step.id,
-    messageId,
-    title,
-    content: documentContent,
-  });
-  const message: WorkflowChatMessageRecord = {
-    role: 'assistant',
-    content: `已生成文档附件：${attachment.name}`,
-    kind: 'document',
-    attachments: [attachment],
-    created_at: createdAt,
-  };
-  const existingMessages = Array.isArray(workflow.stepChats?.[step.id])
-    ? workflow.stepChats[step.id]
-    : [];
-  const updatedWorkflow = await upsertWorkflow({
-    ...workflow,
-    stepChats: {
-      ...(workflow.stepChats || {}),
-      [step.id]: [...existingMessages, message],
-    },
-    updated_at: createdAt,
-  });
-
-  return {
-    workflow: updatedWorkflow,
-    attachment,
-    message,
-    output: documentContent,
-  };
 }
 
 function updateStep(
@@ -479,7 +356,13 @@ async function promoteConfirmedStepArtifact(
   workflow: WorkflowRecord,
   stepId: string,
   output: string,
-  options: { organizationId: string; completedAt: string },
+  options: {
+    organizationId: string;
+    completedAt: string;
+    fileName?: string;
+    format?: 'markdown' | 'text' | 'json';
+    mimeType?: string;
+  },
 ) {
   const normalizedWorkflow = normalizeWorkflowExecutionPlan(workflow, options.completedAt);
   const promotedStep = normalizedWorkflow.steps.find((item) => item.id === stepId);
@@ -491,6 +374,9 @@ async function promoteConfirmedStepArtifact(
     workflow: normalizedWorkflow,
     step: promotedStep,
     content: output,
+    fileName: options.fileName,
+    format: options.format,
+    mimeType: options.mimeType,
     now: options.completedAt,
   });
   return promoted.workflow;
@@ -500,12 +386,22 @@ async function runValidation(
   workflow: WorkflowRecord,
   step: WorkflowStepRecord,
   candidateOutput: string,
-  options: { agentValidationEnabled: boolean; organizationId: string },
+  options: {
+    agentValidationEnabled: boolean;
+    organizationId: string;
+    artifactFileName?: string;
+    artifactFormat?: 'markdown' | 'text' | 'json';
+    artifactMimeType?: string;
+  },
   responseExtras: Record<string, unknown> = {},
 ) {
+  const normalizedCandidateOutput = normalizeAiGeneratedText(
+    'workflow-validation.node-output',
+    candidateOutput,
+  ).trim();
   if (!WORKFLOW_OUTPUT_VALIDATION_ENABLED) {
     const completedAt = new Date().toISOString();
-    const normalizedOutput = normalizeCandidateOutput(workflow, step, candidateOutput);
+    const normalizedOutput = normalizedCandidateOutput;
     const completedWorkflow = updateStep(workflow, step.id, {
       status: 'completed',
       output: normalizedOutput,
@@ -520,6 +416,9 @@ async function runValidation(
     const workflowWithArtifact = await promoteConfirmedStepArtifact(completedWorkflow, step.id, normalizedOutput, {
       organizationId: options.organizationId,
       completedAt,
+      fileName: options.artifactFileName,
+      format: options.artifactFormat,
+      mimeType: options.artifactMimeType,
     });
     const finalWorkflow = await persistValidationState(workflowWithArtifact);
     const finalStep = finalWorkflow.steps.find((item) => item.id === step.id);
@@ -543,7 +442,7 @@ async function runValidation(
   }
 
   const now = new Date().toISOString();
-  const normalizedOutput = normalizeCandidateOutput(workflow, step, candidateOutput);
+  const normalizedOutput = normalizedCandidateOutput;
   const artifactHash = hashStepArtifact(normalizedOutput);
   const snapshot = buildCandidateSnapshot(workflow, step, normalizedOutput, now);
   const criteria = buildValidationCriteria(skillContext.skill, skillContext.draft);
@@ -613,6 +512,9 @@ async function runValidation(
       ? await promoteConfirmedStepArtifact(finalState, step.id, normalizedOutput, {
         organizationId: options.organizationId,
         completedAt: selfCheckedAt,
+        fileName: options.artifactFileName,
+        format: options.artifactFormat,
+        mimeType: options.artifactMimeType,
       })
       : finalState;
     const finalWorkflow = await persistValidationState(workflowWithArtifact);
@@ -669,6 +571,9 @@ async function runValidation(
     ? await promoteConfirmedStepArtifact(finalState, step.id, normalizedOutput, {
       organizationId: options.organizationId,
       completedAt,
+      fileName: options.artifactFileName,
+      format: options.artifactFormat,
+      mimeType: options.artifactMimeType,
     })
     : finalState;
   const finalWorkflow = await persistValidationState(workflowWithArtifact);
@@ -747,29 +652,29 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    let workflowForValidation = workflow;
-    let candidateOutput = parsed.candidateAttachmentId
-      ? await readCandidateAttachmentOutput(workflow, parsed.candidateAttachmentId)
-      : parsed.candidateOutput || '';
-    const responseExtras: Record<string, unknown> = {};
-
-    if (!parsed.candidateAttachmentId && parsed.createCandidateAttachment) {
-      const persisted = await persistConfirmedOutputAttachment(workflow, step, candidateOutput);
-      workflowForValidation = persisted.workflow;
-      candidateOutput = persisted.output;
-      responseExtras.candidateAttachment = persisted.attachment;
-      responseExtras.candidateDocumentMessage = persisted.message;
+    if (!parsed.candidateNodeOutputPath) {
+      return jsonError('candidateNodeOutputPath is required', 400);
     }
-
-    const result = await runValidation(workflowForValidation, step, candidateOutput, {
+    const nodeOutput = await readWorkflowNodeOutputDocument({
+      organizationId: context.activeOrganization.id,
+      workflowId: workflow.id,
+      stepId: step.id,
+      relativePath: parsed.candidateNodeOutputPath,
+    });
+    ensureCandidateOutputSize(nodeOutput.content);
+    const extension = nodeOutput.document.fileName.split('.').pop()?.toLowerCase();
+    const result = await runValidation(workflow, step, nodeOutput.content, {
       agentValidationEnabled: parsed.agentValidationEnabled,
       organizationId: context.activeOrganization.id,
-    }, responseExtras);
+      artifactFileName: nodeOutput.document.fileName,
+      artifactFormat: extension === 'json' ? 'json' : extension === 'md' || extension === 'markdown' ? 'markdown' : 'text',
+      artifactMimeType: nodeOutput.document.mimeType,
+    });
     return result.response;
   } catch (error) {
     console.error('Workflow validation POST error:', error);
     if (error instanceof AuthError) return jsonError(error.message, error.status);
-    if (error instanceof WorkflowAttachmentValidationError) return jsonError(error.message, 400);
+    if (error instanceof WorkflowNodeOutputValidationError) return jsonError(error.message, 400);
     return jsonError(error instanceof Error ? error.message : 'Failed to run workflow validation');
   }
 }

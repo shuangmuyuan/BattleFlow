@@ -192,8 +192,6 @@ export interface WorkflowChatAttachmentRecord {
 
 export interface WorkflowContextSelectionRecord {
   knowledgeBaseIds: string[];
-  reviewMaterialIds: string[];
-  disabledAutoInjectedStepIds?: string[];
   updated_at?: string;
 }
 
@@ -350,6 +348,7 @@ interface CreateWorkflowInput {
   name: string;
   description?: string;
   steps: CreateWorkflowStepInput[];
+  agentValidationEnabled?: boolean;
   created_by?: string | null;
   created_by_name?: string | null;
   created_by_email?: string | null;
@@ -595,12 +594,6 @@ function normalizeContextSelections(value: unknown): Record<string, WorkflowCont
       {
         knowledgeBaseIds: Array.isArray(selection?.knowledgeBaseIds)
           ? selection.knowledgeBaseIds.filter((id): id is string => typeof id === 'string')
-          : [],
-        reviewMaterialIds: Array.isArray(selection?.reviewMaterialIds)
-          ? selection.reviewMaterialIds.filter((id): id is string => typeof id === 'string')
-          : [],
-        disabledAutoInjectedStepIds: Array.isArray(selection?.disabledAutoInjectedStepIds)
-          ? selection.disabledAutoInjectedStepIds.filter((id): id is string => typeof id === 'string')
           : [],
         updated_at: typeof selection?.updated_at === 'string' ? selection.updated_at : undefined,
       },
@@ -1435,6 +1428,7 @@ export async function createWorkflow(input: CreateWorkflowInput) {
     name,
     description: input.description?.trim() || '',
     status: 'in_progress',
+    agentValidationEnabled: Boolean(input.agentValidationEnabled),
     steps: buildSteps(input.steps),
     created_by: input.created_by || null,
     created_by_name: input.created_by_name || null,

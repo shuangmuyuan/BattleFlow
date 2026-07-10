@@ -626,6 +626,15 @@ describe('streamClaudeAgentSdkTurn', () => {
         message: expect.stringContaining('materialized Skill files'),
       }));
 
+      await expect(options.canUseTool?.('Edit', { file_path: 'inputs/previous-step-outputs/requirements.md' }, {
+        signal,
+        toolUseID: 'tool-edit-input',
+        requestId: 'request-input',
+      })).resolves.toEqual(expect.objectContaining({
+        behavior: 'deny',
+        message: expect.stringContaining('read-only inputs'),
+      }));
+
       const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0];
       await expect(preToolUse?.({
         hook_event_name: 'PreToolUse',
@@ -655,7 +664,9 @@ describe('streamClaudeAgentSdkTurn', () => {
 
     try {
       mkdirSync(skillRoot, { recursive: true });
+      mkdirSync(path.join(workspaceRoot, 'inputs', 'previous-step-outputs'), { recursive: true });
       writeFileSync(path.join(workspaceRoot, 'note.md'), 'inside');
+      writeFileSync(path.join(workspaceRoot, 'inputs', 'previous-step-outputs', 'requirements.md'), 'upstream');
       writeFileSync(path.join(workspaceRoot, '.battleflow-node-workspace.json'), '{}');
       writeFileSync(path.join(skillRoot, 'SKILL.md'), 'name: method');
       writeFileSync(path.join(artifactRoot, 'manifest.json'), '{}');
@@ -682,6 +693,13 @@ describe('streamClaudeAgentSdkTurn', () => {
         tool_name: 'Read',
         tool_input: { file_path: 'note.md' },
         tool_use_id: 'tool-read-inside',
+      })).resolves.toEqual({ continue: true });
+
+      await expect(preToolUse?.({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Read',
+        tool_input: { file_path: 'inputs/previous-step-outputs/requirements.md' },
+        tool_use_id: 'tool-read-input',
       })).resolves.toEqual({ continue: true });
 
       await expect(preToolUse?.({

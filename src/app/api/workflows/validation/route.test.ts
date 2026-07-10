@@ -9,9 +9,7 @@ const mocks = vi.hoisted(() => ({
   getWorkflow: vi.fn(),
   upsertWorkflow: vi.fn(),
   promoteWorkflowStepArtifact: vi.fn(),
-  findWorkflowAttachment: vi.fn(),
-  persistWorkflowGeneratedMarkdownAttachment: vi.fn(),
-  resolveWorkflowAttachmentPath: vi.fn(),
+  readWorkflowNodeOutputDocument: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/server', () => ({
@@ -48,15 +46,12 @@ vi.mock('@/lib/workflow-artifacts', () => ({
   promoteWorkflowStepArtifact: mocks.promoteWorkflowStepArtifact,
 }));
 
-vi.mock('@/lib/workflow-attachments', () => {
-  class WorkflowAttachmentValidationError extends Error {}
+vi.mock('@/lib/workflow-node-outputs', () => {
+  class WorkflowNodeOutputValidationError extends Error {}
 
   return {
-    findWorkflowAttachment: mocks.findWorkflowAttachment,
-    MAX_WORKFLOW_ATTACHMENT_BYTES: 5 * 1024 * 1024,
-    persistWorkflowGeneratedMarkdownAttachment: mocks.persistWorkflowGeneratedMarkdownAttachment,
-    resolveWorkflowAttachmentPath: mocks.resolveWorkflowAttachmentPath,
-    WorkflowAttachmentValidationError,
+    readWorkflowNodeOutputDocument: mocks.readWorkflowNodeOutputDocument,
+    WorkflowNodeOutputValidationError,
   };
 });
 
@@ -163,6 +158,17 @@ beforeEach(() => {
   mocks.requireOrganizationContext.mockResolvedValue(authContext);
   mocks.requireWorkflowAccess.mockResolvedValue(undefined);
   mocks.getSkill.mockResolvedValue(null);
+  mocks.readWorkflowNodeOutputDocument.mockResolvedValue({
+    absolutePath: '/tmp/node/requirements.md',
+    content: '# Node Requirement Output\n\nWritten by the agent.',
+    document: {
+      relativePath: 'requirements.md',
+      fileName: 'requirements.md',
+      mimeType: 'text/markdown; charset=utf-8',
+      size: 48,
+      updatedAt: '2026-07-08T01:00:00.000Z',
+    },
+  });
   mocks.getWorkflow.mockResolvedValue(workflow());
   mocks.upsertWorkflow.mockImplementation(async (record: WorkflowRecord) => record);
   mocks.promoteWorkflowStepArtifact.mockImplementation(async (input: { workflow: WorkflowRecord }) => {
@@ -186,7 +192,7 @@ describe('Workflow validation route', () => {
       action: 'start_step_validation',
       workflowId: 'workflow-1',
       stepId: 'step-1',
-      candidateOutput: 'Body only',
+      candidateNodeOutputPath: 'requirements.md',
     }));
     const payload = await response.json() as { workflow: WorkflowRecord; passed: boolean };
 
@@ -197,7 +203,8 @@ describe('Workflow validation route', () => {
     expect(mocks.promoteWorkflowStepArtifact).toHaveBeenCalledWith(expect.objectContaining({
       organizationId: 'org-1',
       workflowId: 'workflow-1',
-      content: '# Validation workflow\n\n## Requirement Clarification\n\nBody only',
+      content: '# Node Requirement Output\n\nWritten by the agent.',
+      fileName: 'requirements.md',
     }));
     expect(mocks.upsertWorkflow).toHaveBeenCalledWith(expect.objectContaining({
       artifacts: [expect.objectContaining({ id: 'artifact-step-1' })],
@@ -209,10 +216,46 @@ describe('Workflow validation route', () => {
       action: 'clear_failed_validation',
       workflowId: 'workflow-1',
       stepId: 'step-1',
-      candidateOutput: 'ignored',
     }));
 
     expect(response.status).toBe(200);
     expect(mocks.promoteWorkflowStepArtifact).not.toHaveBeenCalled();
+  });
+
+  it('confirms a node-written document without generating a chat attachment', async () => {
+    const response = await POST(postRequest({
+      action: 'start_step_validation',
+      workflowId: 'workflow-1',
+      stepId: 'step-1',
+      candidateNodeOutputPath: 'requirements.md',
+    }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.readWorkflowNodeOutputDocument).toHaveBeenCalledWith({
+      organizationId: 'org-1',
+      workflowId: 'workflow-1',
+      stepId: 'step-1',
+      relativePath: 'requirements.md',
+    });
+    expect(mocks.promoteWorkflowStepArtifact).toHaveBeenCalledWith(expect.objectContaining({
+      content: '# Node Requirement Output\n\nWritten by the agent.',
+      fileName: 'requirements.md',
+      format: 'markdown',
+      mimeType: 'text/markdown; charset=utf-8',
+    }));
+  });
+
+  it('rejects the removed inline candidate output input', async () => {
+    const response = await POST(postRequest({
+      action: 'start_step_validation',
+      workflowId: 'workflow-1',
+      stepId: 'step-1',
+      candidateOutput: 'Legacy inline output',
+    }));
+    const payload = await response.json() as { error: string };
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toBe('candidateNodeOutputPath is required');
+    expect(mocks.readWorkflowNodeOutputDocument).not.toHaveBeenCalled();
   });
 });

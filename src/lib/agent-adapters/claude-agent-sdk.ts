@@ -45,7 +45,8 @@ const MUTATING_WRITE_TOOLS = ['Write', 'Edit'];
 const UNSUPPORTED_CLAUDE_TOOLS = ['MultiEdit', 'Bash', 'Agent'];
 const DISALLOWED_MCP_TOOL_PATTERN = 'mcp__*';
 const NON_NODE_DISALLOWED_TOOLS = ['Skill', ...MUTATING_WRITE_TOOLS, ...UNSUPPORTED_CLAUDE_TOOLS, DISALLOWED_MCP_TOOL_PATTERN];
-const PROTECTED_NODE_PATH_SEGMENTS = new Set(['.claude']);
+const PROTECTED_NODE_WRITE_PATH_SEGMENTS = new Set(['.claude', 'inputs']);
+const PROTECTED_NODE_READ_PATH_SEGMENTS = new Set(['.claude']);
 const PROTECTED_NODE_FILE_NAMES = new Set(['.battleflow-node-workspace.json']);
 const TOOL_PATH_KEYS = ['file_path', 'filePath', 'path'];
 const READABLE_FILE_TOOLS = new Set(['Read', 'Grep', 'Glob']);
@@ -443,7 +444,7 @@ async function findExistingAncestor(candidate: string, boundary: string) {
 function isProtectedNodePath(targetPath: string, writableRoot: string) {
   const relative = path.relative(writableRoot, targetPath);
   const [firstSegment] = relative.split(path.sep);
-  return PROTECTED_NODE_PATH_SEGMENTS.has(firstSegment) || PROTECTED_NODE_FILE_NAMES.has(path.basename(targetPath));
+  return PROTECTED_NODE_WRITE_PATH_SEGMENTS.has(firstSegment) || PROTECTED_NODE_FILE_NAMES.has(path.basename(targetPath));
 }
 
 function isProtectedNodeReadPath(targetPath: string, cwd: string) {
@@ -451,7 +452,7 @@ function isProtectedNodeReadPath(targetPath: string, cwd: string) {
   const relative = path.relative(cwd, targetPath);
   const [firstSegment, secondSegment] = relative.split(path.sep);
   if (PROTECTED_NODE_FILE_NAMES.has(path.basename(targetPath))) return true;
-  if (!PROTECTED_NODE_PATH_SEGMENTS.has(firstSegment)) return false;
+  if (!PROTECTED_NODE_READ_PATH_SEGMENTS.has(firstSegment)) return false;
   return secondSegment !== 'skills';
 }
 
@@ -581,7 +582,7 @@ async function validateWritableToolPath(
   }
 
   if (isProtectedNodePath(targetPath, rootPath)) {
-    return { allowed: false, reason: `${canonicalToolName} cannot modify BattleFlow runtime metadata or materialized Skill files.` };
+    return { allowed: false, reason: `${canonicalToolName} cannot modify BattleFlow runtime metadata, read-only inputs, or materialized Skill files.` };
   }
 
   const realRoot = await fs.realpath(rootPath).catch(() => rootPath);

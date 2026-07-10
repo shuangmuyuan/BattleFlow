@@ -141,6 +141,45 @@ describe('promoteWorkflowStepArtifact', () => {
     expect(readFileSync(second.artifactPath, 'utf8')).toBe('# First Output\n\nUpdated content.\n');
   });
 
+  it('overwrites the same node file and keeps differently named files', async () => {
+    const currentWorkflow = workflow();
+    const currentStep = currentWorkflow.steps[0];
+    const first = await promoteWorkflowStepArtifact({
+      organizationId: 'org-1',
+      workflowId: currentWorkflow.id,
+      workflow: currentWorkflow,
+      step: currentStep,
+      content: '# Requirement Output\n\nInitial content.',
+      fileName: 'requirement-output.md',
+      now: '2026-07-08T01:00:00.000Z',
+    });
+    const overwritten = await promoteWorkflowStepArtifact({
+      organizationId: 'org-1',
+      workflowId: currentWorkflow.id,
+      workflow: first.workflow,
+      step: currentStep,
+      content: '# Requirement Output\n\nUpdated content.',
+      fileName: 'requirement-output.md',
+      now: '2026-07-08T02:00:00.000Z',
+    });
+    const additional = await promoteWorkflowStepArtifact({
+      organizationId: 'org-1',
+      workflowId: currentWorkflow.id,
+      workflow: overwritten.workflow,
+      step: currentStep,
+      content: '# Risk Notes\n\nAdditional file.',
+      fileName: 'risk-notes.md',
+      now: '2026-07-08T03:00:00.000Z',
+    });
+
+    expect(overwritten.workflow.artifacts).toHaveLength(1);
+    expect(overwritten.artifact.id).toBe(first.artifact.id);
+    expect(overwritten.artifact.version).toBe(2);
+    expect(readFileSync(overwritten.artifactPath, 'utf8')).toContain('Updated content.');
+    expect(additional.workflow.artifacts).toHaveLength(2);
+    expect(additional.artifact.id).not.toBe(first.artifact.id);
+  });
+
   it('rejects artifact records that resolve outside the artifacts directory', () => {
     expect(() => resolveWorkflowArtifactPath({
       organizationId: 'org-1',
@@ -155,4 +194,3 @@ describe('promoteWorkflowStepArtifact', () => {
     })).toThrow(WorkflowArtifactValidationError);
   });
 });
-

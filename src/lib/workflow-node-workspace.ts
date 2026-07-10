@@ -1,7 +1,9 @@
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { SkillRecord, SkillVersion } from './skill-registry';
 import { resolveWorkflowArtifactPath } from './workflow-artifacts';
+import { resolveWorkflowNodeOutputDownload } from './workflow-node-outputs';
 import type { WorkflowArtifactRecord } from './workflow-registry';
 import {
   getWorkflowNodeRuntimeDirectory,
@@ -10,7 +12,34 @@ import {
 } from './workflow-runtime-paths';
 
 const NODE_WORKSPACE_METADATA_FILE = '.battleflow-node-workspace.json';
+const NODE_INPUTS_DIRECTORY = 'inputs';
+const NODE_INPUTS_MANIFEST_FILE = 'manifest.json';
+const PREVIOUS_STEP_OUTPUTS_DIRECTORY = 'previous-step-outputs';
 const SKILL_FILE_CANDIDATES = ['SKILL.md', 'skill.md'];
+
+export interface NodeWorkspaceInputArtifact {
+  artifact: WorkflowArtifactRecord;
+  legacyNodeOutput?: {
+    stepId: string;
+    relativePath: string;
+  };
+}
+
+export interface MaterializedNodeInputArtifact {
+  id: string;
+  sourceStepId: string;
+  sourceStepName: string;
+  title: string;
+  summary: string;
+  fileName: string;
+  format: WorkflowArtifactRecord['format'];
+  mimeType: string;
+  size: number;
+  checksum: string;
+  version: number;
+  updatedAt: string;
+  nodeRelativePath: string;
+}
 
 export interface MaterializeNodeWorkspaceInput {
   organizationId: string;
@@ -18,6 +47,7 @@ export interface MaterializeNodeWorkspaceInput {
   stepId: string;
   skill: Pick<SkillRecord, 'id' | 'skill_id' | 'name' | 'display_name' | 'version' | 'skill_md' | 'versions' | 'package_assets'>;
   artifactSeed?: Pick<WorkflowArtifactRecord, 'path' | 'fileName' | 'checksum' | 'id' | 'updated_at'>;
+  inputArtifacts?: NodeWorkspaceInputArtifact[];
 }
 
 export interface MaterializedNodeWorkspace {
@@ -27,6 +57,10 @@ export interface MaterializedNodeWorkspace {
   skillDirectory: string;
   skillFilePath: string;
   metadataPath: string;
+  inputsDirectory: string;
+  inputManifestPath: string;
+  inputArtifacts: MaterializedNodeInputArtifact[];
+  contextFingerprint: string;
   seededArtifactPath?: string;
 }
 
@@ -42,6 +76,8 @@ interface NodeWorkspaceMetadata {
   seededArtifactId?: string;
   seededArtifactChecksum?: string;
   seededArtifactUpdatedAt?: string;
+  inputArtifacts: MaterializedNodeInputArtifact[];
+  contextFingerprint: string;
   materializedAt: string;
 }
 
@@ -89,6 +125,18 @@ function sanitizeDraftFileName(fileName: string | undefined, fallback: string) {
     .slice(0, 120);
   const candidate = sanitized && sanitized !== '.' && sanitized !== '..' ? sanitized : fallback;
   return /\.md$/i.test(candidate) ? candidate : `${candidate}.md`;
+}
+
+function sanitizeInputFileName(fileName: string | undefined, fallback: string) {
+  const baseName = path.basename((fileName || '').trim());
+  const extension = path.extname(baseName).toLowerCase();
+  const stem = path.basename(baseName, extension)
+    .replace(/[<>:"/\\|?*\u0000-\u001F]+/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 100);
+  const safeExtension = /^\.(?:md|markdown|txt|json|csv)$/.test(extension) ? extension : '.md';
+  return `${stem || fallback}${safeExtension}`;
 }
 
 async function pathExists(filePath: string) {
@@ -224,6 +272,109 @@ async function seedArtifactDraft(
   return targetPath;
 }
 
+async function materializeInputArtifacts(
+  input: MaterializeNodeWorkspaceInput,
+  cwd: string,
+) {
+  const inputsDirectory = path.join(cwd, NODE_INPUTS_DIRECTORY);
+  const previousStepOutputsDirectory = path.join(inputsDirectory, PREVIOUS_STEP_OUTPUTS_DIRECTORY);
+  await fs.rm(inputsDirectory, { recursive: true, force: true });
+  await fs.mkdir(previousStepOutputsDirectory, { recursive: true });
+
+  const materialized: MaterializedNodeInputArtifact[] = [];
+  for (const item of input.inputArtifacts || []) {
+    const { artifact } = item;
+    if (item.legacyNodeOutput && item.legacyNodeOutput.stepId !== artifact.producedByStepId) {
+      throw new Error('Legacy node output must belong to the artifact source step.');
+    }
+
+    const source = item.legacyNodeOutput
+      ? await resolveWorkflowNodeOutputDownload({
+        organizationId: input.organizationId,
+        workflowId: input.workflowId,
+        stepId: item.legacyNodeOutput.stepId,
+        relativePath: item.legacyNodeOutput.relativePath,
+      })
+      : {
+        absolutePath: resolveWorkflowArtifactPath({
+          organizationId: input.organizationId,
+          workflowId: input.workflowId,
+          artifact,
+        }),
+        document: null,
+      };
+
+    const sourceStat = await fs.lstat(source.absolutePath);
+    if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
+      throw new Error('Workflow input artifact must be a regular file.');
+    }
+
+    const sourceFileName = source.document?.fileName || artifact.fileName;
+    const sourceStepDirectory = sanitizePathSegment(artifact.producedByStepId, 'sourceStepId');
+    const fileName = sanitizeInputFileName(sourceFileName, sanitizePathSegment(artifact.id, 'artifactId'));
+    const relativePath = path.posix.join(
+      NODE_INPUTS_DIRECTORY,
+      PREVIOUS_STEP_OUTPUTS_DIRECTORY,
+      sourceStepDirectory,
+      fileName,
+    );
+    const targetPath = path.resolve(cwd, ...relativePath.split('/'));
+    if (!isPathInsideRoot(targetPath, inputsDirectory)) {
+      throw new Error('Workflow input artifact path is outside the node inputs directory.');
+    }
+
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.copyFile(source.absolutePath, targetPath);
+    const buffer = await fs.readFile(targetPath);
+    materialized.push({
+      id: artifact.id,
+      sourceStepId: artifact.producedByStepId,
+      sourceStepName: artifact.producedByStepName,
+      title: artifact.title,
+      summary: artifact.summary,
+      fileName,
+      format: artifact.format,
+      mimeType: source.document?.mimeType || artifact.mimeType,
+      size: buffer.byteLength,
+      checksum: createHash('sha256').update(buffer).digest('hex'),
+      version: artifact.version,
+      updatedAt: source.document?.updatedAt || artifact.updated_at,
+      nodeRelativePath: relativePath,
+    });
+  }
+
+  const inputManifestPath = path.join(inputsDirectory, NODE_INPUTS_MANIFEST_FILE);
+  await fs.writeFile(
+    inputManifestPath,
+    `${JSON.stringify({ artifacts: materialized }, null, 2)}\n`,
+    'utf8',
+  );
+  return { inputsDirectory, inputManifestPath, inputArtifacts: materialized };
+}
+
+function buildContextFingerprint(
+  input: MaterializeNodeWorkspaceInput,
+  skillName: string,
+  inputArtifacts: MaterializedNodeInputArtifact[],
+) {
+  return createHash('sha256').update(JSON.stringify({
+    skillId: input.skill.id,
+    skillName,
+    skillVersion: resolveSkillVersion(input.skill),
+    artifactSeed: input.artifactSeed ? {
+      id: input.artifactSeed.id,
+      checksum: input.artifactSeed.checksum,
+      updatedAt: input.artifactSeed.updated_at,
+    } : null,
+    inputArtifacts: inputArtifacts.map((artifact) => ({
+      id: artifact.id,
+      checksum: artifact.checksum,
+      version: artifact.version,
+      nodeRelativePath: artifact.nodeRelativePath,
+    })),
+  })).digest('hex');
+}
+
 export async function materializeNodeWorkspace(
   input: MaterializeNodeWorkspaceInput,
 ): Promise<MaterializedNodeWorkspace> {
@@ -252,6 +403,8 @@ export async function materializeNodeWorkspace(
   await fs.rm(skillsRoot, { recursive: true, force: true });
   await fs.rename(tempSkillsRoot, skillsRoot);
   const seededArtifactPath = await seedArtifactDraft(input, cwd);
+  const materializedInputs = await materializeInputArtifacts(input, cwd);
+  const contextFingerprint = buildContextFingerprint(input, skillName, materializedInputs.inputArtifacts);
 
   const metadataPath = path.join(cwd, NODE_WORKSPACE_METADATA_FILE);
   const metadata: NodeWorkspaceMetadata = {
@@ -268,6 +421,8 @@ export async function materializeNodeWorkspace(
       seededArtifactChecksum: input.artifactSeed?.checksum,
       seededArtifactUpdatedAt: input.artifactSeed?.updated_at,
     } : {}),
+    inputArtifacts: materializedInputs.inputArtifacts,
+    contextFingerprint,
     materializedAt: new Date().toISOString(),
   };
   await fs.writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
@@ -279,6 +434,8 @@ export async function materializeNodeWorkspace(
     skillDirectory,
     skillFilePath: path.join(skillDirectory, path.basename(skillFilePath)),
     metadataPath,
+    ...materializedInputs,
+    contextFingerprint,
     ...(seededArtifactPath ? { seededArtifactPath } : {}),
   };
 }

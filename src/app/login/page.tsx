@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Building2, Eye, EyeOff, LogIn } from 'lucide-react';
+import { Building2, Eye, EyeOff } from 'lucide-react';
 import { AuthShell } from '@/components/battleflow/auth-shell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -161,9 +161,6 @@ export default function LoginPage() {
     <AuthShell>
         <Card className="border-border/80 bg-card/95 shadow-xl shadow-foreground/10">
           <CardHeader className="pb-3 [@media_(min-height:760px)]:pb-4">
-            <div className="mb-1 flex size-9 items-center justify-center rounded-md border border-brand/20 bg-brand/10 text-brand">
-              <LogIn className="size-4" />
-            </div>
             <CardTitle className="text-xl text-card-foreground">欢迎回来</CardTitle>
             <CardDescription className="text-muted-foreground">
               登录 BattleFlow，继续推进你的产品规划工作。

@@ -109,8 +109,6 @@ export interface WorkflowAssistantSkillSummary {
 
 export interface WorkflowAssistantOnboardingContext {
   upstreamOutputCount: number;
-  sharedArtifactCount: number;
-  disabledUpstreamOutputCount?: number;
 }
 
 export interface WorkflowAssistantHumanInputOption {
@@ -388,8 +386,6 @@ function StepStartGuide({
 }) {
   const starters = getOnboardingStarters(currentSkill, onboardingContext);
   const upstreamCount = onboardingContext?.upstreamOutputCount ?? 0;
-  const sharedArtifactCount = onboardingContext?.sharedArtifactCount ?? 0;
-  const disabledUpstreamCount = onboardingContext?.disabledUpstreamOutputCount ?? 0;
 
   return (
     <div className="flex min-h-full w-full items-center justify-center py-8">
@@ -420,26 +416,14 @@ function StepStartGuide({
             </div>
           )}
 
-          <div className="grid gap-2 text-sm text-muted-foreground sm:grid-cols-2">
+          <div className="text-sm text-muted-foreground">
             <div className="flex min-w-0 items-center gap-2 rounded-md border border-border/35 bg-background/35 px-3 py-2">
               <CheckCircle2 className="size-4 shrink-0 text-success" />
               <span className="min-w-0 break-words">
                 {upstreamCount > 0 ? `已自动引用 ${upstreamCount} 个前序产物` : '当前节点暂无前序产物'}
               </span>
             </div>
-            <div className="flex min-w-0 items-center gap-2 rounded-md border border-border/35 bg-background/35 px-3 py-2">
-              <ShieldCheck className="size-4 shrink-0 text-primary" />
-              <span className="min-w-0 break-words">
-                {sharedArtifactCount > 0 ? `共享产物区 ${sharedArtifactCount} 个文件可读` : '共享产物区暂无文件'}
-              </span>
-            </div>
           </div>
-
-          {disabledUpstreamCount > 0 && (
-            <p className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning-foreground">
-              已手动排除 {disabledUpstreamCount} 个前序产物引用。
-            </p>
-          )}
 
           {currentSkill.checklist.length > 0 && (
             <div className="space-y-2">
@@ -723,6 +707,7 @@ function AssistantMessageParts({
 function WorkflowAssistantMessageRow({
   messageState,
   message,
+  isLatestMessage,
   isStreaming,
   lastAssistantMessageIndex,
   currentProcessingElapsedSeconds,
@@ -735,6 +720,7 @@ function WorkflowAssistantMessageRow({
 }: {
   messageState: MessageState;
   message: EnrichedWorkflowAssistantMessage;
+  isLatestMessage: boolean;
   isStreaming: boolean;
   lastAssistantMessageIndex: number;
   currentProcessingElapsedSeconds: number;
@@ -772,6 +758,7 @@ function WorkflowAssistantMessageRow({
   const thinkingLabel = toolCalls.length > 0 ? '正在处理工具结果' : '正在思考';
   const canCopyMessage = Boolean(displayMessageContent.trim());
   const isMessageCopied = copiedChatMessageKey === message.id;
+  const shouldShowMessageActions = isLatestMessage || isMessageCopied;
 
   return (
     <MessagePrimitive.Root
@@ -844,7 +831,10 @@ function WorkflowAssistantMessageRow({
               )}
               <div
                 className={cn(
-                  'flex h-6 items-center gap-2 text-xs text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100',
+                  'flex h-6 items-center gap-2 text-xs text-muted-foreground transition-opacity duration-150',
+                  shouldShowMessageActions
+                    ? 'opacity-100'
+                    : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100',
                   message.role === 'user' ? 'self-end' : 'self-start',
                 )}
               >
@@ -1185,6 +1175,7 @@ export function WorkflowAssistantThread({
                     <WorkflowAssistantMessageRow
                       messageState={message}
                       message={originalMessage}
+                      isLatestMessage={originalMessage.index === enrichedMessages.length - 1}
                       isStreaming={isStreaming}
                       lastAssistantMessageIndex={lastAssistantMessageIndex}
                       currentProcessingElapsedSeconds={currentProcessingElapsedSeconds}

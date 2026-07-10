@@ -28,6 +28,9 @@ export interface PromoteWorkflowStepArtifactInput extends WorkflowRuntimePathInp
   workflow: WorkflowRecord;
   step: WorkflowStepRecord;
   content: string;
+  fileName?: string;
+  format?: WorkflowArtifactRecord['format'];
+  mimeType?: string;
   now?: string;
 }
 
@@ -63,8 +66,11 @@ interface WorkflowArtifactManifest {
   >>;
 }
 
-function stableArtifactId(stepId: string) {
-  return `artifact-${sanitizeWorkflowRuntimeSegment(stepId, 'stepId')}`;
+function stableArtifactId(stepId: string, fileName?: string) {
+  const stepSegment = sanitizeWorkflowRuntimeSegment(stepId, 'stepId');
+  if (!fileName) return `artifact-${stepSegment}`;
+  const fileHash = createHash('sha1').update(fileName).digest('hex').slice(0, 10);
+  return `artifact-${stepSegment}-${fileHash}`;
 }
 
 function sanitizeFileStem(value: string, fallback: string) {
@@ -75,6 +81,14 @@ function sanitizeFileStem(value: string, fallback: string) {
     .replace(/^-+|-+$/g, '')
     .slice(0, 80);
   return sanitized || fallback;
+}
+
+function sanitizeArtifactFileName(value: string) {
+  const baseName = path.basename(value.trim());
+  const extension = path.extname(baseName).toLowerCase();
+  const stem = sanitizeFileStem(path.basename(baseName, extension), 'artifact');
+  const safeExtension = /^\.(?:md|markdown|txt|json|csv)$/.test(extension) ? extension : '.md';
+  return `${stem}${safeExtension}`;
 }
 
 function extractArtifactTitle(content: string, stepName: string) {
@@ -178,9 +192,15 @@ export async function promoteWorkflowStepArtifact(
   const now = input.now || new Date().toISOString();
   const title = extractArtifactTitle(content, input.step.name);
   const stepSegment = sanitizeWorkflowRuntimeSegment(input.step.id, 'stepId');
+  const sourceFileName = input.fileName?.trim()
+    ? sanitizeArtifactFileName(input.fileName)
+    : null;
   const titleStem = sanitizeFileStem(title, 'artifact');
-  const fileName = `${stepSegment}-${titleStem}.md`;
-  const artifactRelativePath = `${ARTIFACT_PATH_PREFIX}${fileName}`;
+  const fileName = sourceFileName
+    ? sourceFileName
+    : `${stepSegment}-${titleStem}.md`;
+  const storedFileName = sourceFileName ? `${stepSegment}-${sourceFileName}` : fileName;
+  const artifactRelativePath = `${ARTIFACT_PATH_PREFIX}${storedFileName}`;
   const artifactPath = resolveWorkflowArtifactPath({
     organizationId: input.organizationId,
     workflowId: input.workflowId,
@@ -188,9 +208,13 @@ export async function promoteWorkflowStepArtifact(
   });
   const buffer = Buffer.from(`${content}\n`, 'utf8');
   const checksum = createHash('sha256').update(buffer).digest('hex');
-  const existing = input.workflow.artifacts.find((artifact) => artifact.producedByStepId === input.step.id);
+  const existing = sourceFileName
+    ? input.workflow.artifacts.find((artifact) => (
+      artifact.producedByStepId === input.step.id && artifact.fileName === fileName
+    ))
+    : input.workflow.artifacts.find((artifact) => artifact.producedByStepId === input.step.id);
   const artifact: WorkflowArtifactRecord = {
-    id: existing?.id || stableArtifactId(input.step.id),
+    id: existing?.id || stableArtifactId(input.step.id, sourceFileName || undefined),
     workflowId: input.workflow.id,
     producedByStepId: input.step.id,
     producedByStepName: input.step.name,
@@ -198,8 +222,8 @@ export async function promoteWorkflowStepArtifact(
     summary: summarizeArtifact(content),
     fileName,
     path: artifactRelativePath,
-    format: 'markdown',
-    mimeType: 'text/markdown; charset=utf-8',
+    format: input.format || 'markdown',
+    mimeType: input.mimeType || 'text/markdown; charset=utf-8',
     size: buffer.byteLength,
     checksum,
     version: existing ? existing.version + 1 : 1,
@@ -230,4 +254,3 @@ export async function promoteWorkflowStepArtifact(
     manifestPath,
   };
 }
-

@@ -267,6 +267,78 @@ describe('materializeNodeWorkspace', () => {
     }));
   });
 
+  it('copies confirmed previous-step artifacts into the current node inputs directory', async () => {
+    const artifact = createArtifact({
+      producedByStepId: 'step-previous',
+      producedByStepName: 'Previous step',
+      fileName: 'requirements.md',
+    });
+    writeArtifactFile(artifact, '# Previous Requirements\n\nConfirmed input.');
+
+    const workspace = await materializeNodeWorkspace({
+      organizationId: 'org-1',
+      workflowId: 'workflow-1',
+      stepId: 'step-current',
+      skill: createSkill(),
+      inputArtifacts: [{ artifact }],
+    });
+
+    const input = workspace.inputArtifacts[0];
+    expect(input).toMatchObject({
+      id: 'artifact-step-1',
+      sourceStepId: 'step-previous',
+      sourceStepName: 'Previous step',
+      nodeRelativePath: 'inputs/previous-step-outputs/step-previous/requirements.md',
+    });
+    expect(readFileSync(path.join(workspace.cwd, input.nodeRelativePath), 'utf8')).toBe(
+      '# Previous Requirements\n\nConfirmed input.',
+    );
+    expect(JSON.parse(readFileSync(workspace.inputManifestPath, 'utf8'))).toEqual({
+      artifacts: [expect.objectContaining({
+        nodeRelativePath: input.nodeRelativePath,
+      })],
+    });
+    expect(workspace.contextFingerprint).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('uses a completed node document as the source for a legacy summary artifact', async () => {
+    const artifact = createArtifact({
+      producedByStepId: 'step-previous',
+      producedByStepName: 'Previous step',
+      fileName: 'legacy-summary.md',
+    });
+    writeArtifactFile(artifact, '# Summary only\n');
+    const previousNodeDirectory = path.join(
+      tempRoot,
+      'runtime',
+      'org-1',
+      'workflow-1',
+      'nodes',
+      'step-previous',
+    );
+    mkdirSync(previousNodeDirectory, { recursive: true });
+    writeFileSync(path.join(previousNodeDirectory, 'full-output.md'), '# Full Output\n\nComplete document.');
+
+    const workspace = await materializeNodeWorkspace({
+      organizationId: 'org-1',
+      workflowId: 'workflow-1',
+      stepId: 'step-current',
+      skill: createSkill(),
+      inputArtifacts: [{
+        artifact,
+        legacyNodeOutput: {
+          stepId: 'step-previous',
+          relativePath: 'full-output.md',
+        },
+      }],
+    });
+
+    const input = workspace.inputArtifacts[0];
+    expect(input.fileName).toBe('full-output.md');
+    expect(readFileSync(path.join(workspace.cwd, input.nodeRelativePath), 'utf8')).toContain('Complete document.');
+    expect(readFileSync(path.join(workspace.cwd, input.nodeRelativePath), 'utf8')).not.toContain('Summary only');
+  });
+
   it('replaces a stale draft symlink without writing through it', async () => {
     const artifact = createArtifact();
     writeArtifactFile(artifact, '# Safe Artifact\n');

@@ -2,7 +2,10 @@ packages:
   - .
 
 allowBuilds:
+  esbuild: set this to true or false
   msw: false
+  sharp: set this to true or false
+  unrs-resolver: set this to true or false
 
 overrides:
   '@modelcontextprotocol/sdk>@hono/node-server': 1.19.13

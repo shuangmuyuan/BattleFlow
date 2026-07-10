@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { ClipboardEvent, DragEvent, KeyboardEvent, MouseEvent, PointerEvent } from 'react';
+import type { ClipboardEvent, DragEvent, KeyboardEvent, MouseEvent, PointerEvent, ReactNode } from 'react';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -18,6 +18,11 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible';
 import { Textarea } from '@/components/ui/textarea';
 import {
   PromptInput,
@@ -73,7 +78,6 @@ import {
   MessageCircleQuestion,
   Sparkles,
   Loader2,
-  BookOpen,
   Database,
   Paperclip,
   Image as ImageIcon,
@@ -85,6 +89,7 @@ import {
   RotateCcw,
   Copy,
   ChevronDown,
+  ChevronRight,
   FileText,
   ShieldCheck,
   CircleStop,
@@ -276,6 +281,14 @@ interface WorkflowArtifact {
   updated_at: string;
 }
 
+interface WorkflowNodeOutputDocument {
+  relativePath: string;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  updatedAt: string;
+}
+
 type WorkflowDemoHandoffStatus = 'queued' | 'ready' | 'running' | 'succeeded' | 'failed' | 'canceled';
 
 interface WorkflowDemoHandoff {
@@ -313,8 +326,6 @@ interface StoredWorkflowAttachmentFields {
 
 interface WorkflowContextSelection {
   knowledgeBaseIds: string[];
-  reviewMaterialIds: string[];
-  disabledAutoInjectedStepIds?: string[];
   updated_at?: string;
 }
 
@@ -1496,6 +1507,11 @@ function mergeChatToolCall(toolCalls: ChatToolCall[], nextToolCall: ChatToolCall
   ));
 }
 
+function isCompletedNodeDocumentWrite(toolCall: ChatToolCall) {
+  const toolName = toolCall.name.trim().toLowerCase();
+  return toolCall.status === 'completed' && (toolName === 'write' || toolName === 'edit');
+}
+
 function buildAssistantChatMessage(
   content: string,
   createdAt: string,
@@ -1597,9 +1613,49 @@ interface Workspace {
 
 const defaultContextSelection: WorkflowContextSelection = {
   knowledgeBaseIds: [],
-  reviewMaterialIds: [],
-  disabledAutoInjectedStepIds: [],
 };
+
+type WorkflowRightPanelSectionId = 'outputs' | 'knowledge' | 'demo' | 'review';
+
+const defaultRightPanelSectionsOpen: Record<WorkflowRightPanelSectionId, boolean> = {
+  outputs: true,
+  knowledge: false,
+  demo: false,
+  review: false,
+};
+
+function WorkflowRightPanelSection({
+  title,
+  open,
+  onOpenChange,
+  children,
+}: {
+  title: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  children: ReactNode;
+}) {
+  return (
+    <Collapsible open={open} onOpenChange={onOpenChange} className="border-b border-border/70">
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          className="flex min-h-14 w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+        >
+          <span className="min-w-0 truncate text-sm font-semibold text-foreground">{title}</span>
+          {open ? (
+            <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+          )}
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="min-w-0 px-4 pb-4">{children}</div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
 
 const maxPreviewImageBytes = 800_000;
 const maxWorkflowAttachmentBytes = 100 * 1024 * 1024;
@@ -1795,6 +1851,7 @@ export default function WorkflowsPage() {
   const [activeWorkflow, setActiveWorkflow] = useState<Workflow | null>(null);
   const [activeStepIndex, setActiveStepIndex] = useState<number>(-1);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [nodeOutputDocumentsByStepId, setNodeOutputDocumentsByStepId] = useState<Record<string, WorkflowNodeOutputDocument[]>>({});
   const [chatInput, setChatInput] = useState('');
   const [chatInputByStepId, setChatInputByStepId] = useState<Record<string, string>>({});
   const [streamingByStepId, setStreamingByStepId] = useState<Record<string, boolean>>({});
@@ -1835,9 +1892,7 @@ export default function WorkflowsPage() {
   const [reviewedOutputFiles, setReviewedOutputFiles] = useState<ReviewedOutputFile[]>([]);
   const [reviewComments, setReviewComments] = useState<Record<string, string>>({});
   const [reviewedOutputSavePrompt, setReviewedOutputSavePrompt] = useState<ReviewedOutputSavePrompt | null>(null);
-  const [supplementalContextOpen, setSupplementalContextOpen] = useState(false);
-  const [supplementalContextTab, setSupplementalContextTab] = useState<'knowledge' | 'materials'>('knowledge');
-  const [rightPanelTab, setRightPanelTab] = useState<'outputs' | 'review' | 'context' | 'demo'>('outputs');
+  const [rightPanelSectionsOpen, setRightPanelSectionsOpen] = useState(defaultRightPanelSectionsOpen);
   const [rightPanelVisible, setRightPanelVisible] = useState(true);
   const [showChatScrollToBottom, setShowChatScrollToBottom] = useState(false);
   const [copiedChatMessageKey, setCopiedChatMessageKey] = useState<string | null>(null);
@@ -1975,10 +2030,6 @@ export default function WorkflowsPage() {
 
   const normalizeContextSelection = (selection?: Partial<WorkflowContextSelection>): WorkflowContextSelection => ({
     knowledgeBaseIds: Array.isArray(selection?.knowledgeBaseIds) ? selection.knowledgeBaseIds : [],
-    reviewMaterialIds: Array.isArray(selection?.reviewMaterialIds) ? selection.reviewMaterialIds : [],
-    disabledAutoInjectedStepIds: Array.isArray(selection?.disabledAutoInjectedStepIds)
-      ? selection.disabledAutoInjectedStepIds
-      : [],
     updated_at: selection?.updated_at,
   });
 
@@ -2037,7 +2088,7 @@ export default function WorkflowsPage() {
     if (nextStepId) {
       setStepChatPersistenceStatus(nextStepId, hasConfirmableAssistantMessage(nextStepMessages) ? 'saved' : 'idle');
     }
-    setRightPanelTab('outputs');
+    setRightPanelSectionsOpen(defaultRightPanelSectionsOpen);
     if (options.syncRoute !== false && nextStepId) {
       replaceWorkflowRoute({
         workspaceId: workflow.workspaceId,
@@ -2095,6 +2146,41 @@ export default function WorkflowsPage() {
       return null;
     }
   }, []);
+
+  const refreshNodeOutputDocuments = useCallback(async (workflowId: string, stepId: string) => {
+    try {
+      const params = new URLSearchParams({
+        workflow_id: workflowId,
+        step_id: stepId,
+      });
+      const response = await fetch(`/api/workflows/node-outputs?${params.toString()}`, {
+        cache: 'no-store',
+      });
+      const data = await response.json() as {
+        documents?: WorkflowNodeOutputDocument[];
+        error?: string;
+      };
+      if (!response.ok) throw new Error(data.error || '节点产物读取失败');
+      const documents = Array.isArray(data.documents) ? data.documents : [];
+      setNodeOutputDocumentsByStepId((prev) => ({
+        ...prev,
+        [stepId]: documents,
+      }));
+      return documents;
+    } catch (error) {
+      console.error('Node output refresh error:', error);
+      return [];
+    }
+  }, []);
+
+  const activeWorkflowIdForNodeOutputs = activeWorkflow?.id;
+  useEffect(() => {
+    const workflow = activeWorkflowRef.current;
+    if (!workflow || workflow.id !== activeWorkflowIdForNodeOutputs) return;
+    const step = getVisibleSteps(workflow)[activeStepIndex] || getVisibleSteps(workflow)[0];
+    if (!step) return;
+    void refreshNodeOutputDocuments(workflow.id, step.id);
+  }, [activeStepIndex, activeWorkflowIdForNodeOutputs, refreshNodeOutputDocuments]);
 
   const getLatestWorkflowSnapshot = useCallback((workflowId: string, fallback: Workflow): Workflow => (
     workflowsRef.current.find((workflow) => workflow.id === workflowId)
@@ -2270,6 +2356,9 @@ export default function WorkflowsPage() {
           if (data.error) throw new ChatServerStreamError(data.error);
           if (data.tool_call) {
             activeToolCalls = mergeChatToolCall(activeToolCalls, data.tool_call);
+            if (isCompletedNodeDocumentWrite(data.tool_call)) {
+              void refreshNodeOutputDocuments(workflowId, stepId);
+            }
             publishAssistantDraft();
           }
           if (typeof data.content === 'string') {
@@ -2363,7 +2452,7 @@ export default function WorkflowsPage() {
         }
       }
     })();
-  }, [refreshWorkflowById, saveStepChatMessages, setStepChatPersistenceStatus]);
+  }, [refreshNodeOutputDocuments, refreshWorkflowById, saveStepChatMessages, setStepChatPersistenceStatus]);
 
   const openWorkflow = (
     workflow: Workflow,
@@ -3257,13 +3346,18 @@ export default function WorkflowsPage() {
     toast.error('附件下载地址缺失');
   };
 
-  const downloadWorkflowArtifact = async (workflow: Workflow, artifact: WorkflowArtifact) => {
+  const downloadNodeOutputDocument = async (
+    workflow: Workflow,
+    step: WorkflowStep,
+    document: WorkflowNodeOutputDocument,
+  ) => {
     try {
       const params = new URLSearchParams({
         workflow_id: workflow.id,
-        artifact_id: artifact.id,
+        step_id: step.id,
+        path: document.relativePath,
       });
-      const response = await fetch(`/api/workflows/artifacts?${params.toString()}`, {
+      const response = await fetch(`/api/workflows/node-outputs?${params.toString()}`, {
         cache: 'no-store',
         credentials: 'same-origin',
       });
@@ -3273,10 +3367,10 @@ export default function WorkflowsPage() {
       }
 
       const blob = await response.blob();
-      triggerBlobDownload(blob, artifact.fileName || `${artifact.title || 'workflow-artifact'}.md`);
+      triggerBlobDownload(blob, document.fileName);
     } catch (error) {
-      console.warn('Failed to download workflow artifact', error);
-      toast.error('下载共享产物失败，请稍后重试');
+      console.warn('Failed to download node output document', error);
+      toast.error('下载当前产物失败，请稍后重试');
     }
   };
 
@@ -3371,8 +3465,6 @@ export default function WorkflowsPage() {
     const selection = getContextSelection(workflow, step.id);
     const isCurrentStepSnapshot = activeStepIdRef.current === step.id;
     const knowledgeBaseIds = isCurrentStepSnapshot ? selectedKnowledgeBaseIds : selection.knowledgeBaseIds;
-    const disabledAutoIds = new Set(selection.disabledAutoInjectedStepIds || []);
-    const priorSteps = getPriorWorkflowSteps(workflow, step);
 
     const selectedKnowledgeBases = knowledgeBases
       .filter((kb) => knowledgeBaseIds.includes(kb.id))
@@ -3380,9 +3472,6 @@ export default function WorkflowsPage() {
     const stepContextFiles = (workflow.contextFiles || [])
       .filter((file) => file.stepId === step.id && !file.isImage)
       .map((file) => summarizeWorkflowFile(file));
-    const autoInjectedStepMaterials = priorSteps
-      .filter((item) => item.output && !disabledAutoIds.has(item.id))
-      .map((item) => `前序产物引用：${item.name}（请通过工作流附件读取正文）`);
     const currentStepReviewedFiles = (workflow.reviewedOutputFiles || [])
       .filter((file) => file.stepId === step.id)
       .map((file) => summarizeWorkflowFile(file));
@@ -3396,7 +3485,7 @@ export default function WorkflowsPage() {
       stepIndex: step.step_index,
       output,
       contextFiles: [...selectedKnowledgeBases, ...stepContextFiles],
-      reviewedMaterials: [...autoInjectedStepMaterials, ...currentStepReviewedFiles],
+      reviewedMaterials: currentStepReviewedFiles,
       reviewComment: reviewComment || undefined,
       created_at: createdAt,
     };
@@ -3418,37 +3507,13 @@ export default function WorkflowsPage() {
     const userMessage = stepInput.trim() || (requestUploadedFiles.length > 0 ? '请基于我上传的文件继续分析。' : '');
     if (!userMessage || streamingByStepId[currentStep.id]) return;
 
-    const contextSelection = getContextSelection(workflow, currentStep.id);
     const currentStepKnowledgeBaseIds = selectedKnowledgeBaseIds.filter((id) => (
       knowledgeBases.some((knowledgeBase) => knowledgeBase.id === id)
     ));
     const selectedKnowledgeBases = knowledgeBases.filter((kb) => currentStepKnowledgeBaseIds.includes(kb.id));
-    const disabledAutoInjectedStepIds = new Set(contextSelection.disabledAutoInjectedStepIds || []);
-    const hasReadableAttachmentForStep = (stepId: string) => (
-      (workflow.stepChats?.[stepId] || []).some((message) => (
-        (message.attachments || []).some((attachment) => (
-          Boolean(
-            attachment.extractedTextPath
-            || attachment.extractedTextRelativePath
-            || attachment.absolutePath
-            || attachment.relativePath
-            || attachment.contentUrl,
-          )
-        ))
-      ))
-    );
-    const referencedPreviousSteps = getPriorWorkflowSteps(workflow, currentStep)
-      .filter((step) => (
-        step.output
-        && !disabledAutoInjectedStepIds.has(step.id)
-        && hasReadableAttachmentForStep(step.id)
-      ));
     const contextSummary = [
       currentTurnUploadedFiles.length > 0
         ? `本轮用户消息附带文件：${currentTurnUploadedFiles.map((file) => file.name || '未命名附件').join('、')}。如果用户提到“这份文档”“这个文件”或“附件”，优先指这些本轮消息附件；不要把默认注入的前序产物当成本轮附件。`
-        : '',
-      referencedPreviousSteps.length > 0
-        ? `系统已提供前序步骤产物的可读取文件引用：${referencedPreviousSteps.map((step) => step.name).join('、')}。这些不是本轮用户上传的文件；需要查看内容时请读取对应附件路径。`
         : '',
       selectedKnowledgeBases.length > 0
         ? `选中的知识库：${selectedKnowledgeBases.map((kb) => `${kb.name}（${kb.description || '无描述'}）`).join('；')}。发送时将按本轮问题检索相关片段。`
@@ -3538,7 +3603,6 @@ export default function WorkflowsPage() {
             package_assets: skillDef.package_assets || [],
             tuning_request: 'tuning_request' in skillDef ? skillDef.tuning_request : undefined,
           } : undefined,
-          disabled_auto_injected_step_ids: Array.from(disabledAutoInjectedStepIds),
           knowledge_base_ids: currentStepKnowledgeBaseIds,
           selected_knowledge_bases: selectedKnowledgeBases,
           knowledge_query: userMessage,
@@ -3595,6 +3659,9 @@ export default function WorkflowsPage() {
         }
         if (data.tool_call) {
           activeToolCalls = mergeChatToolCall(activeToolCalls, data.tool_call);
+          if (isCompletedNodeDocumentWrite(data.tool_call)) {
+            void refreshNodeOutputDocuments(workflow.id, currentStep.id);
+          }
           updateVisibleChatMessagesForStep(currentStep.id, [
             ...visibleMessages,
             buildAssistantChatMessage(assistantContent, assistantMessageCreatedAt, activeToolCalls),
@@ -3794,6 +3861,7 @@ export default function WorkflowsPage() {
     selectedKnowledgeBaseIds,
     uploadedContextFiles,
     pendingChatFilesByStepId,
+    refreshNodeOutputDocuments,
   ]);
 
   const handleStopStreaming = useCallback(() => {
@@ -3881,13 +3949,10 @@ export default function WorkflowsPage() {
 
     const currentStep = getVisibleSteps(activeWorkflow)[activeStepIndex];
     if (!currentStep) return;
-
-    const lastAssistantMsg = getLastConfirmableAssistantMessage(chatMessages);
-    const currentStepChatStatus = chatPersistenceByStepId[currentStep.id] || 'idle';
+    const candidateDocument = nodeOutputDocumentsByStepId[currentStep.id]?.[0];
     if (
       streamingByStepId[currentStep.id]
-      || currentStepChatStatus !== 'saved'
-      || !lastAssistantMsg
+      || !candidateDocument
     ) {
       return;
     }
@@ -3895,10 +3960,6 @@ export default function WorkflowsPage() {
     setConfirmingStepId(currentStep.id);
 
     try {
-      const documentAttachment = getAssistantDocumentAttachment(lastAssistantMsg);
-      const stepOutputDocument = documentAttachment
-        ? ''
-        : lastAssistantMsg.content.trim();
       const agentValidationEnabled = WORKFLOW_OUTPUT_VALIDATION_ENABLED && Boolean(activeWorkflow.agentValidationEnabled);
       setErrorMessage('');
       if (WORKFLOW_OUTPUT_VALIDATION_ENABLED) {
@@ -3911,9 +3972,7 @@ export default function WorkflowsPage() {
           action: currentStep.status === 'validation_failed' ? 'retry_step_validation' : 'start_step_validation',
           workflowId: activeWorkflow.id,
           stepId: currentStep.id,
-          candidateOutput: stepOutputDocument,
-          candidateAttachmentId: documentAttachment?.id,
-          createCandidateAttachment: !documentAttachment,
+          candidateNodeOutputPath: candidateDocument.relativePath,
           agentValidationEnabled,
         }),
       });
@@ -3925,9 +3984,9 @@ export default function WorkflowsPage() {
         workflow.id === savedWorkflow.id ? savedWorkflow : workflow
       )));
       setActiveWorkflow(savedWorkflow);
+      void refreshNodeOutputDocuments(savedWorkflow.id, currentStep.id);
 
       if (data.passed) {
-        setRightPanelTab('outputs');
         const visibleSteps = getVisibleSteps(savedWorkflow);
         const completedStepIndex = visibleSteps.findIndex((step) => step.id === currentStep.id);
         const nextInProgressIndex = visibleSteps.findIndex((step, index) => (
@@ -3956,7 +4015,7 @@ export default function WorkflowsPage() {
       syncWorkflowSupportingState(savedWorkflow, currentStepIndex);
       setChatMessages(getStepChatMessages(savedWorkflow, currentStep.id));
       setChatInput(chatInputByStepId[currentStep.id] ?? readStoredChatDraft(currentStep.id));
-      setRightPanelTab('outputs');
+      setRightPanelSectionsOpen(defaultRightPanelSectionsOpen);
       const failedStep = savedWorkflow.steps.find((step) => step.id === currentStep.id);
       const summary = failedStep?.validationSummary || data.attempt?.agentValidation?.summary || data.attempt?.selfCheck?.summary || '';
       const message = summary ? `验证未通过：${summary}` : '验证未通过，请修订后重新验证。';
@@ -4236,34 +4295,34 @@ export default function WorkflowsPage() {
     toast.success('工作流信息已保存');
   };
 
-  const handleCloneWorkflow = (workflow: Workflow) => {
-    const timestamp = Date.now();
-    const visibleSteps = getVisibleSteps(workflow);
-    const firstVisibleStepId = visibleSteps[0]?.id;
-    const clonedAt = new Date().toISOString();
+  const handleCloneWorkflow = async (workflow: Workflow) => {
+    try {
+      setErrorMessage('');
+      const response = await fetch('/api/workflows', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'clone_workflow',
+          sourceWorkflowId: workflow.id,
+        }),
+      });
+      const data = await response.json() as { workflow?: Workflow; error?: string };
+      if (!response.ok || !data.workflow) {
+        throw new Error(data.error || '克隆工作流失败');
+      }
 
-    const clonedWorkflow = normalizeWorkflowExecutionPlan({
-      ...workflow,
-      id: `wf-clone-${timestamp}`,
-      name: `${workflow.name} 副本`,
-      status: 'draft',
-      created_at: clonedAt,
-      updated_at: clonedAt,
-      steps: workflow.steps.map((step, index) => ({
-        ...step,
-        id: `step-clone-${timestamp}-${index}`,
-        status: step.id === firstVisibleStepId ? 'in_progress' : 'pending',
-        output: null,
-        completed_at: undefined,
-        removedAt: step.isRemoved ? new Date().toISOString() : undefined,
-      })),
-      stepSnapshots: [],
-      stepChats: {},
-      skillDrafts: {},
-    }, clonedAt);
-
-    setWorkflows((prev) => [clonedWorkflow, ...prev]);
-    void persistWorkflow(clonedWorkflow);
+      const clonedWorkflow = normalizeWorkflowExecutionPlan(
+        data.workflow,
+        data.workflow.updated_at || new Date().toISOString(),
+      );
+      setWorkflows((prev) => [clonedWorkflow, ...prev.filter((item) => item.id !== clonedWorkflow.id)]);
+      toast.success('工作流已克隆');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '克隆工作流失败';
+      console.error('Clone workflow error:', error);
+      setErrorMessage(message);
+      toast.error('克隆工作流失败', { description: message });
+    }
   };
 
   const handleSoftRemoveStep = (workflowId: string, stepId: string) => {
@@ -4313,20 +4372,7 @@ export default function WorkflowsPage() {
       const nextContextSelections = workflow.contextSelections
         ? Object.fromEntries(
           Object.entries(workflow.contextSelections)
-            .filter(([selectionStepId]) => selectionStepId !== stepId)
-            .map(([selectionStepId, selection]) => {
-              const disabledAutoInjectedStepIds = selection.disabledAutoInjectedStepIds
-                ?.filter((disabledStepId) => disabledStepId !== stepId);
-              return [
-                selectionStepId,
-                {
-                  ...selection,
-                  disabledAutoInjectedStepIds: disabledAutoInjectedStepIds?.length
-                    ? disabledAutoInjectedStepIds
-                    : undefined,
-                },
-              ];
-            }),
+            .filter(([selectionStepId]) => selectionStepId !== stepId),
         )
         : undefined;
 
@@ -5668,17 +5714,12 @@ export default function WorkflowsPage() {
     return '当前节点产物可生成 Demo';
   })();
   const currentSkill = getEffectiveSkillForStep(activeWorkflow, currentStep);
+  const currentStepNodeOutputs = currentStep
+    ? nodeOutputDocumentsByStepId[currentStep.id] || []
+    : [];
   const previousSteps = currentStep
     ? getPriorWorkflowSteps(activeWorkflow, currentStep).filter((step) => step.output)
     : [];
-  const workflowArtifacts = activeWorkflow.artifacts || [];
-  const currentContextSelection = currentStep
-    ? getContextSelection(activeWorkflow, currentStep.id)
-    : defaultContextSelection;
-  const disabledAutoInjectedStepIds = currentContextSelection.disabledAutoInjectedStepIds || [];
-  const autoInjectedPreviousSteps = previousSteps.filter((step) => !disabledAutoInjectedStepIds.includes(step.id));
-  const autoInjectedPreviousStepIds = new Set(autoInjectedPreviousSteps.map((step) => step.id));
-  const disabledAutoInjectedPreviousSteps = previousSteps.filter((step) => disabledAutoInjectedStepIds.includes(step.id));
   const reviewMaterials: ReviewMaterial[] = visibleWorkflowSteps
     .filter((step) => step.status === 'completed' && step.output)
     .map((step) => ({
@@ -5712,15 +5753,9 @@ export default function WorkflowsPage() {
   const currentPendingChatFiles = currentStep
     ? pendingChatFilesByStepId[currentStep.id] || []
     : [];
-  const selectedKnowledgeBaseOptions = knowledgeBases.filter((kb) => selectedKnowledgeBaseIds.includes(kb.id));
   const unavailableKnowledgeBaseCount = selectedKnowledgeBaseIds.filter((id) => (
     !knowledgeBases.some((kb) => kb.id === id)
   )).length;
-  const selectedContextCount = (
-    autoInjectedPreviousSteps.length
-    + selectedKnowledgeBaseOptions.length
-    + currentContextFiles.length
-  );
   const currentValidationAttempts = currentStep
     ? (activeWorkflow.validationAttempts || [])
       .filter((attempt) => attempt.stepId === currentStep.id)
@@ -5762,21 +5797,17 @@ export default function WorkflowsPage() {
       .filter((step) => step.step_index === maxVisibleStepIndex && step.output)
       .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
     : [];
-  const currentStepChatPersistenceStatus = currentStep
-    ? chatPersistenceByStepId[currentStep.id] || 'idle'
-    : 'idle';
   const currentStepValidationStage = currentStep ? validationStageByStepId[currentStep.id] : undefined;
   const currentStepIsConfirming = Boolean(currentStep && confirmingStepId === currentStep.id);
   const currentStepEffectiveStatus = currentStepValidationStage || currentStep?.status;
   const currentStepHasConfirmableOutput = Boolean(
-    currentStep && isStepConfirmableStatus(currentStep.status) && hasConfirmableAssistantMessage(chatMessages),
+    currentStep && isStepConfirmableStatus(currentStep.status) && currentStepNodeOutputs.length > 0,
   );
   const currentStepCanConfirm = Boolean(
     currentStepHasConfirmableOutput
       && !isStreaming
       && !confirmingStepId
       && !currentStepValidationStage
-      && currentStepChatPersistenceStatus === 'saved',
   );
   const currentStepConfirmLabel = (() => {
     if (!WORKFLOW_OUTPUT_VALIDATION_ENABLED) return '确认继续';
@@ -5818,17 +5849,11 @@ export default function WorkflowsPage() {
       () => setSelectedKnowledgeBaseIds(nextIds),
     );
   };
-  const setAutoInjectedStepEnabled = (stepId: string, enabled: boolean) => {
-    if (!currentStep) return;
-    const disabledIds = new Set(disabledAutoInjectedStepIds);
-    if (enabled) {
-      disabledIds.delete(stepId);
-    } else {
-      disabledIds.add(stepId);
-    }
-    updateCurrentContextSelection({
-      disabledAutoInjectedStepIds: Array.from(disabledIds),
-    });
+  const setRightPanelSectionOpen = (sectionId: WorkflowRightPanelSectionId, open: boolean) => {
+    setRightPanelSectionsOpen((current) => ({
+      ...current,
+      [sectionId]: open,
+    }));
   };
   const removeContextFile = (fileId: string) => {
     const updatedAt = new Date().toISOString();
@@ -5875,16 +5900,6 @@ export default function WorkflowsPage() {
     updateActiveWorkflow((workflow) => ({
       ...workflow,
       reviewedOutputFiles: (workflow.reviewedOutputFiles || []).filter((file) => file.id !== fileId),
-      contextSelections: Object.fromEntries(
-        Object.entries(workflow.contextSelections || {}).map(([stepId, selection]) => [
-          stepId,
-          {
-            ...selection,
-            reviewMaterialIds: selection.reviewMaterialIds.filter((id) => id !== fileId),
-            updated_at: updatedAt,
-          },
-        ]),
-      ),
       updated_at: updatedAt,
     }));
   };
@@ -6017,8 +6032,8 @@ export default function WorkflowsPage() {
     );
   };
 
-  const renderWorkflowArtifactPreview = (artifact: WorkflowArtifact) => (
-    <Card key={artifact.id} className="mb-2 border-border/60 bg-card/75 shadow-none">
+  const renderNodeOutputPreview = (document: WorkflowNodeOutputDocument) => (
+    <Card key={document.relativePath} className="mb-2 border-border/60 bg-card/75 shadow-none">
       <CardContent className="p-3">
         <div className="flex min-w-0 items-start gap-2">
           <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
@@ -6027,133 +6042,53 @@ export default function WorkflowsPage() {
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-start justify-between gap-2">
               <div className="min-w-0">
-                <p className="min-w-0 truncate text-xs font-semibold">{artifact.title || artifact.fileName}</p>
+                <p className="min-w-0 truncate text-xs font-semibold">{document.fileName}</p>
                 <p className="mt-1 truncate text-[11px] text-muted-foreground">
-                  {artifact.producedByStepName || '未知节点'} · v{artifact.version} · {formatFileSize(artifact.size)}
+                  {formatFileSize(document.size)} · 更新于 {formatSnapshotTime(document.updatedAt)}
                 </p>
               </div>
               <Button
                 variant="ghost"
                 size="sm"
                 className="h-7 w-7 shrink-0 p-0"
-                title="下载共享产物"
-                aria-label={`下载共享产物 ${artifact.title || artifact.fileName}`}
+                title="下载当前产物"
+                aria-label={`下载当前产物 ${document.fileName}`}
                 onClick={() => {
-                  void downloadWorkflowArtifact(activeWorkflow, artifact);
+                  if (!currentStep) return;
+                  void downloadNodeOutputDocument(activeWorkflow, currentStep, document);
                 }}
               >
                 <Download className="h-3.5 w-3.5" />
               </Button>
             </div>
-            {artifact.summary && (
-              <p className="mt-2 line-clamp-2 break-words text-xs leading-5 text-muted-foreground">
-                {artifact.summary}
-              </p>
-            )}
-            <p className="mt-2 truncate text-[11px] text-muted-foreground">
-              更新于 {formatSnapshotTime(artifact.updated_at)}
-            </p>
           </div>
         </div>
       </CardContent>
     </Card>
   );
 
-  const supplementalContextPanel = (
-    <div className="flex h-full min-w-0 flex-col gap-3 overflow-y-auto p-4">
-      <Card className="border-border/60 bg-card/75 shadow-none">
-        <CardContent className="flex flex-col gap-3 p-3">
-          <div className="flex min-w-0 items-start gap-2">
-            <BookOpen className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-            <div className="min-w-0">
-              <p className="text-sm font-medium">补充上下文</p>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                本轮注入 {selectedContextCount} 个来源，包含自动产物 {autoInjectedPreviousSteps.length}、知识库 {selectedKnowledgeBaseOptions.length}、文件 {currentContextFiles.length}。
-              </p>
-            </div>
-          </div>
-          {(selectedContextCount > 0 || unavailableKnowledgeBaseCount > 0) && (
-            <div className="flex flex-wrap gap-2 rounded-lg border border-border/50 bg-background/60 p-3">
-              {autoInjectedPreviousSteps.map((step) => (
-                <Badge key={`auto-step-${step.id}`} variant="secondary" className="max-w-full gap-1.5 bg-primary/10 text-primary">
-                  <FileText className="h-3 w-3 shrink-0" />
-                  <span className="truncate">{step.name}</span>
-                  <button
-                    type="button"
-                    className="ml-1 text-primary/70 hover:text-primary"
-                    onClick={() => setAutoInjectedStepEnabled(step.id, false)}
-                    aria-label={`取消自动注入 ${step.name}`}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </Badge>
-              ))}
-              {selectedKnowledgeBaseOptions.map((kb) => (
-                <Badge key={`selected-kb-${kb.id}`} variant="secondary" className="max-w-full gap-1.5">
-                  <Database className="h-3 w-3 shrink-0" />
-                  <span className="truncate">{kb.name}</span>
-                  <button
-                    type="button"
-                    className="ml-1 text-muted-foreground hover:text-foreground"
-                    onClick={() => {
-                      const nextIds = selectedKnowledgeBaseIds.filter((id) => id !== kb.id);
-                      updateCurrentContextSelection(
-                        { knowledgeBaseIds: nextIds },
-                        () => setSelectedKnowledgeBaseIds(nextIds),
-                      );
-                    }}
-                    aria-label={`移除知识库 ${kb.name}`}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </Badge>
-              ))}
-              {currentContextFiles.map((file) => (
-                <Badge key={`selected-file-${file.id}`} variant="outline" className="max-w-full gap-1.5 bg-background/60">
-                  {file.isImage ? <ImageIcon className="h-3 w-3 shrink-0" /> : <Paperclip className="h-3 w-3 shrink-0" />}
-                  <span className="truncate">{file.name}</span>
-                  <button
-                    type="button"
-                    className="ml-1 text-muted-foreground hover:text-foreground"
-                    onClick={() => removeContextFile(file.id)}
-                    aria-label={`移除 ${file.name}`}
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </Badge>
-              ))}
-              {unavailableKnowledgeBaseCount > 0 && (
-                <div className="flex w-full items-center justify-between gap-2 rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5">
-                  <span className="text-xs text-warning">{unavailableKnowledgeBaseCount} 个知识库引用不可用</span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 shrink-0 px-2 text-xs"
-                    onClick={() => {
-                      const nextIds = selectedKnowledgeBaseIds.filter((id) => knowledgeBases.some((kb) => kb.id === id));
-                      updateCurrentContextSelection(
-                        { knowledgeBaseIds: nextIds },
-                        () => setSelectedKnowledgeBaseIds(nextIds),
-                      );
-                    }}
-                  >
-                    清理
-                  </Button>
-                </div>
-              )}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Tabs value={supplementalContextTab} onValueChange={(value) => setSupplementalContextTab(value as 'knowledge' | 'materials')}>
-        <TabsList className="grid h-8 w-full grid-cols-2">
-          <TabsTrigger value="knowledge" className="text-xs">知识库</TabsTrigger>
-          <TabsTrigger value="materials" className="text-xs">前序产物</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="knowledge" className="mt-3">
-          <div className="flex flex-col gap-2">
+  const knowledgeBasePanel = (
+    <div className="flex min-w-0 flex-col gap-2">
+      {unavailableKnowledgeBaseCount > 0 && (
+        <div className="flex items-center justify-between gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2">
+          <span className="text-xs text-warning">{unavailableKnowledgeBaseCount} 个知识库引用不可用</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 shrink-0 px-2 text-xs"
+            onClick={() => {
+              const nextIds = selectedKnowledgeBaseIds.filter((id) => knowledgeBases.some((kb) => kb.id === id));
+              updateCurrentContextSelection(
+                { knowledgeBaseIds: nextIds },
+                () => setSelectedKnowledgeBaseIds(nextIds),
+              );
+            }}
+          >
+            清理
+          </Button>
+        </div>
+      )}
+      <div className="flex flex-col gap-2">
             {knowledgeNotice && (
               <div className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning">
                 {knowledgeNotice}
@@ -6214,74 +6149,12 @@ export default function WorkflowsPage() {
                 );
               })
             )}
-          </div>
-        </TabsContent>
-
-        <TabsContent value="materials" className="mt-3">
-          <div className="flex flex-col gap-3">
-            <Card className="border-border/60 bg-card/75 shadow-none">
-              <CardContent className="flex flex-col gap-3 p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-xs font-medium">默认注入前序步骤产物</p>
-                    <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
-                      前序 Skill 输出会以可读取文件路径引用进入当前步骤上下文，可按步骤关闭。
-                    </p>
-                  </div>
-                  <Badge variant="outline" className="shrink-0 text-[11px]">
-                    {autoInjectedPreviousSteps.length}/{previousSteps.length}
-                  </Badge>
-                </div>
-                {previousSteps.length > 0 ? (
-                  <div data-testid="auto-injected-previous-steps-list" className="flex flex-col gap-2">
-                    {previousSteps.map((step) => {
-                      const enabled = !disabledAutoInjectedStepIds.includes(step.id);
-                      return (
-                        <div
-                          key={step.id}
-                          className={cn(
-                            'flex items-start justify-between gap-3 rounded-lg border p-3',
-                            enabled ? 'border-primary/50 bg-primary/10' : 'border-border/50 bg-muted/20',
-                          )}
-                        >
-                          <div className="min-w-0">
-                            <div className="flex min-w-0 items-center gap-2">
-                              <FileText className="h-3.5 w-3.5 shrink-0 text-primary" />
-                              <p className="truncate text-xs font-medium">{step.name}</p>
-                            </div>
-                            <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                              {compactMarkdownPreview(step.output || '', 120)}
-                            </p>
-                          </div>
-                          <Button
-                            type="button"
-                            variant={enabled ? 'default' : 'outline'}
-                            size="sm"
-                            className="h-8 shrink-0 text-xs"
-                            onClick={() => setAutoInjectedStepEnabled(step.id, !enabled)}
-                          >
-                            {enabled ? '已注入' : '已取消'}
-                          </Button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
-                    当前步骤暂无可自动注入的前序产物。
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-          </div>
-        </TabsContent>
-      </Tabs>
+      </div>
     </div>
   );
 
   const demoGenerationPanel = (
-    <div className="flex h-full min-w-0 flex-col gap-3 overflow-y-auto p-4">
+    <div className="flex min-w-0 flex-col gap-3">
       <Card className="border-border/60 bg-card/75 shadow-none">
         <CardContent className="flex flex-col gap-3 p-3">
           <div className="flex min-w-0 items-start gap-2">
@@ -6614,9 +6487,6 @@ export default function WorkflowsPage() {
             </span>
             <div className="min-w-0">
               <h3 className="truncate text-sm font-semibold">{currentStep?.name || '选择步骤开始对话'}</h3>
-              <p className="truncate text-xs text-muted-foreground">
-                {currentSkill ? `Skill: ${currentSkill.name} | 工具: ${currentSkill.tools.join(', ')}` : ''}
-              </p>
             </div>
           </div>
           {currentStep?.status === 'completed' && (
@@ -6715,9 +6585,7 @@ export default function WorkflowsPage() {
             renderDocumentCard={renderAssistantDocumentCard}
             formatFileSize={formatFileSize}
             onboardingContext={{
-              upstreamOutputCount: autoInjectedPreviousSteps.length,
-              sharedArtifactCount: workflowArtifacts.length,
-              disabledUpstreamOutputCount: disabledAutoInjectedPreviousSteps.length,
+              upstreamOutputCount: previousSteps.length,
             }}
             onUseStarter={handleUseStarter}
             pendingHumanInput={currentPendingHumanInput}
@@ -6727,290 +6595,6 @@ export default function WorkflowsPage() {
 
         {/* Chat Input */}
         <div className="flex flex-col gap-1 border-t border-border/40 px-4 pb-1 pt-4">
-          <div className="hidden">
-            <div className="flex w-full items-center justify-between gap-3">
-              <div className="flex min-w-0 items-center gap-2">
-                <BookOpen className="h-4 w-4 text-primary" />
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">补充上下文</p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    本轮注入 {selectedContextCount} 个来源 · 自动产物 {autoInjectedPreviousSteps.length} · 知识库 {selectedKnowledgeBaseOptions.length} · 文件 {currentContextFiles.length}
-                  </p>
-                </div>
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-8 shrink-0 gap-1.5 text-xs"
-                onClick={() => setSupplementalContextOpen((prev) => !prev)}
-                aria-expanded={supplementalContextOpen}
-              >
-                管理上下文
-                <ChevronDown className={`h-3.5 w-3.5 transition-transform ${supplementalContextOpen ? 'rotate-180' : ''}`} />
-              </Button>
-            </div>
-            {supplementalContextOpen && (
-              <div className="flex flex-col gap-3 border-t border-border/40 pt-3">
-                {(selectedContextCount > 0 || unavailableKnowledgeBaseCount > 0) && (
-                  <div className="rounded-lg border border-border/50 bg-background/60 p-3">
-                    {unavailableKnowledgeBaseCount > 0 && (
-                      <div className="mb-3 flex justify-end">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 shrink-0 px-2 text-xs"
-                          onClick={() => {
-                            const nextIds = selectedKnowledgeBaseIds.filter((id) => knowledgeBases.some((kb) => kb.id === id));
-                            updateCurrentContextSelection(
-                              { knowledgeBaseIds: nextIds },
-                              () => setSelectedKnowledgeBaseIds(nextIds),
-                            );
-                          }}
-                        >
-                          清理失效引用
-                        </Button>
-                      </div>
-                    )}
-                    <div className="flex flex-wrap gap-2">
-                    {autoInjectedPreviousSteps.map((step) => (
-                      <Badge key={`auto-step-${step.id}`} variant="secondary" className="gap-1.5 bg-primary/10 text-primary">
-                        <FileText className="h-3 w-3" />
-                        {step.name}
-                        <button
-                          type="button"
-                          className="ml-1 text-primary/70 hover:text-primary"
-                          onClick={() => setAutoInjectedStepEnabled(step.id, false)}
-                          aria-label={`取消自动注入 ${step.name}`}
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </Badge>
-                    ))}
-                    {selectedKnowledgeBaseOptions.map((kb) => (
-                      <Badge key={`selected-kb-${kb.id}`} variant="secondary" className="gap-1.5">
-                        <Database className="h-3 w-3" />
-                        {kb.name}
-                        <button
-                          type="button"
-                          className="ml-1 text-muted-foreground hover:text-foreground"
-                          onClick={() => {
-                            const nextIds = selectedKnowledgeBaseIds.filter((id) => id !== kb.id);
-                            updateCurrentContextSelection(
-                              { knowledgeBaseIds: nextIds },
-                              () => setSelectedKnowledgeBaseIds(nextIds),
-                            );
-                          }}
-                          aria-label={`移除知识库 ${kb.name}`}
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </Badge>
-                    ))}
-                    {currentContextFiles.map((file) => (
-                      <Badge key={`selected-file-${file.id}`} variant="outline" className="gap-1.5 bg-background/60">
-                        {file.isImage ? <ImageIcon className="h-3 w-3" /> : <Paperclip className="h-3 w-3" />}
-                        <span className="max-w-40 truncate">{file.name}</span>
-                        <button
-                          type="button"
-                          className="ml-1 text-muted-foreground hover:text-foreground"
-                          onClick={() => removeContextFile(file.id)}
-                          aria-label={`移除 ${file.name}`}
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </Badge>
-                    ))}
-                    {unavailableKnowledgeBaseCount > 0 && (
-                      <Badge variant="outline" className="border-warning/30 bg-warning/10 text-warning">
-                        {unavailableKnowledgeBaseCount} 个知识库引用不可用
-                      </Badge>
-                    )}
-                    </div>
-                  </div>
-                )}
-
-                <Tabs value={supplementalContextTab} onValueChange={(value) => setSupplementalContextTab(value as 'knowledge' | 'materials')}>
-                  <TabsList className="grid h-8 w-full grid-cols-2">
-                    <TabsTrigger value="knowledge" className="text-xs">知识库</TabsTrigger>
-                    <TabsTrigger value="materials" className="text-xs">前序产物</TabsTrigger>
-                  </TabsList>
-
-                  <TabsContent value="knowledge" className="mt-3">
-                    <div className="flex flex-col gap-2">
-                      {knowledgeNotice && (
-                        <div className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning">
-                          {knowledgeNotice}
-                        </div>
-                      )}
-                      {knowledgeLoading ? (
-                        <div className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
-                          正在读取真实知识库列表...
-                        </div>
-                      ) : knowledgeBases.length === 0 ? (
-                        <div className="rounded-lg border border-dashed border-border/60 p-3 text-xs leading-5 text-muted-foreground">
-                          暂无可选知识库。当前不会向模型注入 Mock 知识库；请先在知识库页面完成服务配置和文档导入。
-                        </div>
-                      ) : (
-                        knowledgeBases.map((kb) => {
-                          const selected = selectedKnowledgeBaseIds.includes(kb.id);
-                          const checkboxId = `workflow-chat-kb-${currentStep?.id || 'step'}-${kb.id}`;
-                          return (
-                            <label
-                              key={kb.id}
-                              htmlFor={checkboxId}
-                              className={`flex items-start justify-between gap-3 rounded-lg border p-3 ${
-                                selected ? 'border-primary/50 bg-primary/10' : 'border-border/50 bg-background/60'
-                              }`}
-                            >
-                              <div className="flex min-w-0 items-start gap-3">
-                                <Checkbox
-                                  id={checkboxId}
-                                  checked={selected}
-                                  className="mt-0.5"
-                                  onCheckedChange={(checked) => {
-                                    setCurrentKnowledgeBaseSelected(kb.id, checked === true);
-                                  }}
-                                  aria-label={`勾选知识库 ${kb.name}`}
-                                />
-                                <div className="min-w-0">
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <p className="text-xs font-medium">{kb.name}</p>
-                                    <StatusBadge tone={kb.document_count ? 'success' : 'warning'}>
-                                      {kb.document_count ? '已连接' : '空库'}
-                                    </StatusBadge>
-                                    <Badge variant="outline">{kb.document_count || 0} 文档</Badge>
-                                  </div>
-                                  {kb.description?.trim() ? (
-                                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                                      {kb.description}
-                                    </p>
-                                  ) : null}
-                                  <p className="mt-1 truncate text-[11px] text-muted-foreground">
-                                    数据集 {kb.dataset_name || '未配置'} · 更新于 {kb.updated_at ? formatSnapshotTime(kb.updated_at) : '未知'}
-                                  </p>
-                                </div>
-                              </div>
-                              <Badge variant={selected ? 'default' : 'outline'} className="shrink-0 text-[11px]">
-                                {selected ? '本步骤检索' : '未勾选'}
-                              </Badge>
-                            </label>
-                          );
-                        })
-                      )}
-                    </div>
-                  </TabsContent>
-
-                  <TabsContent value="materials" className="mt-3">
-                    <div className="flex flex-col gap-3">
-                      <div className="rounded-lg border border-border/50 bg-background/60 p-3">
-                        <div className="flex items-center justify-between gap-2">
-                          <div>
-                            <p className="text-xs font-medium">默认注入前序步骤产物</p>
-                            <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
-                              前序 Skill 输出会以可读取文件路径引用进入当前步骤上下文，可按步骤关闭。
-                            </p>
-                          </div>
-                          <Badge variant="outline" className="shrink-0 text-[11px]">
-                            {autoInjectedPreviousSteps.length}/{previousSteps.length} 启用
-                          </Badge>
-                        </div>
-                        {previousSteps.length > 0 ? (
-                          <div
-                            data-testid="auto-injected-previous-steps-list"
-                            className={cn(
-                              'mt-3 overflow-y-auto pr-2 [scrollbar-gutter:stable]',
-                              previousSteps.length > 3 ? 'h-72' : 'max-h-72',
-                            )}
-                          >
-                            <div className="flex flex-col gap-2 pr-3">
-                              {previousSteps.map((step) => {
-                                const enabled = !disabledAutoInjectedStepIds.includes(step.id);
-                                return (
-                                  <div
-                                    key={step.id}
-                                    className={cn(
-                                      'flex items-start justify-between gap-3 rounded-lg border p-3',
-                                      enabled ? 'border-primary/50 bg-primary/10' : 'border-border/50 bg-muted/20',
-                                    )}
-                                  >
-                                    <div className="min-w-0">
-                                      <div className="flex min-w-0 items-center gap-2">
-                                        <FileText className="h-3.5 w-3.5 shrink-0 text-primary" />
-                                        <p className="truncate text-xs font-medium">{step.name}</p>
-                                      </div>
-                                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                                        {compactMarkdownPreview(step.output || '', 120)}
-                                      </p>
-                                    </div>
-                                    <Button
-                                      type="button"
-                                      variant={enabled ? 'default' : 'outline'}
-                                      size="sm"
-                                      className="h-8 shrink-0 text-xs"
-                                      onClick={() => setAutoInjectedStepEnabled(step.id, !enabled)}
-                                    >
-                                      {enabled ? '已注入' : '已取消'}
-                                    </Button>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="mt-3 rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
-                            当前步骤暂无可自动注入的前序产物。
-                          </div>
-                        )}
-                      </div>
-
-                    </div>
-                  </TabsContent>
-
-                </Tabs>
-              </div>
-            )}
-          </div>
-
-          <div className="hidden">
-            <div className="flex min-w-0 items-center gap-2">
-              <Sparkles className="h-4 w-4 shrink-0 text-primary" />
-              <div className="min-w-0">
-                <p className="text-sm font-medium">Demo 生成</p>
-                <p className="truncate text-xs text-muted-foreground">{currentStepDemoHint}</p>
-              </div>
-            </div>
-            <div className="flex shrink-0 flex-wrap items-center gap-2">
-              {currentStepDemoHandoff?.studioUrl ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8 gap-1.5 text-xs"
-                  onClick={() => window.open(currentStepDemoHandoff.studioUrl, '_blank', 'noopener,noreferrer')}
-                >
-                  <ExternalLink className="h-3.5 w-3.5" />
-                  打开 Demo
-                </Button>
-              ) : (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8 gap-1.5 text-xs"
-                  disabled={!canGenerateCurrentStepDemo}
-                  onClick={() => void handleGenerateDemoHandoff()}
-                >
-                  {currentStepDemoLoading ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Sparkles className="h-3.5 w-3.5" />
-                  )}
-                  Demo 生成
-                </Button>
-              )}
-            </div>
-          </div>
 
           <PromptInput
             value={chatInput}
@@ -7133,7 +6717,7 @@ export default function WorkflowsPage() {
         </div>
       </div>
 
-      {/* Right: Context Panel */}
+      {/* Right: Step Panel */}
       <div
         className={cn(
           'flex min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-border/70 bg-card/20 transition-[max-height,width] duration-300 ease-in-out lg:h-full lg:max-h-none lg:border-l lg:border-t-0',
@@ -7141,15 +6725,11 @@ export default function WorkflowsPage() {
         )}
       >
         {rightPanelVisible ? (
-          <Tabs
-            value={rightPanelTab}
-            onValueChange={(value) => setRightPanelTab(value as typeof rightPanelTab)}
-            className="min-h-0 flex-1 gap-0 overflow-hidden transition-opacity duration-200"
-          >
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden transition-opacity duration-200">
             <div className="shrink-0 border-b border-border/70 bg-card/35 p-3.5">
               <div className="flex min-w-0 items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <h3 className="text-sm font-semibold">上下文面板</h3>
+                  <h3 className="text-sm font-semibold">步骤面板</h3>
                   <p className="mt-1 truncate text-xs text-muted-foreground">
                     {currentStep?.name || '未选择步骤'}
                   </p>
@@ -7160,49 +6740,35 @@ export default function WorkflowsPage() {
                   size="icon"
                   className="size-8 shrink-0 rounded-md transition-transform duration-300 ease-in-out hover:-translate-x-px"
                   onClick={() => setRightPanelVisible(false)}
-                  aria-label="隐藏上下文面板"
+                  aria-label="隐藏步骤面板"
                   aria-pressed={rightPanelVisible}
-                  title="隐藏上下文面板"
+                  title="隐藏步骤面板"
                 >
                   <PanelRight className="h-4 w-4" />
                 </Button>
               </div>
-              <TabsList className="mt-3 grid h-auto w-full grid-cols-4 gap-1">
-                <TabsTrigger value="outputs" className="text-xs">产出</TabsTrigger>
-                <TabsTrigger value="review" className="text-xs">审核</TabsTrigger>
-                <TabsTrigger value="context" className="text-xs">上下文</TabsTrigger>
-                <TabsTrigger value="demo" className="text-xs">Demo</TabsTrigger>
-              </TabsList>
             </div>
 
-          <TabsContent value="outputs" className="min-h-0 flex-1 overflow-hidden">
-            <div className="flex h-full min-w-0 flex-col gap-4 overflow-y-auto p-4">
+            <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+
+              <WorkflowRightPanelSection
+                title="产出"
+                open={rightPanelSectionsOpen.outputs}
+                onOpenChange={(open) => setRightPanelSectionOpen('outputs', open)}
+              >
+                <div className="flex min-w-0 flex-col gap-4">
                 <div className="min-w-0">
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <h4 className="min-w-0 truncate text-xs font-medium text-muted-foreground">当前步骤产出</h4>
                     <Badge variant="outline" className="shrink-0 text-[11px]">
-                      {currentStep?.output ? '1 个' : '0 个'}
+                      {currentStepNodeOutputs.length} 个
                     </Badge>
                   </div>
-                  {currentStep?.output ? (
-                    renderStepOutputPreview(currentStep)
+                  {currentStepNodeOutputs.length > 0 ? (
+                    currentStepNodeOutputs.map((document) => renderNodeOutputPreview(document))
                   ) : (
                     <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
-                      当前步骤产物确认后，会在这里展示本步骤产出。
-                    </p>
-                  )}
-                </div>
-
-                <div className="min-w-0">
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <h4 className="min-w-0 truncate text-xs font-medium text-muted-foreground">共享工作流产物</h4>
-                    <Badge variant="outline" className="shrink-0 text-[11px]">{workflowArtifacts.length} 个</Badge>
-                  </div>
-                  {workflowArtifacts.length > 0 ? (
-                    workflowArtifacts.map((artifact) => renderWorkflowArtifactPreview(artifact))
-                  ) : (
-                    <p className="rounded-lg border border-dashed border-border/60 p-3 text-xs text-muted-foreground">
-                      节点产物确认后，会在这里形成可下载的共享产物。
+                      当前节点写入文档后，会在这里展示可下载的本步骤产出。
                     </p>
                   )}
                 </div>
@@ -7262,11 +6828,31 @@ export default function WorkflowsPage() {
                     </p>
                   )}
                 </div>
-            </div>
-          </TabsContent>
+                </div>
+              </WorkflowRightPanelSection>
 
-          <TabsContent value="review" className="min-h-0 flex-1 overflow-hidden">
-            <div className="flex h-full min-w-0 flex-col gap-3 overflow-y-auto p-4">
+              <WorkflowRightPanelSection
+                title="知识库"
+                open={rightPanelSectionsOpen.knowledge}
+                onOpenChange={(open) => setRightPanelSectionOpen('knowledge', open)}
+              >
+                {knowledgeBasePanel}
+              </WorkflowRightPanelSection>
+
+              <WorkflowRightPanelSection
+                title="Demo"
+                open={rightPanelSectionsOpen.demo}
+                onOpenChange={(open) => setRightPanelSectionOpen('demo', open)}
+              >
+                {demoGenerationPanel}
+              </WorkflowRightPanelSection>
+
+              <WorkflowRightPanelSection
+                title="审核"
+                open={rightPanelSectionsOpen.review}
+                onOpenChange={(open) => setRightPanelSectionOpen('review', open)}
+              >
+                <div className="flex min-w-0 flex-col gap-3">
                 {currentStep && (
                   <>
                     <div className="flex min-w-0 items-center justify-between gap-2">
@@ -7349,16 +6935,11 @@ export default function WorkflowsPage() {
                     </Card>
                   </>
                 )}
-            </div>
-          </TabsContent>
+                </div>
+              </WorkflowRightPanelSection>
 
-          <TabsContent value="context" className="min-h-0 flex-1 overflow-hidden">
-            {supplementalContextPanel}
-          </TabsContent>
-          <TabsContent value="demo" className="min-h-0 flex-1 overflow-hidden">
-            {demoGenerationPanel}
-          </TabsContent>
-          </Tabs>
+            </div>
+          </div>
         ) : (
           <div className="flex shrink-0 justify-end p-2 lg:h-full lg:items-start lg:justify-center">
             <Button
@@ -7367,9 +6948,9 @@ export default function WorkflowsPage() {
               size="icon"
               className="size-8 shrink-0 rounded-md transition-transform duration-300 ease-in-out hover:translate-x-px"
               onClick={() => setRightPanelVisible(true)}
-              aria-label="显示上下文面板"
+              aria-label="显示步骤面板"
               aria-pressed={rightPanelVisible}
-              title="显示上下文面板"
+              title="显示步骤面板"
             >
               <PanelRight className="h-4 w-4" />
             </Button>

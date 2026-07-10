@@ -384,9 +384,7 @@ type WorkflowValidationAction =
     { "role": "user", "content": "..." }
   ],
   "contextSelection": {
-    "knowledgeBaseIds": [],
-    "reviewMaterialIds": [],
-    "disabledAutoInjectedStepIds": []
+    "knowledgeBaseIds": []
   }
 }
 ```
