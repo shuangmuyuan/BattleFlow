@@ -4,7 +4,7 @@ This file is the agent-facing design-system source for BattleFlow's visual UI. I
 
 ## Overview
 
-BattleFlow should feel like a focused product-planning command desk: dark by default, dense enough for repeated operational work, calm enough for long planning sessions, and precise about workflow state. The visual metaphor from the original design note is a clean tactical table under warm task light, with organized folders, tool cards, and clear status markers. The implemented system supports both light and dark themes, but dark mode is the default and primary design target.
+BattleFlow should feel like a focused product-planning command desk: dark by default, dense enough for repeated operational work, calm enough for long planning sessions, and precise about workflow state. The visual metaphor from the original design note is a clean tactical table under warm task light, with organized folders, tool cards, and clear status markers. The current system uses copper orange for primary action, teal for healthy state, and cool blue for informational context so the interface does not collapse into a single accent color. The implemented system supports both light and dark themes, but dark mode is the default and primary design target.
 
 ## Colors
 
@@ -12,27 +12,28 @@ Source of truth: `src/app/globals.css` CSS variables exposed through Tailwind v4
 
 | Token | Light value | Dark value | Role and usage |
 | --- | --- | --- | --- |
-| `background` | `#F8F9FB` | `#0F1117` | Page background. Dark value is the primary product atmosphere. |
-| `foreground` | `#1A1D27` | `#E8E9ED` | Primary body text. |
-| `card` | `#FFFFFF` | `#1A1D27` | Main panels, cards, popover surfaces, and content containers. |
-| `card-foreground` | `#1A1D27` | `#E8E9ED` | Text on card surfaces. |
-| `secondary` / `muted` | `#F0F1F5` | `#2A2D37` | Subtle controls, secondary surfaces, inactive fills, and separators. |
-| `muted-foreground` | `#6B7280` | `#8B8FA3` | Secondary text and helper labels. |
-| `border` / `input` | `#E5E7EB` | `#2A2D37` | Hairlines, input borders, card boundaries, and separators. |
-| `brand` / `primary` | `#6C5CE7` | `#6C5CE7` | Main action, active navigation, workflow focus, links, and emphasis. |
-| `brand-foreground` / `primary-foreground` | `#FFFFFF` | `#FFFFFF` | Text on brand/primary fills. |
-| `success` | `#10B981` | `#00D2A0` | Completed, approved, connected, or healthy states. |
-| `warning` | `#F59E0B` | `#FDCB6E` | Pending review, incomplete setup, recoverable attention. |
-| `destructive` | `#EF4444` | `#FF6B6B` | Delete, reject, invalid, failed, or irreversible actions. |
-| `sidebar` | `#FFFFFF` | `#13151E` | Persistent dashboard navigation shell. |
-| `sidebar-accent` | `#F0F1F5` | `#2A2D37` | Sidebar active/hover surface. |
+| `background` | `#F3F6F4` | `#0D1316` | Page background. Dark value is the primary product atmosphere. |
+| `foreground` | `#182126` | `#EDF2EF` | Primary body text. |
+| `card` | `#FFFFFF` | `#151D21` | Main panels, cards, popover surfaces, and content containers. |
+| `card-foreground` | `#182126` | `#EDF2EF` | Text on card surfaces. |
+| `secondary` / `muted` | `#EAF0ED` / `#E8EEEB` | `#1B262B` / `#202B30` | Subtle controls, secondary surfaces, inactive fills, and separators. |
+| `muted-foreground` | `#637277` | `#95A3A8` | Secondary text and helper labels. |
+| `border` / `input` | `#D5DFDB` / `#C9D5D0` | `#2D3B41` / `#35454C` | Hairlines, input borders, card boundaries, and separators. |
+| `brand` / `primary` | `#E26F2E` | `#EF7B38` | Main action, active navigation, workflow focus, links, and emphasis. |
+| `brand-foreground` / `primary-foreground` | `#182126` | `#101417` | Text on brand/primary fills. |
+| `success` | `#147A59` | `#48C99A` | Completed, approved, connected, or healthy states. |
+| `warning` | `#986415` | `#EDB95A` | Pending review, incomplete setup, recoverable attention. |
+| `info` | `#30748E` | `#59ACCD` | Informational context, knowledge, organization, and secondary capability cues. |
+| `destructive` | `#BC4651` | `#F06E78` | Delete, reject, invalid, failed, or irreversible actions. |
+| `sidebar` | `#F8FAF9` | `#11191D` | Persistent dashboard navigation shell. |
+| `sidebar-accent` | `#E8EFEC` | `#1B292F` | Sidebar active/hover surface. |
 
 Contrast sanity checks performed while installing this addon:
 
-- `foreground` on `background`: 15.96:1 light, 15.55:1 dark.
-- `muted-foreground` on `background`: 4.59:1 light, 5.89:1 dark.
-- white text on `brand`: 4.86:1.
-- dark `success`, `warning`, and `destructive` on dark background all exceed 4.5:1.
+- `foreground` on `background`: 15.03:1 light, 16.53:1 dark.
+- `muted-foreground` on `background`: 4.59:1 light, 7.20:1 dark.
+- primary text on `brand`: 5.10:1 light, 6.66:1 dark.
+- `success`, `warning`, `info`, and `destructive` text tokens exceed 4.5:1 on their primary page backgrounds.
 
 Do not use color as the only carrier of state. Status surfaces also need labels, icons, or structured placement.
 
@@ -66,21 +67,28 @@ Use Tailwind spacing utilities already present in the app before introducing new
 
 BattleFlow expresses depth through surfaces, borders, and restrained shadows:
 
-- `appSurfaceClassName`: `border-border/60 bg-card/95 shadow-sm shadow-foreground/5`.
-- `appCardClassName`: same base surface with subtle hover border and shadow changes.
+- `appSurfaceClassName`: solid card surface with a restrained border and low shadow.
+- `appCardClassName`: same base surface with a small translate, border, and shadow response on hover.
 - Overlay components are bounded and scrollable rather than visually oversized.
 - Prefer hairline borders and surface contrast to large shadows.
 - Avoid decorative gradients, orbs, 3D effects, and atmospheric blur.
 
 ## Shapes
 
-Source of truth: `--radius: 0.625rem` in `globals.css`, exposed as Tailwind radius tokens.
+Source of truth: `--radius: 0.5rem` in `globals.css`, exposed as Tailwind radius tokens.
 
 - Default control radius: `rounded-md`.
 - Cards from shadcn default to `rounded-xl`, but BattleFlow product cards should stay visually restrained and avoid nested card structures.
 - Small icon surfaces commonly use `rounded-md` or `rounded-lg`.
 - Checkbox uses `rounded-[4px]`.
 - Badges use `rounded-full`.
+
+## Brand Imagery
+
+- Generated brand imagery is reserved for authentication and onboarding surfaces where atmosphere supports orientation.
+- Operational dashboard pages should prefer real workflow state, product output, and lucide icons over decorative images.
+- The current authentication image is `public/brand/product-planning-desk.png`: a realistic overhead planning desk with copper and teal accents.
+- Keep imagery behind a solid translucent scrim, preserve readable contrast, and do not place image-backed cards inside business work areas.
 
 Keep shapes functional. Do not introduce large pill-shaped containers unless the component already uses that pattern, such as badges.
 
@@ -147,4 +155,3 @@ For coding agents working in this repo: `docs/DESIGN.md` is the source of truth 
 Suggested instruction for UI tasks:
 
 > Follow `docs/DESIGN.md` strictly. Build the UI using BattleFlow tokens, shadcn/ui components, and documented dashboard patterns; keep contrast, overlay bounds, and responsive scroll contracts intact.
-

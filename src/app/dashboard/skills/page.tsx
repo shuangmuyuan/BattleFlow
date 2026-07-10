@@ -42,7 +42,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { PageHeader, appCardClassName } from '@/components/battleflow/ui';
+import { PageHeader, appCardClassName, appPageClassName } from '@/components/battleflow/ui';
 
 type SkillScope = 'personal' | 'team' | 'official';
 type SkillSourceType = 'local' | 'registry' | 'git';
@@ -583,8 +583,9 @@ export default function SkillsPage() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className={`${appPageClassName} content-enter`}>
       <PageHeader
+        icon={<FileCode2 />}
         title="Skill 仓库"
         description="导入、审核、发布和追踪产品规划 Skill，把团队方法沉淀为可编排能力。"
         action={(

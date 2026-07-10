@@ -33,6 +33,7 @@ import {
   ProductEmptyState,
   StatusBadge,
   appCardClassName,
+  appPageClassName,
 } from '@/components/battleflow/ui';
 
 interface KnowledgeBase {
@@ -321,9 +322,11 @@ export default function KnowledgePage() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className={`${appPageClassName} content-enter`}>
       <PageHeader
+        icon={<Database />}
         title="知识库"
+        description="统一管理团队资料，并在工作流中按需检索和注入上下文。"
         action={(
           <>
             <Button variant="outline" className="gap-2" onClick={handleGlobalSearchOpen}>

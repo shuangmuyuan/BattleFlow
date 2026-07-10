@@ -2,16 +2,13 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Building2, Eye, EyeOff, Swords } from 'lucide-react';
+import { Building2, Eye, EyeOff, LogIn } from 'lucide-react';
+import { AuthShell } from '@/components/battleflow/auth-shell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { AnimatedThemeToggler } from '@/registry/magicui/animated-theme-toggler';
-import { KineticText } from '@/registry/magicui/kinetic-text';
-
-const APP_NAME = 'BattleFlow';
 const DEFAULT_REGISTER_ORGANIZATION_NAME = 'Default Organization';
 
 type AuthMode = 'login' | 'register';
@@ -161,31 +158,15 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="min-h-dvh overflow-y-auto bg-background px-4 py-4 md:px-6 [@media_(min-height:760px)]:flex [@media_(min-height:760px)]:items-center [@media_(min-height:760px)]:justify-center [@media_(min-height:760px)]:py-8">
-      <div className="fixed right-4 top-4 z-10 md:right-6 md:top-6">
-        <AnimatedThemeToggler variant="square" />
-      </div>
-      <div className="mx-auto flex w-full max-w-md flex-col gap-4 [@media_(min-height:760px)]:gap-6">
-        <div className="flex flex-col items-center gap-3 text-center [@media_(min-height:760px)]:gap-4">
-          <div
-            aria-label={APP_NAME}
-            className="flex size-12 items-center justify-center rounded-xl bg-brand/15 text-brand [@media_(min-height:760px)]:size-16"
-          >
-            <Swords className="size-6 [@media_(min-height:760px)]:size-8" />
-          </div>
-          <div className="space-y-1">
-            <h1 className="text-2xl font-semibold text-foreground">
-              <KineticText text={APP_NAME} />
-            </h1>
-            <p className="text-sm text-muted-foreground">AI 原生产品规划平台</p>
-          </div>
-        </div>
-
-        <Card className="border-border bg-card">
+    <AuthShell>
+        <Card className="border-border/80 bg-card/95 shadow-xl shadow-foreground/10">
           <CardHeader className="pb-3 [@media_(min-height:760px)]:pb-4">
-            <CardTitle className="text-lg text-card-foreground">账号登录</CardTitle>
+            <div className="mb-1 flex size-9 items-center justify-center rounded-md border border-brand/20 bg-brand/10 text-brand">
+              <LogIn className="size-4" />
+            </div>
+            <CardTitle className="text-xl text-card-foreground">欢迎回来</CardTitle>
             <CardDescription className="text-muted-foreground">
-              登录或创建你的工作区账号
+              登录 BattleFlow，继续推进你的产品规划工作。
             </CardDescription>
           </CardHeader>
           <CardContent className="pb-4 [@media_(min-height:760px)]:pb-6">
@@ -332,7 +313,6 @@ export default function LoginPage() {
             </Button>
           </CardContent>
         </Card>
-      </div>
-    </main>
+    </AuthShell>
   );
 }

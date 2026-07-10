@@ -37,6 +37,7 @@ import {
   ProductEmptyState,
   StatusBadge,
   appCardClassName,
+  appPageClassName,
 } from '@/components/battleflow/ui';
 
 interface WorkflowStep {
@@ -301,9 +302,11 @@ export default function DemosPage() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className={`${appPageClassName} content-enter`}>
       <PageHeader
+        icon={<Rocket />}
         title="Demo 生成"
+        description="将已确认的工作流产物交付到 Demo Studio，快速形成可演示原型。"
         meta={<StatusBadge tone="success">服务已接入</StatusBadge>}
         action={(
           <Button className="w-full gap-2 sm:w-auto" onClick={openCreateDialog}>

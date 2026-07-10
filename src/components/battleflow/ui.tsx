@@ -20,35 +20,55 @@ const statusToneClassName: Record<StatusTone, string> = {
   danger: 'border-destructive/20 bg-destructive/10 text-destructive',
 };
 
+const statusToneDotClassName: Record<StatusTone, string> = {
+  neutral: 'bg-muted-foreground/70',
+  brand: 'bg-brand',
+  success: 'bg-success',
+  warning: 'bg-warning',
+  danger: 'bg-destructive',
+};
+
 export const appSurfaceClassName =
-  'border-border/60 bg-card/95 shadow-sm shadow-foreground/5';
+  'border-border/70 bg-card shadow-sm shadow-foreground/5';
 
 export const appCardClassName =
-  'min-w-0 border-border/60 bg-card/95 shadow-sm shadow-foreground/5 transition-[border-color,box-shadow] hover:border-brand/25 hover:shadow-md hover:shadow-foreground/10';
+  'min-w-0 border-border/70 bg-card shadow-sm shadow-foreground/5 transition-[transform,border-color,box-shadow,background-color] duration-200 hover:-translate-y-0.5 hover:border-brand/30 hover:shadow-lg hover:shadow-foreground/10';
+
+export const appPageClassName =
+  'flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-background/80 shadow-sm shadow-foreground/5';
 
 export function PageHeader({
   title,
   description,
   action,
   meta,
+  icon,
 }: {
   title: string;
   description?: string;
   action?: ReactNode;
   meta?: ReactNode;
+  icon?: ReactNode;
 }) {
   return (
-    <div className="flex shrink-0 flex-col gap-4 border-b border-border/60 bg-background/95 p-4 sm:flex-row sm:items-center sm:justify-between md:p-6">
-      <div className="min-w-0">
-        {meta && <div className="mb-2 flex flex-wrap items-center gap-2">{meta}</div>}
-        <h1 className="truncate text-2xl font-semibold tracking-tight text-foreground">
-          {title}
-        </h1>
-        {description && (
-          <p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">
-            {description}
-          </p>
+    <div className="relative flex shrink-0 flex-col gap-4 border-b border-border/70 bg-card/45 px-4 py-4 sm:flex-row sm:items-center sm:justify-between md:px-5 md:py-4">
+      <div className="flex min-w-0 items-start gap-3">
+        {icon && (
+          <div className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-md border border-brand/20 bg-brand/10 text-brand shadow-sm [&_svg]:size-5">
+            {icon}
+          </div>
         )}
+        <div className="min-w-0">
+          {meta && <div className="mb-1.5 flex flex-wrap items-center gap-2">{meta}</div>}
+          <h1 className="truncate text-xl font-semibold text-foreground md:text-2xl">
+            {title}
+          </h1>
+          {description && (
+            <p className="mt-1 max-w-2xl text-sm leading-5 text-muted-foreground">
+              {description}
+            </p>
+          )}
+        </div>
       </div>
       {action && <div className="flex shrink-0 flex-col gap-2 sm:flex-row">{action}</div>}
     </div>
@@ -66,6 +86,7 @@ export function StatusBadge({
 }) {
   return (
     <Badge variant="outline" className={cn(statusToneClassName[tone], className)}>
+      <span aria-hidden="true" className={cn('size-1.5 rounded-full', statusToneDotClassName[tone])} />
       {children}
     </Badge>
   );
@@ -85,10 +106,12 @@ export function ProductEmptyState({
   className?: string;
 }) {
   return (
-    <Empty className={cn('min-h-72 border border-border/60 bg-card/70', className)}>
+    <Empty className={cn('min-h-72 border border-border/70 bg-card/55', className)}>
       <EmptyHeader>
-        <EmptyMedia variant="icon" className="bg-brand/10 text-brand">
-          {icon}
+        <EmptyMedia variant="icon" className="size-12 border border-brand/20 bg-brand/10 text-brand shadow-sm [&_svg]:size-5">
+          <span className="flex size-8 items-center justify-center rounded-sm border border-brand/15 bg-background/60 [&_svg]:size-4">
+            {icon}
+          </span>
         </EmptyMedia>
         <EmptyTitle>{title}</EmptyTitle>
         <EmptyDescription>{description}</EmptyDescription>

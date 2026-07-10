@@ -4,20 +4,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import {
   Bell,
+  Building2,
   CheckCheck,
   ChevronLeft,
-  ChevronRight,
   CircleHelp,
   Database,
   FileCode2,
   LayoutDashboard,
+  Loader2,
   LogOut,
   Play,
   Rocket,
   Shield,
-  Swords,
   User as UserIcon,
 } from 'lucide-react';
+import { BattleFlowBrand } from '@/components/battleflow/brand';
 import { Button } from '@/components/ui/button';
 import { AnimatedThemeToggler } from '@/registry/magicui/animated-theme-toggler';
 import {
@@ -529,7 +530,10 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   if (!authChecked) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
-        <div className="text-sm text-muted-foreground">Loading...</div>
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin text-brand" />
+          正在加载工作台
+        </div>
       </div>
     );
   }
@@ -538,9 +542,9 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background p-4">
         <div className="max-w-sm space-y-3 text-center">
-          <p className="text-sm text-destructive">{authError || 'Account context is unavailable'}</p>
+          <p className="text-sm text-destructive">{authError || '账号上下文暂不可用'}</p>
           <Button variant="secondary" onClick={() => router.replace(loginPathFor(currentPathForRedirect(pathname)))}>
-            Return to Sign In
+            返回登录
           </Button>
         </div>
       </div>
@@ -552,48 +556,85 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       <aside
         className={`${
           collapsed ? 'w-16' : 'w-60'
-        } hidden h-dvh min-h-0 shrink-0 flex-col border-r border-border bg-sidebar transition-all duration-200 md:flex`}
+        } hidden h-dvh min-h-0 shrink-0 flex-col border-r border-sidebar-border bg-sidebar transition-all duration-300 md:flex`}
       >
-        <div className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
-          <div className={`flex items-center gap-2 ${collapsed ? 'hidden' : ''}`}>
-            <span className="flex h-8 w-8 items-center justify-center rounded-md bg-brand/15 text-brand">
-              <Swords className="h-4 w-4" />
-            </span>
-            <span className="text-lg font-semibold text-brand">BattleFlow</span>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            onClick={handleToggleSidebar}
-            className="text-muted-foreground hover:bg-secondary hover:text-foreground"
-          >
-            {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
-          </Button>
+        <div className={`flex h-16 shrink-0 items-center border-b border-sidebar-border ${collapsed ? 'justify-center px-2' : 'justify-between gap-2 px-3'}`}>
+          {collapsed ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="展开菜单"
+                  onClick={handleToggleSidebar}
+                  className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                >
+                  <BattleFlowBrand showName={false} markClassName="size-9" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="right" sideOffset={10}>展开菜单</TooltipContent>
+            </Tooltip>
+          ) : (
+            <>
+              <BattleFlowBrand
+                className="min-w-0 flex-1"
+                markClassName="size-9"
+                subtitle={activeOrganization.name}
+              />
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="收起菜单"
+                onClick={handleToggleSidebar}
+                className="text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+              >
+                <ChevronLeft className="size-4" />
+              </Button>
+            </>
+          )}
         </div>
 
-        <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 py-4">
+        <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2 py-3">
           {visibleNavItems.map((item) => {
             const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href));
-            return (
+            const navigationButton = (
               <Button
-                key={item.href}
                 variant="ghost"
-                className={`w-full justify-start gap-3 ${
+                aria-current={isActive ? 'page' : undefined}
+                className={`relative h-10 w-full justify-start gap-2.5 overflow-hidden px-2 ${
                   isActive
-                    ? 'bg-brand/10 text-brand hover:bg-brand/15 hover:text-brand'
-                    : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+                    ? 'bg-sidebar-accent text-sidebar-accent-foreground shadow-sm before:absolute before:bottom-2 before:left-0 before:top-2 before:w-0.5 before:rounded-full before:bg-brand hover:bg-sidebar-accent'
+                    : 'text-muted-foreground hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground'
                 } ${collapsed ? 'justify-center px-0' : ''}`}
                 onClick={() => router.push(item.href)}
               >
-                <item.icon className="h-4 w-4 shrink-0" />
-                {!collapsed && <span className="truncate">{item.label}</span>}
+                <span className={`flex size-7 shrink-0 items-center justify-center rounded-sm ${isActive ? 'bg-brand/12 text-brand' : 'text-muted-foreground'}`}>
+                  <item.icon className="size-4" />
+                </span>
+                {!collapsed && <span className="truncate text-sm">{item.label}</span>}
               </Button>
+            );
+
+            if (!collapsed) {
+              return <div key={item.href}>{navigationButton}</div>;
+            }
+
+            return (
+              <Tooltip key={item.href}>
+                <TooltipTrigger asChild>{navigationButton}</TooltipTrigger>
+                <TooltipContent side="right" sideOffset={10}>{item.label}</TooltipContent>
+              </Tooltip>
             );
           })}
         </nav>
 
-        <div className="shrink-0 border-t border-border p-2">
+        <div className="shrink-0 border-t border-sidebar-border p-2">
+          {!collapsed && (
+            <div className="mb-1 flex min-w-0 items-center gap-2 rounded-md px-2 py-2 text-xs text-muted-foreground">
+              <Building2 className="size-3.5 shrink-0 text-info" />
+              <span className="truncate">{activeOrganization.name}</span>
+              <span className="ml-auto size-1.5 shrink-0 rounded-full bg-success" aria-label="组织在线" />
+            </div>
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -602,7 +643,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                   collapsed ? 'justify-center px-0' : ''
                 }`}
               >
-                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand/20">
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-brand/20 bg-brand/12">
                   <UserIcon className="h-3.5 w-3.5 text-brand" />
                 </div>
                 {!collapsed && (
@@ -634,12 +675,13 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       </aside>
 
       <main className="flex h-dvh min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border bg-card/50 px-4 md:px-6">
+        <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border/70 bg-card/65 px-3 md:h-16 md:px-4">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-brand/15 text-brand md:hidden">
-              <Swords className="size-4" />
-            </span>
-            <span className="truncate text-sm text-muted-foreground">{dashboardTitle(pathname)}</span>
+            <BattleFlowBrand showName={false} markClassName="size-8" className="md:hidden" />
+            <div className="min-w-0">
+              <span className="block truncate text-sm font-medium text-foreground">{dashboardTitle(pathname)}</span>
+              <span className="hidden truncate text-xs text-muted-foreground sm:block">{activeOrganization.name}</span>
+            </div>
           </div>
           <div className="flex min-w-0 items-center gap-2">
             <NotificationMenu
@@ -662,7 +704,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
 
-        <div className="shrink-0 border-b border-border bg-card/30 md:hidden">
+        <div className="shrink-0 border-b border-border/70 bg-card/40 md:hidden">
           <div className="flex gap-2 overflow-x-auto px-3 py-2">
             {visibleNavItems.map((item) => {
               const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href));
@@ -682,7 +724,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
 
-        <div className="min-h-0 min-w-0 flex-1 overflow-hidden p-3 md:p-6">
+        <div className="min-h-0 min-w-0 flex-1 overflow-hidden p-2.5 md:p-4">
           {children}
         </div>
       </main>

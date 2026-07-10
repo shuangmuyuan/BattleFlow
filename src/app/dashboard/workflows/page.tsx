@@ -30,6 +30,7 @@ import {
   ProductEmptyState,
   StatusBadge,
   appCardClassName,
+  appPageClassName,
 } from '@/components/battleflow/ui';
 import { compactMarkdownPreview } from '@/components/battleflow/compact-markdown';
 import {
@@ -4803,8 +4804,9 @@ export default function WorkflowsPage() {
     };
 
     return (
-      <div className="flex h-full min-h-0 flex-col">
+      <div className={`${appPageClassName} content-enter`}>
         <PageHeader
+          icon={<Boxes />}
           title={openedWorkspace ? openedWorkspace.name : '工作空间'}
           description={openedWorkspace
             ? getWorkspaceDescriptionText(openedWorkspace.description) || '管理该空间下的工作流编排和运行产物。'
@@ -6325,7 +6327,7 @@ export default function WorkflowsPage() {
   );
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-auto lg:flex-row lg:overflow-hidden">
+    <div className="content-enter flex h-full min-h-0 min-w-0 flex-col overflow-auto rounded-lg border border-border/70 bg-background shadow-sm shadow-foreground/5 lg:flex-row lg:overflow-hidden">
       <Dialog open={Boolean(reviewedOutputSavePrompt)} onOpenChange={handleReviewedOutputPromptOpenChange}>
         <DialogContent className="max-w-lg">
           {reviewedOutputSavePrompt && (
@@ -6458,9 +6460,9 @@ export default function WorkflowsPage() {
         </DialogContent>
       </Dialog>
       {/* Left: Pipeline Panel */}
-      <div className="flex max-h-80 min-h-0 w-full shrink-0 flex-col border-b border-border/40 lg:max-h-none lg:w-64 lg:border-b-0 lg:border-r xl:w-80">
-        <div className="border-b border-border/40 p-4">
-          <Button variant="ghost" size="sm" onClick={() => {
+      <div className="flex max-h-80 min-h-0 w-full shrink-0 flex-col border-b border-border/70 bg-card/30 lg:max-h-none lg:w-64 lg:border-b-0 lg:border-r xl:w-80">
+        <div className="border-b border-border/70 p-3.5">
+          <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground" onClick={() => {
             setActiveWorkflow(null);
             setActiveStepIndex(-1);
             activeStepIdRef.current = null;
@@ -6472,9 +6474,10 @@ export default function WorkflowsPage() {
               stepId: '',
             });
           }}>
-            ← 返回列表
+            <ArrowLeft className="size-4" />
+            返回列表
           </Button>
-          <h2 className="mt-2 truncate font-semibold">{activeWorkflow.name}</h2>
+          <h2 className="mt-2 truncate px-2 font-semibold">{activeWorkflow.name}</h2>
           {WORKFLOW_AGENT_VALIDATION_TOGGLE_VISIBLE && (
             <div className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2">
               <div className="flex min-w-0 items-center gap-2">
@@ -6501,7 +6504,7 @@ export default function WorkflowsPage() {
               return (
                 <div
                   key={group.id}
-                  className={isParallelGroup ? 'rounded-xl border border-border/50 bg-muted/20 p-2' : ''}
+                  className={isParallelGroup ? 'rounded-md border border-border/60 bg-muted/20 p-2' : ''}
                 >
                   {isParallelGroup && (
                     <div className="flex min-w-0 items-center justify-end gap-2 px-2 pb-2">
@@ -6534,12 +6537,12 @@ export default function WorkflowsPage() {
                       return (
                         <div
                           key={step.id}
-                          className={`overflow-hidden rounded-lg transition-all ${
+                          className={`relative overflow-hidden rounded-md transition-all ${
                             isActive
-                              ? 'border border-primary/30 bg-primary/10'
+                              ? 'border border-brand/35 bg-brand/10 shadow-sm before:absolute before:bottom-2 before:left-0 before:top-2 before:w-0.5 before:rounded-full before:bg-brand'
                               : isDisabled
                                 ? 'border border-transparent opacity-60'
-                                : 'border border-transparent hover:bg-muted/50'
+                                : 'border border-transparent hover:border-border/50 hover:bg-muted/50'
                           }`}
                         >
                           <button
@@ -6606,9 +6609,11 @@ export default function WorkflowsPage() {
       {/* Center: Chat Panel */}
       <div className="flex min-h-[70vh] min-w-0 flex-1 flex-col overflow-hidden lg:min-h-0">
         {/* Chat Header */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/40 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 bg-card/25 px-4 py-3">
           <div className="flex min-w-0 items-center gap-3">
-            <MessageSquare className="h-5 w-5 text-primary" />
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-brand/20 bg-brand/10 text-brand">
+              <MessageSquare className="size-4" />
+            </span>
             <div className="min-w-0">
               <h3 className="truncate text-sm font-semibold">{currentStep?.name || '选择步骤开始对话'}</h3>
               <p className="truncate text-xs text-muted-foreground">
@@ -7133,7 +7138,7 @@ export default function WorkflowsPage() {
       {/* Right: Context Panel */}
       <div
         className={cn(
-          'flex min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-border/40 transition-[max-height,width] duration-300 ease-in-out lg:h-full lg:max-h-none lg:border-l lg:border-t-0',
+          'flex min-h-0 w-full shrink-0 flex-col overflow-hidden border-t border-border/70 bg-card/20 transition-[max-height,width] duration-300 ease-in-out lg:h-full lg:max-h-none lg:border-l lg:border-t-0',
           rightPanelVisible ? 'max-h-[32rem] lg:w-80 xl:w-80' : 'max-h-14 lg:w-12 xl:w-12',
         )}
       >
@@ -7143,7 +7148,7 @@ export default function WorkflowsPage() {
             onValueChange={(value) => setRightPanelTab(value as typeof rightPanelTab)}
             className="min-h-0 flex-1 gap-0 overflow-hidden transition-opacity duration-200"
           >
-            <div className="shrink-0 border-b border-border/40 p-4">
+            <div className="shrink-0 border-b border-border/70 bg-card/35 p-3.5">
               <div className="flex min-w-0 items-start justify-between gap-3">
                 <div className="min-w-0">
                   <h3 className="text-sm font-semibold">上下文面板</h3>
@@ -7155,7 +7160,7 @@ export default function WorkflowsPage() {
                   type="button"
                   variant="outline"
                   size="icon"
-                  className="size-8 shrink-0 rounded-lg transition-transform duration-300 ease-in-out hover:scale-105"
+                  className="size-8 shrink-0 rounded-md transition-transform duration-300 ease-in-out hover:-translate-x-px"
                   onClick={() => setRightPanelVisible(false)}
                   aria-label="隐藏上下文面板"
                   aria-pressed={rightPanelVisible}
@@ -7362,7 +7367,7 @@ export default function WorkflowsPage() {
               type="button"
               variant="outline"
               size="icon"
-              className="size-8 shrink-0 rounded-lg transition-transform duration-300 ease-in-out hover:scale-105"
+              className="size-8 shrink-0 rounded-md transition-transform duration-300 ease-in-out hover:translate-x-px"
               onClick={() => setRightPanelVisible(true)}
               aria-label="显示上下文面板"
               aria-pressed={rightPanelVisible}

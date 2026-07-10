@@ -60,6 +60,7 @@ import {
   SectionTitle,
   StatusBadge,
   appCardClassName,
+  appPageClassName,
 } from '@/components/battleflow/ui';
 
 type OrganizationRole = 'org_owner' | 'org_admin' | 'org_manager' | 'org_member' | 'org_viewer';
@@ -505,8 +506,9 @@ export default function AdminPage() {
 
   if (loading) {
     return (
-      <div className="flex h-full min-h-0 flex-col">
+      <div className={`${appPageClassName} content-enter`}>
         <PageHeader
+          icon={<Shield />}
           title="组织管理"
           description="管理账号权限、成员审核和平台管理控制。"
           meta={<StatusBadge tone="neutral">加载中</StatusBadge>}
@@ -523,8 +525,9 @@ export default function AdminPage() {
 
   if (authState && !canAccessAdmin(authState)) {
     return (
-      <div className="flex h-full min-h-0 flex-col">
+      <div className={`${appPageClassName} content-enter`}>
         <PageHeader
+          icon={<Shield />}
           title="组织管理"
           description="该区域仅限管理员访问。"
           meta={<StatusBadge tone="danger">无权限</StatusBadge>}
@@ -537,8 +540,9 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className={`${appPageClassName} content-enter`}>
       <PageHeader
+        icon={<Shield />}
         title="组织管理"
         meta={(
           <>
