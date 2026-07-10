@@ -19,8 +19,8 @@ React component root.
 
 - `battleflow/ui.tsx`: `PageHeader`, `StatusBadge`, `ProductEmptyState`, `SectionTitle`, and shared surface/card class strings.
 - `battleflow/compact-markdown.tsx`: lightweight Markdown preview and rendering for Skill/workflow output surfaces.
+- `battleflow/workflow-assistant-thread.tsx`: workflow chat rendering, tool-call presentation, completed output display, HITL cards, and empty-node onboarding with Skill starter insertion.
 
 ## Validation
 
 Run `pnpm validate`. For overlay wrapper changes, inspect `scripts/check-overlay-bounds.mjs` and ensure required tokens remain present.
-

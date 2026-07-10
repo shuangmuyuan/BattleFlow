@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -34,10 +34,17 @@ type CapturedSdkOptions = {
       hooks: Array<(input: unknown) => Promise<unknown>>;
     }>;
   };
+  mcpServers?: Record<string, unknown>;
   onUserDialog?: (
     request: { dialogKind: string; payload: Record<string, unknown>; toolUseID?: string },
     options: { signal: AbortSignal },
   ) => Promise<{ behavior: string; result?: unknown }>;
+  permissionMode?: 'default' | 'dontAsk';
+  persistSession?: boolean;
+  resume?: string;
+  settingSources?: string[];
+  skills?: string[];
+  strictMcpConfig?: boolean;
   supportedDialogKinds?: string[];
   toolConfig?: {
     askUserQuestion?: {
@@ -292,12 +299,14 @@ describe('streamClaudeAgentSdkTurn', () => {
       options: expect.objectContaining({
         allowedTools: ['Read', 'Grep', 'Glob'],
         cwd: '/tmp/battleflow-workspace',
-        disallowedTools: ['Skill', 'Write', 'Edit', 'MultiEdit', 'Bash'],
+        disallowedTools: ['Skill', 'Write', 'Edit', 'MultiEdit', 'Bash', 'Agent', 'mcp__*'],
         includePartialMessages: true,
+        mcpServers: {},
         model: 'sonnet',
         permissionMode: 'dontAsk',
-        persistSession: false,
+        persistSession: true,
         settingSources: [],
+        strictMcpConfig: true,
         systemPrompt: 'You are testing the SDK adapter.',
         tools: ['Read', 'Grep', 'Glob'],
         additionalDirectories: ['/tmp/readable'],
@@ -357,15 +366,93 @@ describe('streamClaudeAgentSdkTurn', () => {
       options: expect.objectContaining({
         allowedTools: ['Read', 'Grep', 'Glob'],
         cwd: '/tmp/battleflow-runtime/org-1/workflow-1/nodes/step-1',
-        disallowedTools: ['Write', 'Edit', 'MultiEdit', 'Bash'],
+        disallowedTools: ['Write', 'Edit', 'MultiEdit', 'Bash', 'Agent', 'mcp__*'],
+        mcpServers: {},
         permissionMode: 'dontAsk',
-        persistSession: false,
+        persistSession: true,
         settingSources: ['project'],
         skills: ['user-needs-breakdown'],
+        strictMcpConfig: true,
         systemPrompt: 'Use the current BattleFlow method.',
-        tools: ['Read', 'Grep', 'Glob'],
+        tools: ['Read', 'Grep', 'Glob', 'Skill'],
       }),
     });
+  });
+
+  it('streams successful Skill tool calls with the bound Skill name', async () => {
+    mocks.query.mockReturnValue(createMockQuery([
+      sdkMessage({
+        type: 'assistant',
+        parent_tool_use_id: null,
+        session_id: 'session-1',
+        uuid: 'uuid-skill-assistant',
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'tool_use',
+            id: 'tool-skill-1',
+            name: 'Skill',
+            input: { skill: 'user-needs-breakdown' },
+          }],
+        },
+      }),
+      sdkMessage({
+        type: 'user',
+        parent_tool_use_id: null,
+        session_id: 'session-1',
+        uuid: 'uuid-skill-result',
+        message: {
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: 'tool-skill-1',
+            content: 'Skill instructions loaded.',
+          }],
+        },
+        tool_use_result: 'Skill instructions loaded.',
+      }),
+      ...successMessages(),
+    ]));
+
+    const events = await readAgentStream(streamClaudeAgentSdkTurn({
+      messages: [{ role: 'user', content: 'Use the current method.' }],
+      systemPrompt: 'Use the current BattleFlow method.',
+      cwd: '/tmp/battleflow-runtime/org-1/workflow-1/nodes/step-1',
+      skills: ['user-needs-breakdown'],
+    }));
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'tool_call',
+      id: 'tool-skill-1',
+      name: 'Skill',
+      status: 'running',
+      input: { skill: 'user-needs-breakdown' },
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'tool_call',
+      id: 'tool-skill-1',
+      name: 'Skill',
+      status: 'completed',
+      result: 'Skill instructions loaded.',
+    }));
+  });
+
+  it('passes resume session id when continuing a node SDK session', async () => {
+    mocks.query.mockReturnValue(createMockQuery(successMessages()));
+
+    const stream = streamClaudeAgentSdkTurn({
+      messages: [{ role: 'user', content: 'Continue this node.' }],
+      systemPrompt: 'Use the current BattleFlow method.',
+      resumeSessionId: '11111111-1111-4111-8111-111111111111',
+      cwd: '/tmp/battleflow-runtime/org-1/workflow-1/nodes/step-1',
+      skills: ['user-needs-breakdown'],
+    });
+
+    await readAgentStream(stream);
+
+    const options = getCapturedOptions();
+    expect(options.resume).toBe('11111111-1111-4111-8111-111111111111');
+    expect(options.persistSession).toBe(true);
   });
 
   it('bridges SDK AskUserQuestion dialogs into human input events', async () => {
@@ -475,14 +562,22 @@ describe('streamClaudeAgentSdkTurn', () => {
       prompt: 'User:\nWrite a draft.',
       options: expect.objectContaining({
         allowedTools: ['Read', 'Write', 'Edit'],
-        disallowedTools: ['Skill', 'Write', 'Edit', 'MultiEdit', 'Bash'],
+        disallowedTools: ['Skill', 'Write', 'Edit', 'MultiEdit', 'Bash', 'Agent', 'mcp__*'],
         settingSources: [],
         tools: ['Read', 'Write', 'Edit'],
       }),
     });
     const options = getCapturedOptions();
-    expect(options.canUseTool).toBeUndefined();
-    expect(options.hooks).toBeUndefined();
+    expect(options.canUseTool).toEqual(expect.any(Function));
+    expect(options.hooks?.PreToolUse?.[0]?.hooks?.[0]).toEqual(expect.any(Function));
+    await expect(options.canUseTool?.('Write', { file_path: 'draft.md' }, {
+      signal: new AbortController().signal,
+      toolUseID: 'tool-write-non-node',
+      requestId: 'request-write-non-node',
+    })).resolves.toEqual(expect.objectContaining({
+      behavior: 'deny',
+      message: expect.stringContaining('workflow node write directory'),
+    }));
   });
 
   it('enables Write and Edit for node turns with a cwd-scoped write guard', async () => {
@@ -503,8 +598,10 @@ describe('streamClaudeAgentSdkTurn', () => {
 
       const options = getCapturedOptions();
       expect(options.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Write', 'Edit']);
-      expect(options.tools).toEqual(['Read', 'Grep', 'Glob', 'Write', 'Edit']);
-      expect(options.disallowedTools).toEqual(['MultiEdit', 'Bash']);
+      expect(options.tools).toEqual(['Read', 'Grep', 'Glob', 'Write', 'Edit', 'Skill']);
+      expect(options.disallowedTools).toEqual(['MultiEdit', 'Bash', 'Agent', 'mcp__*']);
+      expect(options.mcpServers).toEqual({});
+      expect(options.strictMcpConfig).toBe(true);
       expect(options.canUseTool).toEqual(expect.any(Function));
       expect(options.hooks?.PreToolUse?.[0]?.hooks?.[0]).toEqual(expect.any(Function));
 
@@ -513,7 +610,10 @@ describe('streamClaudeAgentSdkTurn', () => {
         signal,
         toolUseID: 'tool-write-1',
         requestId: 'request-1',
-      })).resolves.toEqual(expect.objectContaining({ behavior: 'allow' }));
+      })).resolves.toEqual(expect.objectContaining({
+        behavior: 'allow',
+        updatedInput: { file_path: 'draft.md' },
+      }));
 
       await expect(options.canUseTool?.('Edit', { file_path: '../outside.md' }, {
         signal,
@@ -552,6 +652,209 @@ describe('streamClaudeAgentSdkTurn', () => {
     }
   });
 
+  it('guards node Read, Grep, and Glob paths before tool execution', async () => {
+    const workspaceRoot = mkdtempSync(path.join(tmpdir(), 'battleflow-node-read-'));
+    const outsideRoot = mkdtempSync(path.join(tmpdir(), 'battleflow-node-read-outside-'));
+    const artifactRoot = mkdtempSync(path.join(tmpdir(), 'battleflow-node-artifacts-'));
+    const skillRoot = path.join(workspaceRoot, '.claude', 'skills', 'method');
+    process.env.BATTLEFLOW_CLAUDE_TOOLS = 'Read,Grep,Glob';
+    mocks.query.mockReturnValue(createMockQuery(successMessages()));
+
+    try {
+      mkdirSync(skillRoot, { recursive: true });
+      writeFileSync(path.join(workspaceRoot, 'note.md'), 'inside');
+      writeFileSync(path.join(workspaceRoot, '.battleflow-node-workspace.json'), '{}');
+      writeFileSync(path.join(skillRoot, 'SKILL.md'), 'name: method');
+      writeFileSync(path.join(artifactRoot, 'manifest.json'), '{}');
+      writeFileSync(path.join(outsideRoot, 'secret.md'), 'outside');
+      symlinkSync(outsideRoot, path.join(workspaceRoot, 'linked'));
+
+      const stream = streamClaudeAgentSdkTurn({
+        messages: [{ role: 'user', content: 'Read files.' }],
+        systemPrompt: 'Use the current BattleFlow method.',
+        cwd: workspaceRoot,
+        writableRoot: workspaceRoot,
+        readableDirectories: [artifactRoot],
+        skills: ['method'],
+      });
+
+      await readAgentStream(stream);
+
+      const options = getCapturedOptions();
+      const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0];
+      expect(preToolUse).toEqual(expect.any(Function));
+
+      await expect(preToolUse?.({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Read',
+        tool_input: { file_path: 'note.md' },
+        tool_use_id: 'tool-read-inside',
+      })).resolves.toEqual({ continue: true });
+
+      await expect(preToolUse?.({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Read',
+        tool_input: { file_path: path.join(outsideRoot, 'secret.md') },
+        tool_use_id: 'tool-read-outside',
+      })).resolves.toEqual(expect.objectContaining({
+        continue: false,
+        reason: expect.stringContaining('approved BattleFlow readable directories'),
+      }));
+
+      await expect(preToolUse?.({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Read',
+        tool_input: { file_path: 'linked/secret.md' },
+        tool_use_id: 'tool-read-link',
+      })).resolves.toEqual(expect.objectContaining({
+        continue: false,
+        reason: expect.stringContaining('outside'),
+      }));
+
+      await expect(preToolUse?.({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Read',
+        tool_input: { file_path: '.battleflow-node-workspace.json' },
+        tool_use_id: 'tool-read-metadata',
+      })).resolves.toEqual(expect.objectContaining({
+        continue: false,
+        reason: expect.stringContaining('runtime metadata'),
+      }));
+
+      await expect(preToolUse?.({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Glob',
+        tool_input: { pattern: '.claude/skills/*/SKILL.md' },
+        tool_use_id: 'tool-glob-skill',
+      })).resolves.toEqual({ continue: true });
+
+      await expect(preToolUse?.({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Grep',
+        tool_input: { pattern: 'secret', path: outsideRoot },
+        tool_use_id: 'tool-grep-outside',
+      })).resolves.toEqual(expect.objectContaining({
+        continue: false,
+        reason: expect.stringContaining('approved BattleFlow readable directories'),
+      }));
+
+      await expect(preToolUse?.({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Glob',
+        tool_input: { pattern: `${outsideRoot}/*.md` },
+        tool_use_id: 'tool-glob-outside',
+      })).resolves.toEqual(expect.objectContaining({
+        continue: false,
+        reason: expect.stringContaining('approved BattleFlow readable directories'),
+      }));
+
+      await expect(preToolUse?.({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Read',
+        tool_input: { file_path: path.join(artifactRoot, 'manifest.json') },
+        tool_use_id: 'tool-read-artifact',
+      })).resolves.toEqual({ continue: true });
+
+      await expect(preToolUse?.({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Read',
+        tool_input: { file_path: path.relative(workspaceRoot, path.join(artifactRoot, 'manifest.json')) },
+        tool_use_id: 'tool-read-relative-artifact',
+      })).resolves.toEqual({ continue: true });
+
+      await expect(preToolUse?.({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Glob',
+        tool_input: { pattern: path.join(path.relative(workspaceRoot, artifactRoot), '*.json') },
+        tool_use_id: 'tool-glob-relative-artifact',
+      })).resolves.toEqual({ continue: true });
+
+      await expect(preToolUse?.({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Read',
+        tool_input: { file_path: path.relative(workspaceRoot, path.join(outsideRoot, 'secret.md')) },
+        tool_use_id: 'tool-read-relative-outside',
+      })).resolves.toEqual(expect.objectContaining({
+        continue: false,
+        reason: expect.stringContaining('approved BattleFlow readable directories'),
+      }));
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+      rmSync(outsideRoot, { recursive: true, force: true });
+      rmSync(artifactRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks tools outside the BattleFlow runtime tool policy', async () => {
+    const workspaceRoot = mkdtempSync(path.join(tmpdir(), 'battleflow-node-tool-policy-'));
+    process.env.BATTLEFLOW_CLAUDE_TOOLS = 'Read,Grep,Glob';
+    mocks.query.mockReturnValue(createMockQuery(successMessages()));
+
+    try {
+      const stream = streamClaudeAgentSdkTurn({
+        messages: [{ role: 'user', content: 'Use tools.' }],
+        systemPrompt: 'Use the current BattleFlow method.',
+        cwd: workspaceRoot,
+        writableRoot: workspaceRoot,
+        skills: ['method'],
+      });
+
+      await readAgentStream(stream);
+
+      const options = getCapturedOptions();
+      expect(options.tools).toEqual(['Read', 'Grep', 'Glob', 'Skill']);
+      const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0];
+      await expect(preToolUse?.({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Skill',
+        tool_input: { skill: 'method' },
+        tool_use_id: 'tool-skill-bound',
+      })).resolves.toEqual({ continue: true });
+
+      await expect(preToolUse?.({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Skill',
+        tool_input: { skill: 'another-method' },
+        tool_use_id: 'tool-skill-other',
+      })).resolves.toEqual(expect.objectContaining({
+        continue: false,
+        reason: expect.stringContaining('bound to the current workflow node'),
+      }));
+
+      await expect(preToolUse?.({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Skill',
+        tool_input: {},
+        tool_use_id: 'tool-skill-missing',
+      })).resolves.toEqual(expect.objectContaining({
+        continue: false,
+        reason: expect.stringContaining('requires the name'),
+      }));
+
+      await expect(preToolUse?.({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'pwd' },
+        tool_use_id: 'tool-bash',
+      })).resolves.toEqual(expect.objectContaining({
+        continue: false,
+        reason: expect.stringContaining('configured Claude tool set'),
+      }));
+
+      await expect(preToolUse?.({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'mcp__fs__read',
+        tool_input: { path: 'note.md' },
+        tool_use_id: 'tool-mcp',
+      })).resolves.toEqual(expect.objectContaining({
+        continue: false,
+        reason: expect.stringContaining('does not enable MCP tools'),
+      }));
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
   it('requires human approval for node Write and Edit when a HITL handler is present', async () => {
     const workspaceRoot = mkdtempSync(path.join(tmpdir(), 'battleflow-node-hitl-write-'));
     const { query: pendingQuery, release } = createDeferredQuery(successMessages());
@@ -575,7 +878,8 @@ describe('streamClaudeAgentSdkTurn', () => {
       await expect(readNextAgentEvent(reader)).resolves.toEqual({ type: 'session_status', status: 'starting' });
       const options = await waitForCapturedOptions();
       expect(options.allowedTools).toEqual(['Read', 'Grep', 'Glob']);
-      expect(options.tools).toEqual(['Read', 'Grep', 'Glob', 'Write', 'Edit']);
+      expect(options.tools).toEqual(['Read', 'Grep', 'Glob', 'Write', 'Edit', 'Skill']);
+      expect(options.permissionMode).toBe('default');
       expect(options.canUseTool).toEqual(expect.any(Function));
 
       const permissionResult = options.canUseTool?.('Write', { file_path: 'draft.md' }, {
@@ -596,6 +900,7 @@ describe('streamClaudeAgentSdkTurn', () => {
       }));
       await expect(permissionResult).resolves.toEqual(expect.objectContaining({
         behavior: 'allow',
+        updatedInput: { file_path: 'draft.md' },
         toolUseID: 'tool-write-approval',
       }));
       await expect(readNextAgentEvent(reader)).resolves.toEqual({
@@ -687,6 +992,84 @@ describe('streamClaudeAgentSdkTurn', () => {
     expect(events).toContainEqual({ type: 'error', error: 'Budget exceeded' });
   });
 
+  it('terminates when Claude attempts a tool that is unavailable in the runtime', async () => {
+    const query = createMockQuery([
+      sdkMessage({
+        type: 'assistant',
+        parent_tool_use_id: null,
+        session_id: 'session-1',
+        uuid: 'uuid-assistant',
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'tool_use',
+            id: 'tool-bash-1',
+            name: 'Bash',
+            input: { command: 'pwd && ls -la' },
+          }],
+        },
+      }),
+      sdkMessage({
+        type: 'user',
+        parent_tool_use_id: null,
+        session_id: 'session-1',
+        uuid: 'uuid-user',
+        message: {
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: 'tool-bash-1',
+            is_error: true,
+            content: '<tool_use_error>Error: No such tool available: Bash. Bash exists but is not enabled in this context. Use one of the available tools instead.</tool_use_error>',
+          }],
+        },
+        tool_use_result: '<tool_use_error>Error: No such tool available: Bash. Bash exists but is not enabled in this context. Use one of the available tools instead.</tool_use_error>',
+      }),
+      sdkMessage({
+        type: 'result',
+        subtype: 'success',
+        duration_ms: 10,
+        duration_api_ms: 9,
+        is_error: false,
+        num_turns: 1,
+        result: 'SHOULD_NOT_BE_EMITTED',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        usage: {},
+        modelUsage: {},
+        permission_denials: [],
+        uuid: 'uuid-result',
+        session_id: 'session-1',
+      }),
+    ]);
+    mocks.query.mockReturnValue(query);
+
+    const stream = streamClaudeAgentSdkTurn({
+      messages: [{ role: 'user', content: 'Use shell.' }],
+      systemPrompt: 'Test',
+    });
+
+    const events = await readAgentStream(stream);
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'tool_call',
+      id: 'tool-bash-1',
+      name: 'Bash',
+      status: 'failed',
+      error: expect.stringContaining('No such tool available'),
+    }));
+    expect(events).toContainEqual({
+      type: 'error',
+      error: 'Bash is not available in the current Claude runtime. Use only the configured BattleFlow tools for this workflow node.',
+    });
+    expect(events).not.toContainEqual(expect.objectContaining({
+      type: 'assistant_final',
+      text: 'SHOULD_NOT_BE_EMITTED',
+    }));
+    expect(events).not.toContainEqual({ type: 'session_status', status: 'done' });
+    expect(query.close).toHaveBeenCalled();
+  });
+
   it('uses result text when the SDK returns a success subtype with an error flag', async () => {
     mocks.query.mockReturnValue(createMockQuery([
       sdkMessage({
@@ -756,6 +1139,10 @@ describe('streamClaudeAgentSdkTurn', () => {
     expect(status.available).toBe(true);
     expect(status.toolsEnabled).toBe(true);
     expect(status.tools).toEqual(['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch', 'Write', 'Edit']);
+    expect(status.disallowedTools).toEqual(['MultiEdit', 'Bash', 'Agent', 'mcp__*']);
+    expect(status.readGuardEnabled).toBe(true);
+    expect(status.strictMcpConfig).toBe(true);
+    expect(status.toolGuardEnabled).toBe(true);
     expect(status.writeToolsEnabled).toBe(true);
     expect(status.writeTools).toEqual(['Write', 'Edit']);
     expect(status.writeGuardEnabled).toBe(true);

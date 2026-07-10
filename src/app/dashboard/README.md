@@ -30,6 +30,7 @@ The workflow page treats step completion as a validation gate:
 - the workflow-level `Agent 验证` switch is off by default; when off, validation stops after Skill self-check, and when on it also runs the independent Agent gate;
 - failed gates keep the user on the same step and show a compact non-modal blocker summary in the chat area;
 - the right context panel stays focused on outputs, review materials, and archived material instead of duplicating validation internals;
+- empty node conversations show a Skill onboarding guide with upstream/shared artifact hints and starter prompts that fill the composer without auto-submitting;
 - only server-returned passed workflows should advance the active step;
 - re-editing a completed step clears old output and gate fields so downstream context no longer uses stale output.
 

@@ -101,6 +101,7 @@ interface Skill {
   tools: string[];
   outputs: Record<string, unknown>;
   checklist: string[];
+  starters: string[];
   acceptanceCriteria?: string[];
   requiredSections?: string[];
   evidenceRules?: string[];
@@ -327,6 +328,7 @@ interface WorkflowSkillDraft {
   tools: string[];
   outputs: Record<string, unknown>;
   checklist: string[];
+  starters: string[];
   acceptanceCriteria?: string[];
   requiredSections?: string[];
   evidenceRules?: string[];
@@ -3528,6 +3530,7 @@ export default function WorkflowsPage() {
             methodology: skillDef.methodology,
             outputs: skillDef.outputs,
             checklist: skillDef.checklist,
+            starters: skillDef.starters,
             tools: skillDef.tools,
             prompt_template: skillDef.prompt_template,
             skill_md: skillDef.skill_md,
@@ -5625,6 +5628,14 @@ export default function WorkflowsPage() {
   // Active workflow view - Pipeline + Chat
   const visibleWorkflowSteps = getVisibleSteps(activeWorkflow);
   const currentStep = visibleWorkflowSteps[activeStepIndex] || visibleWorkflowSteps[0];
+  const handleUseStarter = (starter: string) => {
+    if (!currentStep?.id) return;
+    const nextValue = starter.trim();
+    if (!nextValue) return;
+    setChatInput(nextValue);
+    setChatInputByStepId((prev) => ({ ...prev, [currentStep.id]: nextValue }));
+    writeStoredChatDraft(currentStep.id, nextValue);
+  };
   const isStreaming = currentStep ? Boolean(streamingByStepId[currentStep.id]) : false;
   const currentPendingHumanInput = currentStep
     ? chatRunByStepId[currentStep.id]?.pending_human_input || null
@@ -6700,6 +6711,12 @@ export default function WorkflowsPage() {
             shouldRenderDocumentCard={shouldRenderAssistantDocumentCard}
             renderDocumentCard={renderAssistantDocumentCard}
             formatFileSize={formatFileSize}
+            onboardingContext={{
+              upstreamOutputCount: autoInjectedPreviousSteps.length,
+              sharedArtifactCount: workflowArtifacts.length,
+              disabledUpstreamOutputCount: disabledAutoInjectedPreviousSteps.length,
+            }}
+            onUseStarter={handleUseStarter}
             pendingHumanInput={currentPendingHumanInput}
             onRespondHumanInput={handleRespondHumanInput}
           />

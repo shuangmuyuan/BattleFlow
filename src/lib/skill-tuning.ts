@@ -55,6 +55,7 @@ export interface GeneratedWorkflowSkillDraft {
   tools: string[];
   outputs: Record<string, unknown>;
   checklist: string[];
+  starters: string[];
   acceptanceCriteria?: string[];
   requiredSections?: string[];
   evidenceRules?: string[];
@@ -82,6 +83,7 @@ interface RawGeneratedDraft {
   tools?: unknown;
   outputs?: unknown;
   checklist?: unknown;
+  starters?: unknown;
   acceptanceCriteria?: unknown;
   requiredSections?: unknown;
   evidenceRules?: unknown;
@@ -196,6 +198,7 @@ function extractGeneratedDraft(text: string): RawGeneratedDraft {
       tools: parseSectionList(extractSectionValue(sections, 'TOOLS')),
       outputs,
       checklist: parseSectionList(extractSectionValue(sections, 'CHECKLIST')),
+      starters: parseSectionList(extractSectionValue(sections, 'STARTERS')),
       acceptanceCriteria: parseSectionList(extractSectionValue(sections, 'ACCEPTANCE_CRITERIA')),
       requiredSections: parseSectionList(extractSectionValue(sections, 'REQUIRED_SECTIONS')),
       evidenceRules: parseSectionList(extractSectionValue(sections, 'EVIDENCE_RULES')),
@@ -372,6 +375,7 @@ function buildPrompt(input: GenerateWorkflowSkillDraftInput) {
     tools: baseSkill.tools,
     outputs: baseSkill.outputs,
     checklist: baseSkill.checklist,
+    starters: baseSkill.starters,
     acceptanceCriteria: baseSkill.acceptanceCriteria || [],
     requiredSections: baseSkill.requiredSections || [],
     evidenceRules: baseSkill.evidenceRules || [],
@@ -410,6 +414,8 @@ function buildPrompt(input: GenerateWorkflowSkillDraftInput) {
     '{"format":"structured_markdown"}',
     '=== CHECKLIST ===',
     '- 检查点',
+    '=== STARTERS ===',
+    '- 用户进入节点时可点击填入的起手式',
     '=== ACCEPTANCE_CRITERIA ===',
     '- 可验证验收标准',
     '=== REQUIRED_SECTIONS ===',
@@ -515,6 +521,7 @@ export async function generateWorkflowSkillDraft(input: GenerateWorkflowSkillDra
     ...asStringArray(rawDraft.checklist, baseSkill.checklist),
     ...qualityGates,
   ]));
+  const starters = Array.from(new Set(asStringArray(rawDraft.starters, baseSkill.starters || [])));
   const tags = Array.from(new Set([
     'workflow-tuning',
     ...asStringArray(rawDraft.tags, baseSkill.tags),
@@ -531,6 +538,7 @@ export async function generateWorkflowSkillDraft(input: GenerateWorkflowSkillDra
     tools: asStringArray(rawDraft.tools, baseSkill.tools),
     outputs,
     checklist,
+    starters,
     acceptanceCriteria,
     requiredSections,
     evidenceRules,

@@ -282,6 +282,7 @@ export interface WorkflowSkillDraftRecord {
   tools: string[];
   outputs: Record<string, unknown>;
   checklist: string[];
+  starters: string[];
   acceptanceCriteria?: string[];
   requiredSections?: string[];
   evidenceRules?: string[];
@@ -980,6 +981,7 @@ function normalizeSkillDrafts(value: unknown): Record<string, WorkflowSkillDraft
           tools: normalizeStringArray(draft.tools),
           outputs: normalizeUnknownRecord(draft.outputs),
           checklist: normalizeStringArray(draft.checklist),
+          starters: normalizeStringArray(draft.starters),
           acceptanceCriteria: normalizeStringArray(draft.acceptanceCriteria),
           requiredSections: normalizeStringArray(draft.requiredSections),
           evidenceRules: normalizeStringArray(draft.evidenceRules),

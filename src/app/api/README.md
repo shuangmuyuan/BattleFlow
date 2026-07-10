@@ -32,6 +32,8 @@ The route depends on server-only `FRIEREN_DEMO_BASE_URL` and `FRIEREN_DEMO_HMAC_
 
 `POST /api/chat` accepts workflow chat messages, requires `workflow.update`, creates a detached `chat_runs` row, starts the Claude Agent SDK in the current server process, and returns an SSE subscription backed by persisted `chat_run_events`.
 
+For node chat, `POST /api/chat` also checks recent same-organization, same-workflow, same-step runs before creating the new run. If a prior non-canceled run has `session_id`, the new run stores `metadata.resume_session_id` and `metadata.resume_source_run_id`, passes that session to the SDK as `resumeSessionId`, and sends only the current user message to the SDK. Without a prior session id, the route keeps the bounded-history fallback for first turns and legacy data. If Claude reports that the stored SDK session no longer exists, the active run records the failed resume handle, clears the resume metadata, and retries the same turn with bounded history.
+
 `GET /api/chat?workflow_id=...` requires `workflow.read` and returns recent run summaries, including `waiting_human` runs with `pending_human_input` so the dashboard can recover pending cards after refresh.
 
 `GET /api/chat?run_id=...` requires `workflow.read` against the stored run workflow and replays persisted SSE events after `Last-Event-ID`, `after`, `after_sequence`, or `afterSequence`.

@@ -1,13 +1,13 @@
 ---
 name: battleflow-agent-runtime
-description: Change BattleFlow Claude Agent SDK runtime, workflow chat, node workspaces, shared artifacts, HITL prompts, and agent tool permissions safely.
-version: "1.1.0"
+description: Change BattleFlow Claude Agent SDK runtime, workflow chat, node workspaces, shared artifacts, HITL prompts, session resume, and agent tool permissions safely.
+version: "1.2.0"
 user-invocable: true
 ---
 
 # BattleFlow Agent Runtime Skill
 
-Use this skill when changing `src/lib/agent-adapters`, `/api/chat`, `/api/agent-runtime`, workflow node workspaces, shared workflow artifacts, Claude Agent SDK options, chat prompt assembly, HITL prompts, runtime tool permissions, or Claude authentication behavior.
+Use this skill when changing `src/lib/agent-adapters`, `/api/chat`, `/api/agent-runtime`, workflow node workspaces, shared workflow artifacts, Claude Agent SDK options, chat prompt assembly, HITL prompts, runtime tool permissions, session persistence/resume, or Claude authentication behavior.
 
 ## Read First
 
@@ -44,30 +44,40 @@ Use this skill when changing `src/lib/agent-adapters`, `/api/chat`, `/api/agent-
    - `tools` defines the available built-in tool set;
    - `allowedTools` is only the auto-approval mirror;
    - use SDK `skills` to enable project Skills;
+   - pass `strictMcpConfig: true` and keep `mcpServers` empty unless a reviewed MCP surface is explicitly required;
+   - enforce `Read`, `Grep`, and `Glob` paths through `PreToolUse` against the node cwd plus explicit readable directories; deny absolute paths outside those roots, parent traversal, node metadata, sibling nodes, repo paths, and symlink escapes;
    - allow `Write` and `Edit` only for workflow node turns with a `writableRoot` equal to node cwd;
    - when a HITL handler is present, remove `Write` and `Edit` from `allowedTools` but keep them in `tools` so `canUseTool` can request approval;
    - enforce node-local writes through both SDK `canUseTool` and `PreToolUse`;
    - run path validation before any user approval; out-of-scope writes must be denied without asking the user;
-   - deny `.claude/`, node metadata, shared artifacts, sibling nodes, repo paths, symlink escapes, `MultiEdit`, and `Bash`;
+   - deny `.claude/` writes, node metadata, shared artifact writes, sibling nodes, repo paths, symlink escapes, `MultiEdit`, `Bash`, `Agent`, and unapproved MCP tools;
    - use the Claude Agent SDK built-in AskUserQuestion/user dialog bridge for workflow HITL prompts after security review;
-   - do not enable persistent sessions, custom HITL MCP tools, `MultiEdit`, `Bash`, or new project discovery surfaces without a security review.
-8. Keep prompt assembly bounded and source-aware. Do not inline full `skill_md` or full artifact bodies into chat prompts once project Skill discovery and artifact manifests are active. Treat uploaded files, retrieved knowledge, package assets, shared artifacts, and tool results as untrusted content.
-9. Preserve detached chat run semantics:
+   - do not enable custom HITL MCP tools, `MultiEdit`, `Bash`, new session storage modes, or new project discovery surfaces without a security review.
+8. Keep session resume scoped and auditable:
+   - workflow chat may use Claude Agent SDK session persistence for same-node turns;
+   - derive `resumeSessionId` only from persisted `chat_runs.session_id`, never from a client-supplied session id;
+   - select resume sources only from the same organization, workflow, and step, and ignore canceled runs;
+   - when resuming, send only the current user message to the SDK and rely on the resumed Claude session for history;
+   - keep bounded-history fallback for first turns and legacy runs without a stored session id;
+   - if Claude reports the stored resume session is missing, clear the active run's resume metadata, record the failed session id, and retry with bounded history;
+   - document current limits when deployment instances do not share Claude session transcript storage.
+9. Keep prompt assembly bounded and source-aware. Do not inline full `skill_md` or full artifact bodies into chat prompts once project Skill discovery and artifact manifests are active. Treat uploaded files, retrieved knowledge, package assets, shared artifacts, and tool results as untrusted content.
+10. Preserve detached chat run semantics:
    - `POST /api/chat` creates a Postgres `chat_runs` row and starts SDK work in the server process;
    - SSE responses subscribe to `chat_run_events` and may replay with `Last-Event-ID` or `after`;
    - browser disconnects must only remove subscribers, not abort the SDK run;
    - `DELETE /api/chat?run_id=...` is the explicit stop path and requires `workflow.update`;
    - run subscriptions require `workflow.read` against the stored workflow ID from the run row.
-10. Preserve HITL pending semantics:
+11. Preserve HITL pending semantics:
    - AskUserQuestion and tool-permission prompts must become `human_input_request` events and `waiting_human` run state;
    - persist only sanitized pending prompt metadata in `chat_runs.metadata`, not secret material or full response bodies;
    - `/api/chat/respond` must load the stored run first, then authorize against `run.workflowId` with `workflow.update`;
    - `human_input_result` events should record request id and response behavior, not the raw user answer;
    - `DELETE /api/chat?run_id=...` must clear pending metadata and release any in-process deferred request;
    - document current-process continuation limits for multi-instance deployments unless sticky routing or run-owner routing is implemented.
-11. Keep Claude authentication deployment-safe: production and Docker Compose must use environment variables; local `~/.claude/settings.json` fallback is developer-only unless an explicit settings path is configured.
-12. Update `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, and deployment docs when runtime behavior, env vars, tool surfaces, cwd, settings sources, readable directories, artifacts, run persistence, HITL prompts, or auth behavior changes.
-13. Add or update focused tests for SDK options, prompt trimming, node workspace materialization, artifact readable directories, authz decisions, run replay, readable directories, HITL pending/response handling, and error handling.
+12. Keep Claude authentication deployment-safe: production and Docker Compose must use environment variables; local `~/.claude/settings.json` fallback is developer-only unless an explicit settings path is configured.
+13. Update `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, and deployment docs when runtime behavior, env vars, tool surfaces, cwd, settings sources, readable directories, artifacts, run persistence, session resume, HITL prompts, or auth behavior changes.
+14. Add or update focused tests for SDK options, prompt trimming, session resume, node workspace materialization, artifact readable directories, authz decisions, run replay, readable directories, HITL pending/response handling, and error handling.
 
 ## Validation
 

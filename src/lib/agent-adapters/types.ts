@@ -88,8 +88,12 @@ export interface AgentRuntimeStatus {
   outputFormat: 'sdk-message' | 'stream-json';
   toolsEnabled: boolean;
   tools?: string[];
+  disallowedTools?: string[];
   writeToolsEnabled?: boolean;
   writeTools?: string[];
+  readGuardEnabled?: boolean;
+  strictMcpConfig?: boolean;
+  toolGuardEnabled?: boolean;
   writeGuardEnabled?: boolean;
   auth: {
     anthropicBaseUrlConfigured: boolean;
@@ -101,6 +105,7 @@ export interface AgentRuntimeStatus {
 export interface AgentTurnInput {
   messages: AgentChatMessage[];
   systemPrompt: string;
+  resumeSessionId?: string;
   cwd?: string;
   skills?: string[];
   attachments?: AgentInputAttachment[];

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { NextRequest } from 'next/server';
+import { getConfiguredClaudeTools } from '@/lib/agent-adapters/claude-code-tools';
 import { streamClaudeAgentSdkTurn } from '@/lib/agent-adapters/claude-agent-sdk';
 import type { AgentEvent, AgentHumanInputRequest, AgentInputAttachment, AgentToolCallEvent } from '@/lib/agent-adapters/types';
 import { requireOrganizationContext, requirePermission } from '@/lib/auth/server';
@@ -142,12 +143,20 @@ interface ChatPersistenceRun {
 interface DetachedChatRunInput {
   run: PersistedChatRunRecord;
   messages: ChatMessage[];
+  fallbackMessages: ChatMessage[];
+  resumeSessionId?: string;
   systemPrompt: string;
   attachments: AgentInputAttachment[];
   readableDirectories: string[];
   nodeWorkspace: MaterializedNodeWorkspace;
 }
 
+interface ResumableNodeSession {
+  sessionId: string;
+  sourceRunId: string;
+}
+
+const DISALLOWED_CLAUDE_RUNTIME_TOOLS = ['Bash', 'Agent', 'MultiEdit'];
 const CLAUDE_RUNTIME_SKILL_MISFIRE_MARKERS = [
   '/<skill-name>',
   'system-reminder',
@@ -946,8 +955,37 @@ function prepareMessagesForClaudeCodeCli(messages: ChatMessage[], hasWorkflowMet
     ));
 }
 
+function findLatestResumableNodeSession(runs: PersistedChatRunRecord[]): ResumableNodeSession | null {
+  for (const run of runs) {
+    const sessionId = run.sessionId?.trim();
+    if (!sessionId || run.status === 'canceled') continue;
+    return {
+      sessionId,
+      sourceRunId: run.id,
+    };
+  }
+  return null;
+}
+
+function prepareMessagesForAgentTurn(
+  messages: ChatMessage[],
+  hasWorkflowMethodPackage: boolean,
+  resumeSessionId?: string,
+) {
+  const preparedMessages = prepareMessagesForClaudeCodeCli(messages, hasWorkflowMethodPackage);
+  if (!resumeSessionId) return preparedMessages;
+
+  const lastUserMessage = [...preparedMessages].reverse().find((message) => message.role === 'user');
+  return lastUserMessage ? [lastUserMessage] : preparedMessages.slice(-1);
+}
+
 function getLastUserMessage(messages: ChatMessage[]) {
   return [...messages].reverse().find((message) => message.role === 'user')?.content || '';
+}
+
+function isMissingResumeSessionError(error: unknown) {
+  const message = typeof error === 'string' ? error : getSafeChatErrorMessage(error);
+  return /No conversation found with session ID/i.test(message);
 }
 
 function mapKnowledgeBaseRecordToContext(record: KnowledgeBaseRecord): KnowledgeBaseContext {
@@ -1105,6 +1143,28 @@ function buildPromptSkillDefinition(skill: SkillRecord): SkillDefinition {
   };
 }
 
+function buildClaudeRuntimeToolContract(hasWorkflowSkill: boolean) {
+  const configuredTools = getConfiguredClaudeTools();
+  const runtimeTools = hasWorkflowSkill && !configuredTools.includes('Skill')
+    ? [...configuredTools, 'Skill']
+    : configuredTools;
+  const availableTools = runtimeTools.length > 0
+    ? runtimeTools.join(', ')
+    : 'none';
+  const fileInspectionTools = configuredTools.filter((tool) => ['Glob', 'Grep', 'Read'].includes(tool));
+  const fileInspectionInstruction = fileInspectionTools.length > 0
+    ? `Use ${fileInspectionTools.join(', ')} for file discovery and file inspection. Do not use shell commands such as find, ls, cat, pwd, or grep through Bash.`
+    : 'No file inspection tools are available for this turn. Do not try to inspect files through Bash or shell commands.';
+
+  return [
+    '## Claude Runtime Tool Contract',
+    `Available Claude Code tools for this turn: ${availableTools}.`,
+    `Do not call ${DISALLOWED_CLAUDE_RUNTIME_TOOLS.join(', ')}, or any other tool that is not listed as available for this turn.`,
+    fileInspectionInstruction,
+    'If a needed operation is not possible with the available tools, explain the limitation in the assistant response instead of trying an unavailable tool.',
+  ].join('\n');
+}
+
 function buildSystemPrompt(body: Record<string, unknown>) {
   const rawSkillDefinition = body.skill_definition as SkillDefinition | undefined;
   const skillDefinition = rawSkillDefinition;
@@ -1127,22 +1187,25 @@ function buildSystemPrompt(body: Record<string, unknown>) {
   let systemPrompt = [
     'You are an expert product planning assistant. You help product planners create professional, well-structured requirement documents through collaborative dialogue.',
     `## Language Policy\n${SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION}`,
+    buildClaudeRuntimeToolContract(Boolean(skillDefinition)),
   ].join('\n\n');
 
   if (skillDefinition) {
     const activeSkillName = skillDefinition.display_name || skillDefinition.name || skillDefinition.skill_id || 'Unknown';
     systemPrompt += `\n\n## BattleFlow Workflow Method Binding\n${[
-      `The workflow has already selected and loaded the active BattleFlow Skill for this node: ${activeSkillName}.`,
-      'The active Skill has been materialized in this node workspace and enabled through Claude Agent SDK project Skill discovery.',
-      'User references to the current Skill, current method package, current workflow capability, or current step rules mean this loaded BattleFlow Skill.',
+      `The workflow has selected and bound the active BattleFlow Skill for this node: ${activeSkillName}.`,
+      'The active Skill has been materialized in this node workspace and made available to the Claude Agent SDK Skill tool through project Skill discovery.',
+      'User references to the current Skill, current method package, current workflow capability, or current step rules mean this bound BattleFlow Skill.',
       'Do not interpret those references as a request to activate, list, or choose Claude Code or Codex runtime capabilities.',
       'Do not ask the user to provide a slash command or a capability name. Do not mention registered runtime capability lists or unavailable runtime capabilities.',
-      'When the user asks to follow the current method package requirements, use the loaded project Skill for this node.',
-      'When the user asks which Skill, method package, or current capability is active, answer with this active BattleFlow Skill name and its declared planning capabilities. Never say that no runtime Skill is loaded while this binding exists.',
-      'A loaded BattleFlow Skill is the workflow-step binding above. It does not require a visible Skill tool_call event before you can name it.',
+      'Before performing work that depends on the full method package, invoke the bound project Skill through the Skill tool if it has not already been invoked successfully in the current SDK session.',
+      'When the user asks which Skill, method package, or current capability is active, answer with this active BattleFlow Skill name and its declared planning capabilities. Never say that no Skill is bound or available while this binding exists.',
+      'The workflow binding identifies the active Skill, but it is not evidence that the Skill tool was invoked. Naming the bound Skill does not require a tool call.',
+      'Only a successful Skill tool call means the Skill was invoked. Do not claim that it was invoked when no successful Skill tool call exists.',
       'When reading the materialized Skill files, use relative paths returned by Glob exactly as returned, such as .claude/skills/<skill>/SKILL.md. Do not prefix /app, the repository root, or another absolute workspace path.',
+      'When the loaded Skill mentions package assets such as assets/templates/<file>, that path is relative to the materialized Skill directory. Read it through .claude/skills/<skill>/assets/templates/<file> after discovering the concrete path with Glob.',
       'If an earlier assistant message asked the user to choose a runtime capability, treat it as an obsolete misinterpretation and continue with this active BattleFlow method package.',
-      'If an earlier assistant message claimed no Skill was loaded or no Skill tool was called, treat it as an obsolete misinterpretation and answer from this active BattleFlow method package.',
+      'If an earlier assistant message claimed no Skill was bound or available for this node, treat it as an obsolete misinterpretation and continue with this active BattleFlow method package.',
     ].map((item) => `- ${item}`).join('\n')}\n`;
 
     systemPrompt += `\n\n## Active BattleFlow Skill: ${activeSkillName}\n`;
@@ -1514,7 +1577,7 @@ async function consumeDetachedChatRun(
   run: ActiveChatRunRecord,
   agentStream: ReadableStream<AgentEvent>,
   displayPathRoot: string,
-) {
+): Promise<'finished' | 'missing_resume_session'> {
   const reader = agentStream.getReader();
 
   try {
@@ -1522,7 +1585,7 @@ async function consumeDetachedChatRun(
       if (await isChatRunCanceledInStore(run.id)) {
         run.abortController.abort();
         await finishDetachedChatRunCanceled(run);
-        return;
+        return 'finished';
       }
 
       const { done, value } = await reader.read();
@@ -1582,11 +1645,11 @@ async function consumeDetachedChatRun(
         }
         if (value.status === 'done') {
           await finishDetachedChatRunSucceeded(run);
-          return;
+          return 'finished';
         }
         if (value.status === 'aborted') {
           await finishDetachedChatRunCanceled(run);
-          return;
+          return 'finished';
         }
         await appendAndPublishChatRunEvent(run.id, 'session_status', {
           event: 'session_status',
@@ -1609,22 +1672,30 @@ async function consumeDetachedChatRun(
           text: sanitizeDisplayPathText(value.text, displayPathRoot),
         });
       } else if (value.type === 'error') {
+        if (isMissingResumeSessionError(value.error)) {
+          return 'missing_resume_session';
+        }
         await finishDetachedChatRunFailed(run, value.error, displayPathRoot);
-        return;
+        return 'finished';
       }
     }
 
     if (run.abortController.signal.aborted || await isChatRunCanceledInStore(run.id)) {
       await finishDetachedChatRunCanceled(run);
-      return;
+      return 'finished';
     }
     await finishDetachedChatRunSucceeded(run);
+    return 'finished';
   } catch (error) {
     if (run.abortController.signal.aborted || await isChatRunCanceledInStore(run.id)) {
       await finishDetachedChatRunCanceled(run);
-      return;
+      return 'finished';
+    }
+    if (isMissingResumeSessionError(error)) {
+      return 'missing_resume_session';
     }
     await finishDetachedChatRunFailed(run, error, displayPathRoot);
+    return 'finished';
   } finally {
     reader.releaseLock();
   }
@@ -1651,22 +1722,71 @@ function startDetachedChatRun(input: DetachedChatRunInput) {
 
   void (async () => {
     try {
-      const agentStream = streamClaudeAgentSdkTurn({
-        messages: input.messages,
-        systemPrompt: input.systemPrompt,
-        cwd: input.nodeWorkspace.cwd,
-        skills: [input.nodeWorkspace.skillName],
-        attachments: input.attachments,
-        readableDirectories: input.readableDirectories,
-        writableRoot: input.nodeWorkspace.cwd,
-        onHumanInputRequest: (humanInputRequest, options) => waitForChatHumanInput({
-          runId: activeRun.id,
-          request: humanInputRequest,
-          signal: options.signal,
-        }),
-        signal: abortController.signal,
+      const canContinueRun = async () => (
+        activeChatRuns.has(activeRun.id)
+        && !abortController.signal.aborted
+        && !(await isChatRunCanceledInStore(activeRun.id))
+      );
+      const runAgentTurn = async (messages: ChatMessage[], resumeSessionId?: string) => {
+        const agentStream = streamClaudeAgentSdkTurn({
+          messages,
+          resumeSessionId,
+          systemPrompt: input.systemPrompt,
+          cwd: input.nodeWorkspace.cwd,
+          skills: [input.nodeWorkspace.skillName],
+          attachments: input.attachments,
+          readableDirectories: input.readableDirectories,
+          writableRoot: input.nodeWorkspace.cwd,
+          onHumanInputRequest: (humanInputRequest, options) => waitForChatHumanInput({
+            runId: activeRun.id,
+            request: humanInputRequest,
+            signal: options.signal,
+          }),
+          signal: abortController.signal,
+        });
+        return consumeDetachedChatRun(activeRun, agentStream, input.nodeWorkspace.cwd);
+      };
+
+      const firstResult = await runAgentTurn(input.messages, input.resumeSessionId);
+      if (firstResult !== 'missing_resume_session') return;
+      if (!input.resumeSessionId || !(await canContinueRun())) {
+        if (await canContinueRun()) {
+          await finishDetachedChatRunFailed(
+            activeRun,
+            'Claude session resume failed and no bounded-history fallback was available.',
+            input.nodeWorkspace.cwd,
+          );
+        }
+        return;
+      }
+
+      activeRun.metadata = {
+        ...activeRun.metadata,
+        resume_failed_session_id: input.resumeSessionId,
+        resume_failed_reason: 'missing_conversation',
+      };
+      delete activeRun.metadata.resume_session_id;
+      delete activeRun.metadata.resume_source_run_id;
+      await updateChatRun({
+        runId: activeRun.id,
+        metadata: activeRun.metadata,
       });
-      await consumeDetachedChatRun(activeRun, agentStream, input.nodeWorkspace.cwd);
+      await appendAndPublishChatRunEvent(activeRun.id, 'session_status', {
+        event: 'session_status',
+        status: 'starting',
+        resume_failed: true,
+        resume_failed_reason: 'missing_conversation',
+        done: false,
+      });
+
+      const fallbackResult = await runAgentTurn(input.fallbackMessages);
+      if (fallbackResult === 'missing_resume_session' && await canContinueRun()) {
+        await finishDetachedChatRunFailed(
+          activeRun,
+          'Claude session resume failed and bounded-history fallback could not start.',
+          input.nodeWorkspace.cwd,
+        );
+      }
     } catch (error) {
       await finishDetachedChatRunFailed(activeRun, error, input.nodeWorkspace.cwd);
     }
@@ -1920,7 +2040,17 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const claudeMessages = prepareMessagesForClaudeCodeCli(messages, true);
+    const previousStepRuns = await listChatRuns({
+      organizationId: context.activeOrganization.id,
+      workflowId,
+      stepId,
+      limit: 25,
+    });
+    const resumableSession = findLatestResumableNodeSession(previousStepRuns);
+    const fallbackClaudeMessages = prepareMessagesForAgentTurn(messages, true);
+    const claudeMessages = resumableSession
+      ? prepareMessagesForAgentTurn(messages, true, resumableSession.sessionId)
+      : fallbackClaudeMessages;
     const readableDirectories = Array.from(new Set([
       ...getAttachmentReadableDirectories(trustedUploadedFiles),
       ...artifactReadableDirectories,
@@ -1935,6 +2065,10 @@ export async function POST(request: NextRequest) {
       metadata: {
         provider,
         workflow_step_id: stepId,
+        ...(resumableSession ? {
+          resume_session_id: resumableSession.sessionId,
+          resume_source_run_id: resumableSession.sourceRunId,
+        } : {}),
       },
     });
     await appendAndPublishChatRunEvent(run.id, 'chat_run', {
@@ -1949,6 +2083,8 @@ export async function POST(request: NextRequest) {
     startDetachedChatRun({
       run,
       messages: claudeMessages,
+      fallbackMessages: fallbackClaudeMessages,
+      resumeSessionId: resumableSession?.sessionId,
       systemPrompt,
       attachments: getImageAttachments(currentTurnUploadedFiles),
       readableDirectories,

@@ -7,7 +7,7 @@ This catalog must match `.agents/skills` and `.agents/agents`.
 | Skill | Path | Purpose |
 | --- | --- | --- |
 | DeepWorkPlan | `.agents/skills/deepworkplan/SKILL.md` | Installed DWP router and sub-skills for create, execute, refine, resume, status, verify, onboard, and author. |
-| BattleFlow Agent Runtime | `.agents/skills/battleflow-agent-runtime/SKILL.md` | Procedure for Claude Agent SDK runtime, detached workflow chat runs, HITL prompts, run event replay, node workspaces, shared artifacts, guarded node-local writes, prompt assembly, Claude auth, and agent tool permissions. |
+| BattleFlow Agent Runtime | `.agents/skills/battleflow-agent-runtime/SKILL.md` | Procedure for Claude Agent SDK runtime, detached workflow chat runs, HITL prompts, session resume, run event replay, node workspaces, shared artifacts, guarded node-local writes, prompt assembly, Claude auth, and agent tool permissions. |
 | BattleFlow Authz Postgres | `.agents/skills/battleflow-authz-postgres/SKILL.md` | Procedure for first-party auth, organization permissions, public/private resource grants, Postgres metadata, super admins, and protected route changes. |
 | BattleFlow Next.js UI | `.agents/skills/battleflow-nextjs-ui/SKILL.md` | Procedure for dashboard, component, responsive, overlay, styling, and hydration-safe UI changes. |
 | BattleFlow Skill Registry | `.agents/skills/battleflow-skill-registry/SKILL.md` | Procedure for Skill registry, spec validation, template download, import, review, publishing, rollback, and official seed changes. |

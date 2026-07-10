@@ -37,6 +37,7 @@ function skillDefinition(skill: SkillRecord): Record<string, unknown> {
     tools: skill.tools,
     outputs: skill.outputs,
     checklist: skill.checklist,
+    starters: skill.starters || [],
     acceptanceCriteria: skill.acceptanceCriteria,
     requiredSections: skill.requiredSections,
     evidenceRules: skill.evidenceRules,

@@ -28,9 +28,10 @@ Use this skill for work around `src/lib/skill-registry.ts`, `/api/skills`, offic
 7. When exposing package assets to chat runtime, frame them as untrusted reference material and keep their prompt budget separate from uploaded workflow files.
 8. Keep review work separate from usable Skills: public/team imports and private publish submissions should create `review_requests`; approval is what creates or updates public/team Skills.
 9. Preserve official Skill IDs unless deliberately migrating downstream state.
-10. Update `skills/official/*/CHANGELOG.md` when changing a seeded official Skill's behavior or output structure.
-11. Keep API status codes and JSON response shapes explicit.
-12. Run validation.
+10. Preserve optional compatibility projection fields such as validation contracts and onboarding `starters` across import, normalization, serialization, Postgres/resource metadata projection, workflow Skill drafts, and tuning. Missing optional fields must remain backward compatible with older records.
+11. Update `skills/official/*/CHANGELOG.md` when changing a seeded official Skill's behavior or output structure.
+12. Keep API status codes and JSON response shapes explicit.
+13. Run validation.
 
 ## Validation
 

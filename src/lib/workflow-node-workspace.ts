@@ -16,7 +16,7 @@ export interface MaterializeNodeWorkspaceInput {
   organizationId: string;
   workflowId: string;
   stepId: string;
-  skill: Pick<SkillRecord, 'id' | 'skill_id' | 'name' | 'display_name' | 'version' | 'skill_md' | 'versions'>;
+  skill: Pick<SkillRecord, 'id' | 'skill_id' | 'name' | 'display_name' | 'version' | 'skill_md' | 'versions' | 'package_assets'>;
   artifactSeed?: Pick<WorkflowArtifactRecord, 'path' | 'fileName' | 'checksum' | 'id' | 'updated_at'>;
 }
 
@@ -67,7 +67,9 @@ function resolveSkillVersion(skill: MaterializeNodeWorkspaceInput['skill']) {
 }
 
 function resolveSkillPackagePath(skill: MaterializeNodeWorkspaceInput['skill']) {
-  const packagePath = currentVersion(skill)?.package_path;
+  const packagePath = currentVersion(skill)?.package_path
+    || currentVersion(skill)?.package_assets?.find((asset) => asset.package_path)?.package_path
+    || skill.package_assets.find((asset) => asset.package_path)?.package_path;
   return packagePath ? path.resolve(packagePath) : null;
 }
 

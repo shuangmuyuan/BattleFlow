@@ -154,6 +154,10 @@ vi.mock('@/lib/agent-adapters/claude-agent-sdk', () => ({
   streamClaudeAgentSdkTurn: mocks.streamClaudeAgentSdkTurn,
 }));
 
+vi.mock('@/lib/agent-adapters/claude-code-tools', async () => (
+  vi.importActual('../../../lib/agent-adapters/claude-code-tools')
+));
+
 vi.mock('@/lib/auth/server', () => ({
   requireOrganizationContext: mocks.requireOrganizationContext,
   requirePermission: mocks.requirePermission,
@@ -347,6 +351,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.chatRunStore.clear();
   mocks.chatRunEventStore.clear();
+  process.env.BATTLEFLOW_CLAUDE_TOOLS = 'Read,Grep,Glob,WebSearch,WebFetch';
 
   mocks.requireOrganizationContext.mockResolvedValue(authContext);
   mocks.requirePermission.mockReturnValue(undefined);
@@ -420,6 +425,10 @@ describe('Chat API route', () => {
     };
     expect(agentInput.messages.at(-1)?.content).toBe('請輸出繁體字');
     expect(agentInput.systemPrompt).toContain('所有面向用户的 AI 生成内容必须使用简体中文');
+    expect(agentInput.systemPrompt).toContain('## Claude Runtime Tool Contract');
+    expect(agentInput.systemPrompt).toContain('Available Claude Code tools for this turn: Read, Grep, Glob, WebSearch, WebFetch, Skill.');
+    expect(agentInput.systemPrompt).toContain('Do not call Bash, Agent, MultiEdit, or any other tool that is not listed as available for this turn.');
+    expect(agentInput.systemPrompt).toContain('Do not use shell commands such as find, ls, cat, pwd, or grep through Bash.');
 
     const persistedWorkflow = mocks.upsertWorkflow.mock.calls.at(-1)?.[0] as WorkflowRecord;
     expect(persistedWorkflow.stepChats['step-1']).toEqual([
@@ -428,6 +437,202 @@ describe('Chat API route', () => {
         content: '最终输出：关键风险。',
       }),
     ]);
+  });
+
+  it('resumes the latest node session and sends only the current user message', async () => {
+    const now = '2026-07-09T10:00:00.000Z';
+    mocks.chatRunStore.set('prior-run', {
+      id: 'prior-run',
+      organizationId: 'org-1',
+      workflowId: 'workflow-1',
+      stepId: 'step-1',
+      status: 'succeeded',
+      userMessage: '上一轮问题',
+      assistantContent: '上一轮回答',
+      toolCalls: [],
+      error: null,
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      metadata: {},
+      createdBy: 'user-1',
+      startedAt: now,
+      completedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    mocks.streamClaudeAgentSdkTurn.mockReturnValue(streamAgentEvents([
+      { type: 'session_status', status: 'done' },
+    ]));
+
+    const response = await POST(postRequest({
+      workflow_id: 'workflow-1',
+      workflow_step_id: 'step-1',
+      messages: [
+        { role: 'user', content: '上一轮问题' },
+        { role: 'assistant', content: '上一轮回答' },
+        { role: 'user', content: '只处理这一轮问题' },
+      ],
+    }));
+
+    await response.text();
+
+    const agentInput = mocks.streamClaudeAgentSdkTurn.mock.calls[0][0] as {
+      messages: Array<{ role: string; content: string }>;
+      resumeSessionId?: string;
+    };
+    expect(agentInput.resumeSessionId).toBe('11111111-1111-4111-8111-111111111111');
+    expect(agentInput.messages).toEqual([
+      { role: 'user', content: '只处理这一轮问题' },
+    ]);
+    expect(mocks.listChatRuns).toHaveBeenCalledWith(expect.objectContaining({
+      organizationId: 'org-1',
+      workflowId: 'workflow-1',
+      stepId: 'step-1',
+    }));
+
+    const createdRun = [...mocks.chatRunStore.values()].find((run) => run.id !== 'prior-run');
+    expect(createdRun?.metadata).toMatchObject({
+      resume_session_id: '11111111-1111-4111-8111-111111111111',
+      resume_source_run_id: 'prior-run',
+    });
+  });
+
+  it('falls back to bounded history when the resumed Claude session is missing', async () => {
+    const now = '2026-07-09T10:00:00.000Z';
+    mocks.chatRunStore.set('prior-run', {
+      id: 'prior-run',
+      organizationId: 'org-1',
+      workflowId: 'workflow-1',
+      stepId: 'step-1',
+      status: 'succeeded',
+      userMessage: '上一轮问题',
+      assistantContent: '上一轮回答',
+      toolCalls: [],
+      error: null,
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      metadata: {},
+      createdBy: 'user-1',
+      startedAt: now,
+      completedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    mocks.streamClaudeAgentSdkTurn
+      .mockReturnValueOnce(streamAgentEvents([
+        {
+          type: 'error',
+          error: 'No conversation found with session ID: 11111111-1111-4111-8111-111111111111.',
+        },
+      ]))
+      .mockReturnValueOnce(streamAgentEvents([
+        { type: 'assistant_message', text: ' fallback answer' },
+        { type: 'session_status', status: 'done', sessionId: '33333333-3333-4333-8333-333333333333' },
+      ]));
+
+    const response = await POST(postRequest({
+      workflow_id: 'workflow-1',
+      workflow_step_id: 'step-1',
+      messages: [
+        { role: 'user', content: '上一轮问题' },
+        { role: 'assistant', content: '上一轮回答' },
+        { role: 'user', content: '继续处理这一轮问题' },
+      ],
+    }));
+
+    await response.text();
+
+    expect(mocks.streamClaudeAgentSdkTurn).toHaveBeenCalledTimes(2);
+    const resumedInput = mocks.streamClaudeAgentSdkTurn.mock.calls[0][0] as {
+      messages: Array<{ role: string; content: string }>;
+      resumeSessionId?: string;
+    };
+    const fallbackInput = mocks.streamClaudeAgentSdkTurn.mock.calls[1][0] as {
+      messages: Array<{ role: string; content: string }>;
+      resumeSessionId?: string;
+    };
+    expect(resumedInput.resumeSessionId).toBe('11111111-1111-4111-8111-111111111111');
+    expect(resumedInput.messages).toEqual([
+      { role: 'user', content: '继续处理这一轮问题' },
+    ]);
+    expect(fallbackInput.resumeSessionId).toBeUndefined();
+    expect(fallbackInput.messages).toEqual([
+      { role: 'user', content: '上一轮问题' },
+      { role: 'assistant', content: '上一轮回答' },
+      { role: 'user', content: '继续处理这一轮问题' },
+    ]);
+
+    const createdRun = [...mocks.chatRunStore.values()].find((run) => run.id !== 'prior-run');
+    expect(createdRun).toEqual(expect.objectContaining({
+      status: 'succeeded',
+      assistantContent: 'fallback answer',
+      sessionId: '33333333-3333-4333-8333-333333333333',
+      metadata: expect.objectContaining({
+        resume_failed_session_id: '11111111-1111-4111-8111-111111111111',
+        resume_failed_reason: 'missing_conversation',
+      }),
+    }));
+    expect(createdRun?.metadata).not.toHaveProperty('resume_session_id');
+    expect(createdRun?.metadata).not.toHaveProperty('resume_source_run_id');
+
+    const createdRunEvents = mocks.chatRunEventStore.get(createdRun?.id || '') || [];
+    expect(createdRunEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventType: 'session_status',
+        payload: expect.objectContaining({
+          resume_failed: true,
+          resume_failed_reason: 'missing_conversation',
+        }),
+      }),
+    ]));
+  });
+
+  it('does not resume a canceled node session', async () => {
+    const now = '2026-07-09T10:00:00.000Z';
+    mocks.chatRunStore.set('prior-canceled-run', {
+      id: 'prior-canceled-run',
+      organizationId: 'org-1',
+      workflowId: 'workflow-1',
+      stepId: 'step-1',
+      status: 'canceled',
+      userMessage: '已取消的问题',
+      assistantContent: '取消结果',
+      toolCalls: [],
+      error: null,
+      sessionId: '22222222-2222-4222-8222-222222222222',
+      metadata: {},
+      createdBy: 'user-1',
+      startedAt: now,
+      completedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+    mocks.streamClaudeAgentSdkTurn.mockReturnValue(streamAgentEvents([
+      { type: 'session_status', status: 'done' },
+    ]));
+
+    const response = await POST(postRequest({
+      workflow_id: 'workflow-1',
+      workflow_step_id: 'step-1',
+      messages: [
+        { role: 'user', content: '已取消的问题' },
+        { role: 'assistant', content: '取消结果' },
+        { role: 'user', content: '开启新问题' },
+      ],
+    }));
+
+    await response.text();
+
+    const agentInput = mocks.streamClaudeAgentSdkTurn.mock.calls[0][0] as {
+      messages: Array<{ role: string; content: string }>;
+      resumeSessionId?: string;
+    };
+    expect(agentInput.resumeSessionId).toBeUndefined();
+    expect(agentInput.messages).toEqual([
+      { role: 'user', content: '已取消的问题' },
+      { role: 'assistant', content: '取消结果' },
+      { role: 'user', content: '开启新问题' },
+    ]);
+    const createdRun = [...mocks.chatRunStore.values()].find((run) => run.id !== 'prior-canceled-run');
+    expect(createdRun?.metadata).not.toHaveProperty('resume_session_id');
   });
 
   it('streams and persists structured tool results beyond the short preview', async () => {
@@ -1251,7 +1456,10 @@ describe('Chat API route', () => {
     expect(agentInput.writableRoot).toBe('/tmp/battleflow-runtime/org-1/workflow-1/nodes/step-1');
     expect(agentInput.skills).toEqual(['user-needs-breakdown']);
     expect(agentInput.systemPrompt).toContain('Active BattleFlow Skill: 用户需求拆解');
-    expect(agentInput.systemPrompt).toContain('enabled through Claude Agent SDK project Skill discovery');
+    expect(agentInput.systemPrompt).toContain('made available to the Claude Agent SDK Skill tool');
+    expect(agentInput.systemPrompt).toContain('invoke the bound project Skill through the Skill tool');
+    expect(agentInput.systemPrompt).toContain('Only a successful Skill tool call means the Skill was invoked');
+    expect(agentInput.systemPrompt).toContain('.claude/skills/<skill>/assets/templates/<file>');
     expect(agentInput.systemPrompt).not.toContain('Skill Package Asset References');
     expect(agentInput.systemPrompt).not.toContain('path="assets/templates/template.md"');
     expect(agentInput.systemPrompt).not.toContain('package_path="/tmp/battleflow-skill-package"');
@@ -1330,7 +1538,7 @@ describe('Chat API route', () => {
         content: expect.stringContaining('没有加载任何 skill'),
       }),
     ]));
-    expect(agentInput.systemPrompt).toContain('A loaded BattleFlow Skill is the workflow-step binding above');
-    expect(agentInput.systemPrompt).toContain('If an earlier assistant message claimed no Skill was loaded');
+    expect(agentInput.systemPrompt).toContain('The workflow binding identifies the active Skill');
+    expect(agentInput.systemPrompt).toContain('If an earlier assistant message claimed no Skill was bound');
   });
 });

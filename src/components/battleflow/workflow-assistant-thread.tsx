@@ -13,6 +13,7 @@ import {
   type ThreadMessageLike,
 } from '@assistant-ui/react';
 import {
+  ArrowRight,
   ArrowDown,
   Check,
   CheckCircle2,
@@ -100,8 +101,16 @@ export interface WorkflowAssistantStepSummary {
 
 export interface WorkflowAssistantSkillSummary {
   name: string;
+  description?: string;
   methodology: string;
   checklist: string[];
+  starters?: string[];
+}
+
+export interface WorkflowAssistantOnboardingContext {
+  upstreamOutputCount: number;
+  sharedArtifactCount: number;
+  disabledUpstreamOutputCount?: number;
 }
 
 export interface WorkflowAssistantHumanInputOption {
@@ -163,6 +172,8 @@ interface WorkflowAssistantThreadProps {
   shouldRenderDocumentCard: (message: WorkflowAssistantChatMessage) => boolean;
   renderDocumentCard: (message: WorkflowAssistantChatMessage, messageIndex: number) => ReactNode;
   formatFileSize: (size: number) => string;
+  onboardingContext?: WorkflowAssistantOnboardingContext;
+  onUseStarter: (starter: string) => void;
   pendingHumanInput?: WorkflowAssistantHumanInputRequest | null;
   onRespondHumanInput: (
     request: WorkflowAssistantHumanInputRequest,
@@ -243,7 +254,7 @@ function getChatCancelledDisplayContent(content: string) {
   return null;
 }
 
-function AssistantThinkingIndicator() {
+function AssistantThinkingIndicator({ label = '正在思考' }: { label?: string }) {
   return (
     <div
       role="status"
@@ -251,7 +262,7 @@ function AssistantThinkingIndicator() {
       className="w-fit text-sm font-medium text-muted-foreground"
     >
       <AnimatedShinyText className="items-center justify-center">
-        正在思考
+        {label}
       </AnimatedShinyText>
     </div>
   );
@@ -367,35 +378,128 @@ function CompletedStepOutput({
 function StepStartGuide({
   currentStep,
   currentSkill,
+  onboardingContext,
+  onUseStarter,
 }: {
   currentStep?: WorkflowAssistantStepSummary | null;
   currentSkill: WorkflowAssistantSkillSummary;
+  onboardingContext?: WorkflowAssistantOnboardingContext;
+  onUseStarter: (starter: string) => void;
 }) {
+  const starters = getOnboardingStarters(currentSkill, onboardingContext);
+  const upstreamCount = onboardingContext?.upstreamOutputCount ?? 0;
+  const sharedArtifactCount = onboardingContext?.sharedArtifactCount ?? 0;
+  const disabledUpstreamCount = onboardingContext?.disabledUpstreamOutputCount ?? 0;
+
   return (
-    <div className="flex h-full flex-col items-center justify-center py-10 text-center">
-      <Sparkles className="mb-4 h-8 w-8 text-primary/50" />
-      <h3 className="mb-2 text-lg font-semibold">开始「{currentStep?.name}」步骤</h3>
-      <p className="mb-4 max-w-md text-sm text-muted-foreground">
-        AI 将基于「{currentSkill.name}」Skill 的方法论框架，与你协作完成本步骤。
-      </p>
-      <div className="max-w-lg rounded-lg bg-muted/50 p-4 text-left text-sm">
-        <p className="mb-2 font-medium">方法论框架：</p>
-        <pre className="whitespace-pre-wrap font-sans text-muted-foreground">{currentSkill.methodology}</pre>
-      </div>
-      {currentSkill.checklist.length > 0 && (
-        <div className="mt-4 w-full max-w-lg">
-          <p className="mb-2 text-sm font-medium">质量 Checklist：</p>
-          <ul className="space-y-1">
-            {currentSkill.checklist.map((item, index) => (
-              <li key={index} className="flex items-start gap-2 text-sm text-muted-foreground">
-                <span>☐</span> {item}
-              </li>
-            ))}
-          </ul>
+    <div className="flex min-h-full w-full items-center justify-center py-8">
+      <div className="w-full max-w-2xl space-y-5 text-left">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-primary/30 bg-primary/10 text-primary">
+            <Sparkles className="size-4" />
+          </div>
+          <div className="min-w-0">
+            <h3 className="break-words text-base font-semibold">开始「{currentStep?.name || currentSkill.name}」步骤</h3>
+            <p className="mt-1 text-sm leading-6 text-muted-foreground">
+              当前节点绑定「{currentSkill.name}」Skill，会按该方法推进本步骤。
+            </p>
+          </div>
         </div>
-      )}
+
+        <div className="space-y-4 rounded-lg border border-border/45 bg-muted/20 p-4">
+          {currentSkill.description && (
+            <p className="text-sm leading-6 text-muted-foreground">{currentSkill.description}</p>
+          )}
+
+          {currentSkill.methodology && (
+            <div className="space-y-2">
+              <p className="text-xs font-medium uppercase tracking-normal text-muted-foreground">Method</p>
+              <pre className="max-h-36 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-background/45 p-3 font-sans text-sm leading-6 text-muted-foreground">
+                {currentSkill.methodology}
+              </pre>
+            </div>
+          )}
+
+          <div className="grid gap-2 text-sm text-muted-foreground sm:grid-cols-2">
+            <div className="flex min-w-0 items-center gap-2 rounded-md border border-border/35 bg-background/35 px-3 py-2">
+              <CheckCircle2 className="size-4 shrink-0 text-success" />
+              <span className="min-w-0 break-words">
+                {upstreamCount > 0 ? `已自动引用 ${upstreamCount} 个前序产物` : '当前节点暂无前序产物'}
+              </span>
+            </div>
+            <div className="flex min-w-0 items-center gap-2 rounded-md border border-border/35 bg-background/35 px-3 py-2">
+              <ShieldCheck className="size-4 shrink-0 text-primary" />
+              <span className="min-w-0 break-words">
+                {sharedArtifactCount > 0 ? `共享产物区 ${sharedArtifactCount} 个文件可读` : '共享产物区暂无文件'}
+              </span>
+            </div>
+          </div>
+
+          {disabledUpstreamCount > 0 && (
+            <p className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning-foreground">
+              已手动排除 {disabledUpstreamCount} 个前序产物引用。
+            </p>
+          )}
+
+          {currentSkill.checklist.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs font-medium uppercase tracking-normal text-muted-foreground">Quality Checklist</p>
+              <ul className="grid gap-2 sm:grid-cols-2">
+                {currentSkill.checklist.slice(0, 4).map((item, index) => (
+                  <li key={index} className="flex min-w-0 items-start gap-2 text-sm leading-5 text-muted-foreground">
+                    <Check className="mt-0.5 size-3.5 shrink-0 text-success" />
+                    <span className="min-w-0 break-words">{item}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <p className="text-xs font-medium uppercase tracking-normal text-muted-foreground">Starters</p>
+            <div className="flex flex-wrap gap-2">
+              {starters.map((starter) => (
+                <Button
+                  key={starter}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-auto min-h-9 max-w-full justify-start gap-2 whitespace-normal break-words text-left text-xs leading-5"
+                  onClick={() => onUseStarter(starter)}
+                >
+                  <ArrowRight className="size-3.5 shrink-0" />
+                  <span className="min-w-0 break-words">{starter}</span>
+                </Button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
+}
+
+function getOnboardingStarters(
+  currentSkill: WorkflowAssistantSkillSummary,
+  onboardingContext?: WorkflowAssistantOnboardingContext,
+) {
+  const declaredStarters = (currentSkill.starters || [])
+    .map((starter) => starter.trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  if (declaredStarters.length > 0) return declaredStarters;
+
+  const starters = [
+    `请按「${currentSkill.name}」的方法，先梳理本节点需要我补充的信息。`,
+    `请基于当前上下文，开始推进「${currentSkill.name}」。`,
+    '请给出本节点的输入模板，我补齐后再继续。',
+  ];
+
+  if ((onboardingContext?.upstreamOutputCount ?? 0) > 0) {
+    starters.unshift('请先总结前序产物，再说明本节点下一步怎么做。');
+  }
+
+  return starters.slice(0, 4);
 }
 
 function UserAttachmentList({
@@ -655,14 +759,17 @@ function WorkflowAssistantMessageRow({
   const stoppedMessageContent = message.role === 'assistant'
     ? getChatCancelledDisplayContent(message.content)
     : null;
+  const hasRunningToolCall = toolCalls.some((toolCall) => toolCall.status === 'running');
+  const hasProcessedToolCall = toolCalls.some((toolCall) => toolCall.status !== 'running');
   const shouldShowDocumentCard = message.role === 'assistant'
     && !stoppedMessageContent
     && shouldRenderDocumentCard(message);
   const renderThinkingIndicator = isRunningAssistantMessage
     && !message.content.trim()
-    && toolCalls.length === 0;
+    && (!toolCalls.length || hasRunningToolCall);
   const renderProcessingTimer = isRunningAssistantMessage
-    && Boolean(message.content.trim());
+    && (Boolean(message.content.trim()) || (hasProcessedToolCall && !hasRunningToolCall));
+  const thinkingLabel = toolCalls.length > 0 ? '正在处理工具结果' : '正在思考';
   const canCopyMessage = Boolean(displayMessageContent.trim());
   const isMessageCopied = copiedChatMessageKey === message.id;
 
@@ -707,71 +814,68 @@ function WorkflowAssistantMessageRow({
               {renderProcessingTimer && (
                 <AssistantProcessingTimer seconds={currentProcessingElapsedSeconds} />
               )}
-              {renderThinkingIndicator ? (
-                <AssistantThinkingIndicator />
-              ) : (
+              {renderThinkingIndicator && (
+                <AssistantThinkingIndicator label={thinkingLabel} />
+              )}
+              {message.role === 'assistant' ? (
                 <>
-                  {message.role === 'assistant' ? (
-                    <>
-                      <AssistantMessageParts onOpenImagePreview={onOpenImagePreview} />
-                      <SourceCitationList id={`${message.id}-sources`} citations={visibleSourceCitations} />
-                    </>
-                  ) : (
-                    <div
-                      className="w-fit min-w-0 max-w-full overflow-hidden break-words rounded-lg bg-primary p-3 text-sm text-primary-foreground [overflow-wrap:anywhere]"
-                    >
-                      <div className="flex min-w-0 max-w-full flex-col gap-2">
-                        {message.attachments && message.attachments.length > 0 && (
-                          <UserAttachmentList
-                            attachments={message.attachments}
-                            onOpenImagePreview={onOpenImagePreview}
-                            formatFileSize={formatFileSize}
-                          />
-                        )}
-                        {message.content.trim() && (
-                          <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-                            {message.content}
-                          </div>
-                        )}
+                  <AssistantMessageParts onOpenImagePreview={onOpenImagePreview} />
+                  <SourceCitationList id={`${message.id}-sources`} citations={visibleSourceCitations} />
+                </>
+              ) : (
+                <div
+                  className="w-fit min-w-0 max-w-full overflow-hidden break-words rounded-lg bg-primary p-3 text-sm text-primary-foreground [overflow-wrap:anywhere]"
+                >
+                  <div className="flex min-w-0 max-w-full flex-col gap-2">
+                    {message.attachments && message.attachments.length > 0 && (
+                      <UserAttachmentList
+                        attachments={message.attachments}
+                        onOpenImagePreview={onOpenImagePreview}
+                        formatFileSize={formatFileSize}
+                      />
+                    )}
+                    {message.content.trim() && (
+                      <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+                        {message.content}
                       </div>
-                    </div>
-                  )}
-                  <div
-                    className={cn(
-                      'flex h-6 items-center gap-2 text-xs text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100',
-                      message.role === 'user' ? 'self-end' : 'self-start',
-                    )}
-                  >
-                    {message.messageTime && (
-                      <time className="leading-none" dateTime={message.messageCreatedAt}>
-                        {message.messageTime}
-                      </time>
-                    )}
-                    {canCopyMessage && (
-                      <button
-                        type="button"
-                        className={cn(
-                          'group/copy relative flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground',
-                          isMessageCopied && 'bg-success/10 text-success hover:bg-success/10 hover:text-success',
-                        )}
-                        onClick={() => {
-                          void onCopyMessage(displayMessageContent, message.id);
-                        }}
-                        aria-label={isMessageCopied ? '消息已复制' : '复制消息'}
-                      >
-                        <span className="pointer-events-none absolute bottom-full left-1/2 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded-md border border-border/60 bg-popover px-2 py-1 text-xs font-medium text-popover-foreground opacity-0 shadow-md transition-opacity delay-0 duration-150 group-hover/copy:delay-[1000ms] group-hover/copy:opacity-100 group-focus-visible/copy:delay-[1000ms] group-focus-visible/copy:opacity-100">
-                          {isMessageCopied ? '已复制' : '复制'}
-                        </span>
-                        {isMessageCopied ? (
-                          <Check className="size-4" />
-                        ) : (
-                          <Copy className="size-4" />
-                        )}
-                      </button>
                     )}
                   </div>
-                </>
+                </div>
               )}
+              <div
+                className={cn(
+                  'flex h-6 items-center gap-2 text-xs text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100',
+                  message.role === 'user' ? 'self-end' : 'self-start',
+                )}
+              >
+                {message.messageTime && (
+                  <time className="leading-none" dateTime={message.messageCreatedAt}>
+                    {message.messageTime}
+                  </time>
+                )}
+                {canCopyMessage && (
+                  <button
+                    type="button"
+                    className={cn(
+                      'group/copy relative flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground',
+                      isMessageCopied && 'bg-success/10 text-success hover:bg-success/10 hover:text-success',
+                    )}
+                    onClick={() => {
+                      void onCopyMessage(displayMessageContent, message.id);
+                    }}
+                    aria-label={isMessageCopied ? '消息已复制' : '复制消息'}
+                  >
+                    <span className="pointer-events-none absolute bottom-full left-1/2 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded-md border border-border/60 bg-popover px-2 py-1 text-xs font-medium text-popover-foreground opacity-0 shadow-md transition-opacity delay-0 duration-150 group-hover/copy:delay-[1000ms] group-hover/copy:opacity-100 group-focus-visible/copy:delay-[1000ms] group-focus-visible/copy:opacity-100">
+                      {isMessageCopied ? '已复制' : '复制'}
+                    </span>
+                    {isMessageCopied ? (
+                      <Check className="size-4" />
+                    ) : (
+                      <Copy className="size-4" />
+                    )}
+                  </button>
+                )}
+              </div>
             </>
           )}
         </div>
@@ -990,6 +1094,8 @@ export function WorkflowAssistantThread({
   shouldRenderDocumentCard,
   renderDocumentCard,
   formatFileSize,
+  onboardingContext,
+  onUseStarter,
   pendingHumanInput,
   onRespondHumanInput,
 }: WorkflowAssistantThreadProps) {
@@ -1062,7 +1168,12 @@ export function WorkflowAssistantThread({
               onDownloadStepOutput={onDownloadStepOutput}
             />
           ) : messages.length === 0 && currentSkill && !pendingHumanInput ? (
-            <StepStartGuide currentStep={currentStep} currentSkill={currentSkill} />
+            <StepStartGuide
+              currentStep={currentStep}
+              currentSkill={currentSkill}
+              onboardingContext={onboardingContext}
+              onUseStarter={onUseStarter}
+            />
           ) : (
             <div className="w-full min-w-0 max-w-full space-y-4 overflow-x-hidden">
               <ThreadPrimitive.Messages>

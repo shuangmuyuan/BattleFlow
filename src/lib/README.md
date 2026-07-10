@@ -21,10 +21,10 @@ Shared application logic.
 - Keep file content sizes bounded before storing inline.
 - Treat imported Skills and uploaded files as untrusted input.
 - Do not move registry state into tracked source directories.
-- Treat `SKILL.md` as the source of truth for method instructions. Registry fields such as methodology, checklist, prompt template, and outputs are compatibility projections, not separate canonical data.
+- Treat `SKILL.md` as the source of truth for method instructions. Registry fields such as methodology, checklist, starters, prompt template, and outputs are compatibility projections, not separate canonical data.
 - Keep Skill identity and presentation separate: `skill_id` is the logical duplicate/update key, `id` is the internal registry record key, and `display_name` is the human-facing label.
 - Keep review work separate from usable Skills. Team imports and personal publish submissions create `review_requests`; only approval creates or updates a team Skill.
-- Skill validation contract fields (`acceptanceCriteria`, `requiredSections`, `evidenceRules`, `failureConditions`) are optional compatibility fields. Preserve them when importing, normalizing, serializing, tuning, or projecting Skills.
+- Skill validation contract fields (`acceptanceCriteria`, `requiredSections`, `evidenceRules`, `failureConditions`) and onboarding starter prompts are optional compatibility fields. Preserve them when importing, normalizing, serializing, tuning, or projecting Skills.
 
 ## Workflow Validation Rules
 
@@ -53,5 +53,5 @@ Shared application logic.
 
 - Keep CLI permissions conservative.
 - Preserve stream-json parsing and error events.
-- Do not enable tools, HITL surfaces, or persistent sessions without updating `docs/SECURITY.md`.
+- Do not change tools, HITL surfaces, session persistence, or session resume behavior without updating `docs/SECURITY.md`.
 - Keep HITL pending state display-oriented and tied to authorized chat runs; `/api/chat/respond` must authorize from the stored run workflow, not client-supplied workflow IDs.

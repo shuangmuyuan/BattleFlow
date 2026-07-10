@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   assertSkillPackageSpec,
+  deriveSkillRuntimeFields,
+  normalizeSkillStarters,
   renderStandardSkillTemplateMarkdown,
   validateSkillPackageSpec,
 } from './skill-registry';
@@ -72,5 +74,68 @@ describe('skill package specification validation', () => {
       validationContract: {},
       contentMd: '',
     })).not.toThrow();
+  });
+});
+
+describe('skill starter metadata projection', () => {
+  it('normalizes starter prompts with trimming, dedupe, and a bounded list', () => {
+    expect(normalizeSkillStarters([
+      '  Start with the current product context  ',
+      'Start with the current product context',
+      '',
+      'Confirm the target users',
+      'Map the core workflow',
+      'Draft acceptance criteria',
+      'Summarize open questions',
+      'Prepare a review checklist',
+      'Ignored overflow starter',
+    ])).toEqual([
+      'Start with the current product context',
+      'Confirm the target users',
+      'Map the core workflow',
+      'Draft acceptance criteria',
+      'Summarize open questions',
+      'Prepare a review checklist',
+    ]);
+  });
+
+  it('derives starters from definition before metadata and markdown sections', () => {
+    const runtime = deriveSkillRuntimeFields(
+      [
+        '---',
+        'name: starter-skill',
+        'starters: ["Metadata starter"]',
+        '---',
+        '# Starter Skill',
+        '',
+        '## Starters',
+        '- Markdown starter',
+      ].join('\n'),
+      {
+        definition: {
+          starters: ['Definition starter'],
+        },
+      },
+    );
+
+    expect(runtime.starters).toEqual(['Definition starter']);
+  });
+
+  it('falls back to markdown starter sections when metadata does not define starters', () => {
+    const runtime = deriveSkillRuntimeFields(
+      [
+        '---',
+        'name: starter-skill',
+        '---',
+        '# Starter Skill',
+        '',
+        '## Starter Prompts',
+        '- First useful prompt',
+        '- Second useful prompt',
+      ].join('\n'),
+      {},
+    );
+
+    expect(runtime.starters).toEqual(['First useful prompt', 'Second useful prompt']);
   });
 });

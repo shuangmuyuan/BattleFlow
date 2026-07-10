@@ -26,7 +26,6 @@ source /Users/lichunhe/Documents/Playground/BattleFlow/.env
 set +a
 BATTLEFLOW_WORKSPACE_PATH="$(pwd)" \
 CLAUDE_WORKSPACE_DIR="$(pwd)" \
-CLAUDE_COMMAND=claude \
 BATTLEFLOW_CLAUDE_TOOLS=Read,Grep,Glob,WebSearch,WebFetch,Write,Edit \
 DEPLOY_RUN_PORT=5101 \
 pnpm dev
@@ -42,7 +41,6 @@ PORT=5101 \
 DEPLOY_RUN_PORT=5101 \
 BATTLEFLOW_WORKSPACE_PATH="$(pwd)" \
 CLAUDE_WORKSPACE_DIR="$(pwd)" \
-CLAUDE_COMMAND=claude \
 BATTLEFLOW_CLAUDE_TOOLS=Read,Grep,Glob,WebSearch,WebFetch,Write,Edit \
 ./node_modules/.bin/tsx watch src/server.ts
 ```
@@ -148,7 +146,7 @@ The local route is `POST /api/demos/handoffs` with `{ workflowId, stepId }`. It 
 | `SKILL_REGISTRY_DIR` | File-backed Skill registry root. |
 | `SKILL_IMPORT_ROOTS` | Allowed server-path roots for Skill imports. |
 | `WORKFLOW_REGISTRY_DIR` | File-backed workflow registry root. |
-| `CLAUDE_COMMAND` | Claude Code CLI command, defaults to `claude`. |
+| `CLAUDE_COMMAND` | Optional custom Claude Code executable for the Agent SDK. Leave unset to use the version-matched runtime bundled with `@anthropic-ai/claude-agent-sdk`. Legacy CLI helper flows still default to the `claude` executable. |
 | `CLAUDE_MODEL` | Claude model alias, defaults to `sonnet`. |
 | `CLAUDE_WORKSPACE_DIR` | Working directory for Claude CLI turns. |
 | `BATTLEFLOW_CLAUDE_TOOLS` | Optional comma-separated Claude Code tools for SDK-backed workflow chat and CLI-backed helper flows. `Read`, `Grep`, `Glob`, `WebSearch`, `WebFetch`, `Write`, and `Edit` are accepted for SDK workflow chat; `Write` and `Edit` are guarded to the active node cwd. Legacy CLI helper calls filter this value back to the read/web subset. `MultiEdit`, `Bash`, and unknown tools are ignored. Local `pnpm dev` and production `pnpm start` default to `Read,Grep,Glob,WebSearch,WebFetch,Write,Edit` unless explicitly overridden. |

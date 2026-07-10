@@ -42,12 +42,26 @@ import type {
 } from './types';
 
 const MUTATING_WRITE_TOOLS = ['Write', 'Edit'];
-const UNSUPPORTED_WRITE_TOOLS = ['MultiEdit', 'Bash'];
-const NON_NODE_DISALLOWED_TOOLS = ['Skill', ...MUTATING_WRITE_TOOLS, ...UNSUPPORTED_WRITE_TOOLS];
+const UNSUPPORTED_CLAUDE_TOOLS = ['MultiEdit', 'Bash', 'Agent'];
+const DISALLOWED_MCP_TOOL_PATTERN = 'mcp__*';
+const NON_NODE_DISALLOWED_TOOLS = ['Skill', ...MUTATING_WRITE_TOOLS, ...UNSUPPORTED_CLAUDE_TOOLS, DISALLOWED_MCP_TOOL_PATTERN];
 const PROTECTED_NODE_PATH_SEGMENTS = new Set(['.claude']);
 const PROTECTED_NODE_FILE_NAMES = new Set(['.battleflow-node-workspace.json']);
 const TOOL_PATH_KEYS = ['file_path', 'filePath', 'path'];
+const READABLE_FILE_TOOLS = new Set(['Read', 'Grep', 'Glob']);
 const ASK_USER_QUESTION_DIALOG_KINDS = ['ask_user_question', 'AskUserQuestion'];
+const UNAVAILABLE_TOOL_ERROR_PATTERN = /No such tool available|exists but is not enabled|Use one of the available tools instead|invalid tool call/i;
+
+type ToolPolicyValidation = { allowed: true; targetPath?: string } | { allowed: false; reason: string };
+
+interface NodeToolPolicy {
+  allowedTools: Set<string>;
+  allowedSkills: Set<string>;
+  configuredTools: string[];
+  cwd: string;
+  readableRoots: string[];
+  writableRoot: string | null;
+}
 
 function getClaudeSdkExecutablePath() {
   const command = process.env.CLAUDE_COMMAND?.trim();
@@ -119,6 +133,22 @@ function getThrownErrorText(error: unknown) {
   ) || 'Claude Agent SDK request failed';
 }
 
+function getToolRuntimeErrorText(...values: unknown[]): string {
+  return values.flatMap((value) => {
+    if (typeof value === 'string') return [value];
+    if (Array.isArray(value)) return value.map((item) => getToolRuntimeErrorText(item)).filter(Boolean);
+    if (isRecord(value)) {
+      return Object.values(value).map((item) => getToolRuntimeErrorText(item)).filter(Boolean);
+    }
+    return [];
+  }).join('\n');
+}
+
+function isUnavailableToolRuntimeError(...values: unknown[]) {
+  const text = getToolRuntimeErrorText(...values);
+  return Boolean(text && UNAVAILABLE_TOOL_ERROR_PATTERN.test(text));
+}
+
 function getClaudeSettingsPath() {
   const explicitPath = process.env.BATTLEFLOW_CLAUDE_SETTINGS_PATH?.trim()
     || process.env.CLAUDE_SETTINGS_PATH?.trim();
@@ -178,6 +208,14 @@ function getCanonicalWriteToolName(toolName: string) {
   return null;
 }
 
+function getCanonicalReadableToolName(toolName: string) {
+  const normalized = toolName.trim().toLowerCase();
+  if (normalized === 'read') return 'Read';
+  if (normalized === 'grep') return 'Grep';
+  if (normalized === 'glob') return 'Glob';
+  return null;
+}
+
 function getConfiguredWriteTools(configuredTools: string[]) {
   return configuredTools.filter((tool) => getCanonicalWriteToolName(tool));
 }
@@ -185,6 +223,11 @@ function getConfiguredWriteTools(configuredTools: string[]) {
 function buildAllowedTools(configuredTools: string[], requireWriteApproval: boolean) {
   if (!requireWriteApproval) return configuredTools;
   return configuredTools.filter((tool) => !getCanonicalWriteToolName(tool));
+}
+
+function buildSdkTools(configuredTools: string[], hasProjectSkills: boolean) {
+  if (!hasProjectSkills || configuredTools.includes('Skill')) return configuredTools;
+  return [...configuredTools, 'Skill'];
 }
 
 function getNodeWritableRoot(input: AgentTurnInput) {
@@ -205,7 +248,7 @@ function buildDisallowedTools(configuredTools: string[], hasProjectSkills: boole
   for (const tool of MUTATING_WRITE_TOOLS) {
     if (!writableRoot || !configured.has(tool)) disallowed.push(tool);
   }
-  return [...disallowed, ...UNSUPPORTED_WRITE_TOOLS];
+  return [...disallowed, ...UNSUPPORTED_CLAUDE_TOOLS, DISALLOWED_MCP_TOOL_PATTERN];
 }
 
 function extractToolTargetPath(input: Record<string, unknown>) {
@@ -214,6 +257,29 @@ function extractToolTargetPath(input: Record<string, unknown>) {
     if (typeof value === 'string') return value.trim();
   }
   return '';
+}
+
+function extractStringInput(input: Record<string, unknown>, key: string) {
+  const value = input[key];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function isMcpToolName(toolName: string) {
+  return toolName.startsWith('mcp__');
+}
+
+function hasParentPathSegment(value: string) {
+  return value.split(/[\\/]+/).includes('..');
+}
+
+function getStaticGlobPrefix(pattern: string) {
+  const trimmed = pattern.trim();
+  if (!trimmed) return '';
+  const firstGlobIndex = trimmed.search(/[*?[{]/);
+  if (firstGlobIndex < 0) return trimmed;
+  const staticPrefix = trimmed.slice(0, firstGlobIndex);
+  const lastSeparator = Math.max(staticPrefix.lastIndexOf('/'), staticPrefix.lastIndexOf('\\'));
+  return lastSeparator < 0 ? '' : staticPrefix.slice(0, lastSeparator + 1);
 }
 
 function isAskUserQuestionDialogKind(dialogKind: string) {
@@ -325,10 +391,12 @@ function getPermissionDecision(response: AgentHumanInputResponse): 'allow' | 'de
 function buildHumanPermissionResult(
   options: Parameters<CanUseTool>[2],
   response: AgentHumanInputResponse,
+  input: Record<string, unknown>,
 ): PermissionResult {
   if (getPermissionDecision(response) === 'allow') {
     return {
       behavior: 'allow',
+      updatedInput: input,
       toolUseID: options.toolUseID,
     };
   }
@@ -378,11 +446,126 @@ function isProtectedNodePath(targetPath: string, writableRoot: string) {
   return PROTECTED_NODE_PATH_SEGMENTS.has(firstSegment) || PROTECTED_NODE_FILE_NAMES.has(path.basename(targetPath));
 }
 
+function isProtectedNodeReadPath(targetPath: string, cwd: string) {
+  if (!isPathInside(targetPath, cwd)) return false;
+  const relative = path.relative(cwd, targetPath);
+  const [firstSegment, secondSegment] = relative.split(path.sep);
+  if (PROTECTED_NODE_FILE_NAMES.has(path.basename(targetPath))) return true;
+  if (!PROTECTED_NODE_PATH_SEGMENTS.has(firstSegment)) return false;
+  return secondSegment !== 'skills';
+}
+
+function buildReadableRoots(cwd: string, readableDirectories: string[] | undefined) {
+  const roots = [
+    cwd,
+    ...normalizeReadableDirectories(readableDirectories),
+  ];
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  for (const root of roots) {
+    const resolved = path.resolve(root);
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    normalized.push(resolved);
+  }
+
+  return normalized;
+}
+
+function buildNodeToolPolicy(input: AgentTurnInput, configuredTools: string[], cwd: string): NodeToolPolicy {
+  const skills = normalizeSkillNames(input.skills);
+  const hasProjectSkills = skills.length > 0;
+  const writableRoot = getNodeWritableRoot(input);
+  const allowedTools = new Set(configuredTools);
+  if (hasProjectSkills) allowedTools.add('Skill');
+  if (typeof input.onHumanInputRequest === 'function') {
+    for (const dialogKind of ASK_USER_QUESTION_DIALOG_KINDS) {
+      allowedTools.add(dialogKind);
+    }
+  }
+
+  return {
+    allowedTools,
+    allowedSkills: new Set(skills),
+    configuredTools,
+    cwd: path.resolve(cwd),
+    readableRoots: buildReadableRoots(cwd, input.readableDirectories),
+    writableRoot,
+  };
+}
+
+async function validateResolvedPathInRoots(
+  toolName: string,
+  rawPath: string,
+  policy: NodeToolPolicy,
+): Promise<ToolPolicyValidation> {
+  if (!rawPath) {
+    return { allowed: false, reason: `${toolName} requires a path inside the current workflow node directory or an approved readable directory.` };
+  }
+
+  const targetPath = path.isAbsolute(rawPath)
+    ? path.resolve(rawPath)
+    : path.resolve(policy.cwd, rawPath);
+
+  if (isProtectedNodeReadPath(targetPath, policy.cwd)) {
+    return { allowed: false, reason: `${toolName} cannot read BattleFlow runtime metadata in the workflow node directory.` };
+  }
+
+  for (const root of policy.readableRoots) {
+    const resolvedRoot = path.resolve(root);
+    if (!isPathInside(targetPath, resolvedRoot)) continue;
+
+    const realRoot = await fs.realpath(resolvedRoot).catch(() => resolvedRoot);
+    const realTarget = await realPathOrNull(targetPath);
+    if (realTarget) {
+      return isPathInside(realTarget, realRoot)
+        ? { allowed: true, targetPath }
+        : { allowed: false, reason: `${toolName} resolved outside the approved BattleFlow runtime directories.` };
+    }
+
+    const ancestor = await findExistingAncestor(path.dirname(targetPath), resolvedRoot);
+    const realAncestor = await fs.realpath(ancestor).catch(() => ancestor);
+    const realCandidate = path.resolve(realAncestor, path.relative(ancestor, targetPath));
+    return isPathInside(realCandidate, realRoot)
+      ? { allowed: true, targetPath }
+      : { allowed: false, reason: `${toolName} parent directory resolves outside the approved BattleFlow runtime directories.` };
+  }
+
+  return { allowed: false, reason: `${toolName} can only access the current workflow node directory and approved BattleFlow readable directories.` };
+}
+
+async function validateReadToolPath(
+  policy: NodeToolPolicy,
+  toolName: 'Read' | 'Grep' | 'Glob',
+  input: Record<string, unknown>,
+): Promise<ToolPolicyValidation> {
+  if (toolName === 'Read') {
+    return validateResolvedPathInRoots(toolName, extractToolTargetPath(input), policy);
+  }
+
+  if (toolName === 'Grep') {
+    const include = extractStringInput(input, 'include');
+    if (include && (path.isAbsolute(include) || hasParentPathSegment(include))) {
+      return { allowed: false, reason: 'Grep include patterns cannot target paths outside approved BattleFlow runtime directories.' };
+    }
+    return validateResolvedPathInRoots(toolName, extractStringInput(input, 'path') || '.', policy);
+  }
+
+  const pattern = extractStringInput(input, 'pattern');
+  const explicitPath = extractStringInput(input, 'path');
+  if (explicitPath) {
+    return validateResolvedPathInRoots(toolName, explicitPath, policy);
+  }
+  const staticPrefix = getStaticGlobPrefix(pattern);
+  return validateResolvedPathInRoots(toolName, staticPrefix || '.', policy);
+}
+
 async function validateWritableToolPath(
   writableRoot: string,
   toolName: string,
   input: Record<string, unknown>,
-): Promise<{ allowed: true; targetPath: string } | { allowed: false; reason: string }> {
+): Promise<ToolPolicyValidation> {
   const canonicalToolName = getCanonicalWriteToolName(toolName);
   if (!canonicalToolName) return { allowed: true, targetPath: writableRoot };
 
@@ -418,13 +601,56 @@ async function validateWritableToolPath(
     : { allowed: false, reason: `${canonicalToolName} parent directory resolves outside the current workflow node directory.` };
 }
 
+async function validateToolPolicy(
+  policy: NodeToolPolicy,
+  toolName: string,
+  input: Record<string, unknown>,
+): Promise<ToolPolicyValidation> {
+  if (isMcpToolName(toolName)) {
+    return { allowed: false, reason: `${toolName} is blocked because BattleFlow does not enable MCP tools for workflow chat.` };
+  }
+
+  if (!policy.allowedTools.has(toolName)) {
+    const configured = policy.configuredTools.length > 0 ? policy.configuredTools.join(', ') : 'none';
+    return { allowed: false, reason: `${toolName} is not in BattleFlow's configured Claude tool set (${configured}).` };
+  }
+
+  if (toolName === 'Skill') {
+    const skillName = extractStringInput(input, 'skill') || extractStringInput(input, 'name');
+    if (!skillName) {
+      return { allowed: false, reason: 'Skill requires the name of the Skill bound to the current workflow node.' };
+    }
+    if (!policy.allowedSkills.has(skillName)) {
+      return { allowed: false, reason: `Skill can only invoke the Skill bound to the current workflow node, not ${skillName}.` };
+    }
+    return { allowed: true };
+  }
+
+  const readToolName = getCanonicalReadableToolName(toolName);
+  if (readToolName && READABLE_FILE_TOOLS.has(readToolName)) {
+    return validateReadToolPath(policy, readToolName, input);
+  }
+
+  const writeToolName = getCanonicalWriteToolName(toolName);
+  if (writeToolName) {
+    if (!policy.writableRoot) {
+      return { allowed: false, reason: `${writeToolName} is only available inside a workflow node write directory.` };
+    }
+    return validateWritableToolPath(policy.writableRoot, writeToolName, input);
+  }
+
+  return { allowed: true };
+}
+
 function buildWritePermissionResult(
   options: Parameters<CanUseTool>[2],
-  validation: Awaited<ReturnType<typeof validateWritableToolPath>>,
+  validation: ToolPolicyValidation,
+  input: Record<string, unknown>,
 ): PermissionResult {
   if (validation.allowed) {
     return {
       behavior: 'allow',
+      updatedInput: input,
       toolUseID: options.toolUseID,
     };
   }
@@ -437,15 +663,9 @@ function buildWritePermissionResult(
   };
 }
 
-function buildPreToolUseOutput(validation: Awaited<ReturnType<typeof validateWritableToolPath>>): HookJSONOutput {
+function buildPreToolUseOutput(validation: ToolPolicyValidation): HookJSONOutput {
   if (validation.allowed) {
-    return {
-      continue: true,
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'allow',
-      },
-    };
+    return { continue: true };
   }
 
   return {
@@ -460,15 +680,15 @@ function buildPreToolUseOutput(validation: Awaited<ReturnType<typeof validateWri
   };
 }
 
-function buildNodeWriteGuard(
-  writableRoot: string,
+function buildNodeToolPolicyGuard(
+  policy: NodeToolPolicy,
   onHumanInputRequest?: AgentTurnInput['onHumanInputRequest'],
   emit?: (event: AgentEvent) => void,
 ): Pick<Options, 'canUseTool' | 'hooks'> {
   const canUseTool: CanUseTool = async (toolName, input, options) => {
-    const validation = await validateWritableToolPath(writableRoot, toolName, input);
+    const validation = await validateToolPolicy(policy, toolName, input);
     if (!validation.allowed || !getCanonicalWriteToolName(toolName) || !onHumanInputRequest) {
-      return buildWritePermissionResult(options, validation);
+      return buildWritePermissionResult(options, validation, input);
     }
 
     const request = buildToolPermissionRequest(toolName, input, options);
@@ -476,14 +696,14 @@ function buildNodeWriteGuard(
     try {
       const response = await onHumanInputRequest(request, { signal: options.signal });
       emitHumanInputResolved(emit, request.id, response);
-      return buildHumanPermissionResult(options, response);
+      return buildHumanPermissionResult(options, response, input);
     } catch (error) {
       const response: AgentHumanInputResponse = {
         behavior: 'deny',
         message: getThrownErrorText(error),
       };
       emitHumanInputResolved(emit, request.id, response);
-      return buildHumanPermissionResult(options, response);
+      return buildHumanPermissionResult(options, response, input);
     }
   };
 
@@ -491,7 +711,7 @@ function buildNodeWriteGuard(
     hooks: [async (input: HookInput): Promise<HookJSONOutput> => {
       if (input.hook_event_name !== 'PreToolUse') return { continue: true };
       const toolInput = isRecord(input.tool_input) ? input.tool_input : {};
-      const validation = await validateWritableToolPath(writableRoot, input.tool_name, toolInput);
+      const validation = await validateToolPolicy(policy, input.tool_name, toolInput);
       return buildPreToolUseOutput(validation);
     }],
   }];
@@ -543,28 +763,34 @@ function buildClaudeAgentSdkOptions(
   const env = buildClaudeRuntimeEnv();
   const skills = normalizeSkillNames(input.skills);
   const hasProjectSkills = skills.length > 0;
+  const sdkTools = buildSdkTools(configuredTools, hasProjectSkills);
+  const cwd = input.cwd?.trim() || getClaudeWorkspaceDir();
+  const toolPolicy = buildNodeToolPolicy(input, configuredTools, cwd);
   const writableRoot = getNodeWritableRoot(input);
   const humanInputHandler = input.onHumanInputRequest;
   const hasHumanInputHandler = typeof humanInputHandler === 'function';
-  const writeGuard = writableRoot ? buildNodeWriteGuard(writableRoot, humanInputHandler, emit) : null;
+  const toolGuard = buildNodeToolPolicyGuard(toolPolicy, humanInputHandler, emit);
   const onUserDialog = hasHumanInputHandler && emit
     ? buildUserDialogHandler(humanInputHandler, emit)
     : undefined;
   const requireWriteApproval = Boolean(writableRoot && hasHumanInputHandler);
+  const resumeSessionId = input.resumeSessionId?.trim();
 
   return {
     abortController,
     additionalDirectories: normalizeReadableDirectories(input.readableDirectories),
     allowedTools: buildAllowedTools(configuredTools, requireWriteApproval),
-    cwd: input.cwd?.trim() || getClaudeWorkspaceDir(),
+    cwd,
     disallowedTools: buildDisallowedTools(configuredTools, hasProjectSkills, writableRoot),
     env,
-    ...(writeGuard || {}),
+    ...toolGuard,
     includePartialMessages: true,
+    mcpServers: {},
     model: getClaudeModel(),
     ...(executablePath ? { pathToClaudeCodeExecutable: executablePath } : {}),
-    permissionMode: 'dontAsk',
-    persistSession: false,
+    permissionMode: requireWriteApproval ? 'default' : 'dontAsk',
+    persistSession: true,
+    ...(resumeSessionId ? { resume: resumeSessionId } : {}),
     settingSources: hasProjectSkills ? ['project'] : [],
     ...(hasProjectSkills ? { skills } : {}),
     ...(onUserDialog ? {
@@ -577,7 +803,8 @@ function buildClaudeAgentSdkOptions(
       },
     } : {}),
     systemPrompt: input.systemPrompt,
-    tools: configuredTools,
+    strictMcpConfig: true,
+    tools: sdkTools,
   };
 }
 
@@ -586,6 +813,7 @@ export async function checkClaudeAgentSdkRuntime(): Promise<AgentRuntimeStatus> 
   const cwd = getClaudeWorkspaceDir();
   const configuredTools = getConfiguredClaudeTools();
   const writeTools = getConfiguredWriteTools(configuredTools);
+  const disallowedTools = [...UNSUPPORTED_CLAUDE_TOOLS, DISALLOWED_MCP_TOOL_PATTERN];
   const command = getClaudeSdkCommandLabel();
   const env = buildClaudeRuntimeEnv();
   const hasCredentials = hasClaudeAgentSdkCredentials(env);
@@ -608,6 +836,10 @@ export async function checkClaudeAgentSdkRuntime(): Promise<AgentRuntimeStatus> 
     outputFormat: 'sdk-message',
     toolsEnabled: configuredTools.length > 0,
     tools: configuredTools,
+    disallowedTools,
+    readGuardEnabled: true,
+    strictMcpConfig: true,
+    toolGuardEnabled: true,
     writeToolsEnabled: writeTools.length > 0,
     writeTools,
     writeGuardEnabled: true,
@@ -782,18 +1014,27 @@ export function streamClaudeAgentSdkTurn(input: AgentTurnInput) {
             for (const contentBlock of getContentBlocks(message)) {
               const toolResult = getToolResultFromContentBlock(contentBlock);
               if (!toolResult) continue;
+              const toolName = toolNamesById.get(toolResult.id) || 'Tool';
               const resultPreview = summarizeToolResult(message.tool_use_result, toolResult.resultPreview)
                 || toolResult.resultPreview;
               const result = normalizeToolResult(message.tool_use_result, toolResult.result);
               emit(buildToolCallEvent({
                 id: toolResult.id,
-                name: toolNamesById.get(toolResult.id) || 'Tool',
+                name: toolName,
                 status: toolResult.isError ? 'failed' : 'completed',
                 ...(result !== undefined ? { result } : {}),
                 resultPreview,
                 error: toolResult.isError ? resultPreview || 'Tool call failed' : undefined,
                 parentId: message.parent_tool_use_id || undefined,
               }));
+              if (toolResult.isError && isUnavailableToolRuntimeError(resultPreview, result, message.tool_use_result)) {
+                sdkQuery?.close();
+                closeWith({
+                  type: 'error',
+                  error: `${toolName} is not available in the current Claude runtime. Use only the configured BattleFlow tools for this workflow node.`,
+                });
+                return;
+              }
             }
             continue;
           }

@@ -87,7 +87,7 @@ Required flow:
    - if the current worktree has no `.env`, source the canonical `.env` or pass the same environment variables explicitly;
    - if the expected port is already occupied, inspect the process working directory and reuse that service or start this worktree on another port; do not stop an existing local BattleFlow service unless the user explicitly asks;
    - do not create a new local Postgres database and do not rerun migrations just because a worktree has no `.env`;
-   - for a one-off worktree run, prefer `set -a && source /Users/lichunhe/Documents/Playground/BattleFlow/.env && set +a` before `BATTLEFLOW_WORKSPACE_PATH="$(pwd)" CLAUDE_WORKSPACE_DIR="$(pwd)" CLAUDE_COMMAND=claude BATTLEFLOW_CLAUDE_TOOLS=Read,Grep,Glob,WebSearch,WebFetch,Write,Edit DEPLOY_RUN_PORT=5101 pnpm dev`;
+   - for a one-off worktree run, prefer `set -a && source /Users/lichunhe/Documents/Playground/BattleFlow/.env && set +a` before `BATTLEFLOW_WORKSPACE_PATH="$(pwd)" CLAUDE_WORKSPACE_DIR="$(pwd)" BATTLEFLOW_CLAUDE_TOOLS=Read,Grep,Glob,WebSearch,WebFetch,Write,Edit DEPLOY_RUN_PORT=5101 pnpm dev`; `scripts/dev.sh` ignores the legacy web-tools wrapper and lets the Agent SDK use its bundled Claude Code runtime unless a custom `CLAUDE_COMMAND` is explicitly configured;
    - if `GET /api/auth/me` returns `503` with `Authentication storage is not configured`, treat it as a missing runtime env problem first, not as a database bootstrap problem;
    - a healthy unauthenticated local service should return `401 Authentication required` from `/api/auth/me`, not `503`.
 6. Run the local database initialization scripts only when the local `battleflow` database or tables are actually missing:

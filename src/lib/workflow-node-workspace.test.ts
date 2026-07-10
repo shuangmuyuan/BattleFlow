@@ -123,6 +123,35 @@ describe('materializeNodeWorkspace', () => {
     }));
   });
 
+  it('materializes package assets when the package path is only present on asset metadata', async () => {
+    const packagePath = createPackage('skill-package-from-assets', '# Asset Metadata Skill\n\nUse the method.');
+
+    const workspace = await materializeNodeWorkspace({
+      organizationId: 'org-1',
+      workflowId: 'workflow-1',
+      stepId: 'step-1',
+      skill: createSkill({
+        versions: [{ version: '1.0.0', updated_at: '2026-07-08T00:00:00.000Z', changelog: '' }],
+        package_assets: [{
+          path: 'assets/template.md',
+          kind: 'template',
+          source_folder: 'assets',
+          mime_type: 'text/markdown',
+          size: 8,
+          content_kind: 'text',
+          package_path: packagePath,
+          absolute_path: path.join(packagePath, 'assets', 'template.md'),
+        }],
+      }),
+    });
+
+    expect(readFileSync(path.join(workspace.skillDirectory, 'SKILL.md'), 'utf8')).toContain('Asset Metadata Skill');
+    expect(readFileSync(path.join(workspace.skillDirectory, 'assets', 'template.md'), 'utf8')).toBe('Template');
+    expect(JSON.parse(readFileSync(workspace.metadataPath, 'utf8'))).toEqual(expect.objectContaining({
+      sourcePackagePath: realpathSync(packagePath),
+    }));
+  });
+
   it('skips symlinks when copying the Skill package', async () => {
     const packagePath = createPackage('skill-with-link', '# Linked Skill');
     const secretPath = path.join(tempRoot, 'secret.txt');

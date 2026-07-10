@@ -76,6 +76,7 @@ export interface SkillRecord extends SkillValidationContract {
   tools: string[];
   outputs: Record<string, unknown>;
   checklist: string[];
+  starters?: string[];
   prompt_template?: string;
   skill_md: string;
   meta_json: Record<string, unknown>;
@@ -152,6 +153,7 @@ export interface WorkflowSkillReviewInput {
   tools?: string[];
   outputs?: Record<string, unknown>;
   checklist?: string[];
+  starters?: string[];
   tags?: string[];
   prompt_template?: string;
   skill_md?: string;
@@ -380,6 +382,20 @@ function slugify(value: string) {
 function toStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+}
+
+export function normalizeSkillStarters(value: unknown): string[] {
+  const seen = new Set<string>();
+  return toStringArray(value)
+    .map((item) => item.trim().replace(/\s+/g, ' '))
+    .filter((item) => {
+      if (!item) return false;
+      const key = item.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 6);
 }
 
 function toRecord(value: unknown): Record<string, unknown> {
@@ -626,9 +642,28 @@ function parseMarkdownList(section: string) {
 }
 
 function extractMarkdownSection(markdown: string, headings: string[]) {
-  const escaped = headings.map((heading) => heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  const match = markdown.match(new RegExp(`^#{2,3}\\s*(?:${escaped})\\s*$([\\s\\S]*?)(?=^#{2,3}\\s+|\\s*$)`, 'im'));
-  return match?.[1]?.trim() || '';
+  const normalizedHeadings = new Set(headings.map((heading) => heading.trim().toLowerCase()));
+  const lines = markdown.split(/\r?\n/);
+  let startIndex = -1;
+
+  for (const [index, line] of lines.entries()) {
+    const match = line.match(/^#{2,3}\s+(.+?)\s*$/);
+    if (!match) continue;
+    if (normalizedHeadings.has(match[1].trim().toLowerCase())) {
+      startIndex = index + 1;
+      break;
+    }
+  }
+
+  if (startIndex < 0) return '';
+
+  const sectionLines: string[] = [];
+  for (let index = startIndex; index < lines.length; index += 1) {
+    if (/^#{2,3}\s+/.test(lines[index])) break;
+    sectionLines.push(lines[index]);
+  }
+
+  return sectionLines.join('\n').trim();
 }
 
 function extractMarkdownTitle(markdown: string) {
@@ -676,6 +711,21 @@ function deriveChecklist(contentMd: string, definition: Record<string, unknown>)
   ]));
 }
 
+function deriveStarters(contentMd: string, definition: Record<string, unknown>, metadata: Record<string, unknown>) {
+  const definedStarters = normalizeSkillStarters(definition.starters);
+  if (definedStarters.length > 0) return definedStarters;
+
+  const metadataStarters = normalizeSkillStarters(metadata.starters);
+  if (metadataStarters.length > 0) return metadataStarters;
+
+  return normalizeSkillStarters(parseMarkdownList(extractMarkdownSection(contentMd, [
+    'Starters',
+    'Starter Prompts',
+    '起手式',
+    '起始问题',
+  ])));
+}
+
 function deriveSkillDisplayName(skillMd: string, metadata: Record<string, unknown>, fallback: string) {
   return getString(
     metadata.display_name,
@@ -683,7 +733,7 @@ function deriveSkillDisplayName(skillMd: string, metadata: Record<string, unknow
   );
 }
 
-function deriveSkillRuntimeFields(skillMd: string, metadata: Record<string, unknown>) {
+export function deriveSkillRuntimeFields(skillMd: string, metadata: Record<string, unknown>) {
   const parsed = parseFrontmatter(skillMd);
   const mergedMeta = { ...parsed.metadata, ...metadata };
   const definition = toRecord(mergedMeta.definition);
@@ -698,6 +748,7 @@ function deriveSkillRuntimeFields(skillMd: string, metadata: Record<string, unkn
     tools: toStringArray(definition.tools).length ? toStringArray(definition.tools) : toStringArray(mergedMeta.tools),
     outputs: Object.keys(toRecord(definition.outputs)).length ? toRecord(definition.outputs) : toRecord(mergedMeta.outputs),
     checklist: deriveChecklist(contentMd, definition),
+    starters: deriveStarters(contentMd, definition, mergedMeta),
     prompt_template: getString(definition.prompt_template, extractMarkdownSection(contentMd, ['Prompt', '提示词模板', 'Prompt Template'])),
   };
 }
@@ -1074,6 +1125,7 @@ function normalizeSkillRecord(value: unknown): SkillRecord | null {
     tools: toStringArray(record.tools).length > 0 ? toStringArray(record.tools) : runtime.tools,
     outputs: Object.keys(toRecord(record.outputs)).length > 0 ? toRecord(record.outputs) : runtime.outputs,
     checklist: toStringArray(record.checklist).length > 0 ? toStringArray(record.checklist) : runtime.checklist,
+    starters: normalizeSkillStarters(record.starters).length > 0 ? normalizeSkillStarters(record.starters) : runtime.starters,
     ...validationContract,
     prompt_template: getString(record.prompt_template, runtime.prompt_template) || undefined,
     skill_md: skillMd,
@@ -1121,6 +1173,7 @@ function serializeSkillRecord(skill: SkillRecord): Record<string, unknown> {
     tools: skill.tools,
     outputs: skill.outputs,
     checklist: skill.checklist,
+    starters: skill.starters,
     prompt_template: skill.prompt_template,
     skill_md: skill.skill_md,
     meta_json: skill.meta_json,
@@ -1269,6 +1322,7 @@ function skillFromDatabaseRow(
     tools: toStringArray(definition.tools),
     outputs: toRecord(definition.outputs),
     checklist: toStringArray(definition.checklist),
+    starters: normalizeSkillStarters(definition.starters),
     prompt_template: getString(definition.prompt_template) || undefined,
     skill_md: getString(definition.skill_md),
     meta_json: toRecord(definition.meta_json),
@@ -1477,9 +1531,21 @@ async function hydrateSkillPackageAssets(skill: SkillRecord): Promise<SkillRecor
   }
 
   if (storedAssets.length > 0) {
+    const packageAssets = withPackageAssetRuntimePaths(storedAssets, packagePath);
     return {
       ...skill,
-      package_assets: withPackageAssetRuntimePaths(storedAssets, packagePath),
+      package_assets: packageAssets,
+      versions: skill.versions.map((version) => (
+        version.version === skill.version
+          ? {
+            ...version,
+            ...(packagePath ? { package_path: packagePath } : {}),
+            package_assets: Array.isArray(version.package_assets)
+              ? withPackageAssetRuntimePaths(normalizeStoredPackageAssets(version.package_assets), packagePath)
+              : packageAssets,
+          }
+          : version
+      )),
     };
   }
 
@@ -1495,8 +1561,14 @@ async function hydrateSkillPackageAssets(skill: SkillRecord): Promise<SkillRecor
     ...skill,
     package_assets: packageAssets,
     versions: skill.versions.map((version) => (
-      version.version === skill.version && !Array.isArray(version.package_assets)
-        ? { ...version, package_assets: packageAssets }
+      version.version === skill.version
+        ? {
+          ...version,
+          package_path: packagePath,
+          package_assets: Array.isArray(version.package_assets)
+            ? withPackageAssetRuntimePaths(normalizeStoredPackageAssets(version.package_assets), packagePath)
+            : packageAssets,
+        }
         : version
     )),
   };
@@ -1622,6 +1694,7 @@ async function loadSkillFromPackage(packagePath: string, options: ImportOptions 
 
   const methodology = deriveMethodology(contentMd, definition);
   const checklist = deriveChecklist(contentMd, definition);
+  const starters = deriveStarters(contentMd, definition, meta);
   const tools = toStringArray(definition.tools).length
     ? toStringArray(definition.tools)
     : toStringArray(meta.tools);
@@ -1676,6 +1749,7 @@ async function loadSkillFromPackage(packagePath: string, options: ImportOptions 
     tools,
     outputs,
     checklist,
+    starters,
     ...validationContract,
     prompt_template: getString(definition.prompt_template, extractMarkdownSection(contentMd, ['Prompt', '提示词模板', 'Prompt Template'])),
     skill_md: skillMd,
@@ -2414,6 +2488,7 @@ export async function createWorkflowSkillReview(input: WorkflowSkillReviewInput)
     tools: input.tools || baseSkill?.tools || [],
     outputs: input.outputs || baseSkill?.outputs || {},
     checklist: input.checklist || baseSkill?.checklist || [],
+    starters: normalizeSkillStarters(input.starters || baseSkill?.starters || []),
     prompt_template: cleanExecutableSkillText(input.prompt_template, baseSkill?.prompt_template || '', input.tuning_request),
   };
   const meta = {
@@ -2451,6 +2526,7 @@ export async function createWorkflowSkillReview(input: WorkflowSkillReviewInput)
     tools: definition.tools,
     outputs: definition.outputs,
     checklist: definition.checklist,
+    starters: definition.starters,
     prompt_template: definition.prompt_template,
     skill_md: skillMd,
     meta_json: meta,

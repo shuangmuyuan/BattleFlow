@@ -1,6 +1,6 @@
 # Skill 加载机制重构设计稿
 
-> 状态：设计讨论稿（未进入实现）。本稿聚焦 **Skill 加载机制、节点产物、Demo Handoff 适配、Agent SDK 迁移、HITL、自动上下文压缩**。Validation / self-check 与 snapshot 的适配不在本稿范围内，留待后续。
+> Status: phased implementation in progress. This document tracks the Skill loading mechanism, node artifacts, Demo Handoff adaptation, Agent SDK migration, HITL, session resume, automatic context compression, and node onboarding. Validation / self-check and snapshot adaptation remain separate work unless explicitly called out below.
 
 ## 1. 背景与目标
 
@@ -336,6 +336,15 @@ data/workflows/<orgId>/<wfId>/    (runtime, gitignored)
 - 依赖 §7 `manifest.json`：中段上游引用、起手式里的动态引用均取自它；无上游产物时中段隐藏。
 - 依赖 Skill 模型新增 `starters` 字段（可选）；registry 导入/规范化/序列化需比照现有 Skill 校验契约字段（`acceptanceCriteria` 等可选兼容字段）的处理方式**予以保留**。
 
+### 9.6 Phase 7 implementation note
+
+- Implemented the empty-thread Node Onboarding guide in `WorkflowAssistantThread`.
+- Skill `starters` are optional compatibility metadata. Import, normalization, serialization, Postgres/resource projection, workflow Skill drafts, and tuning preserve the field when present.
+- Starter values are normalized by trimming whitespace, removing empty entries, deduplicating case-insensitively, and capping the list at six stored entries; the onboarding UI displays up to four.
+- When no Skill starter is declared, the UI falls back to context-aware starter prompts derived from the active Skill name and upstream output availability.
+- Clicking a starter fills the active node composer draft and persists that per-step draft. It does not submit the message automatically.
+- The current UI shows upstream and shared artifact availability by count. Rich manifest item selection remains a follow-up once artifact manifest consumption is promoted into the onboarding card.
+
 ## 10. Demo Handoff 适配
 
 Demo Handoff（把完成节点交付到外部 Frieren Demo 平台）保持**节点作用域**不变，但内容来源从"原始 `step.output` markdown"切换为"该节点的 artifact"。
@@ -365,7 +374,7 @@ Demo Handoff（把完成节点交付到外部 Frieren Demo 平台）保持**节�
 | `spawn('claude','-p',...,stream-json)` | `query({ prompt, options })` 异步迭代 | 结构化消息流替代手写行解析 |
 | `cwd: getClaudeWorkspaceDir()` | `options.cwd = nodes/<stepId>/` | 每节点独立 |
 | `--add-dir <dirs>` | `options.additionalDirectories` | `artifacts/`(策略上只读) + `attachments/`；只读靠权限策略/Hook/服务端校验，不靠 addDir 字段 |
-| `--tools / --allowedTools` | `options.tools` + `options.allowedTools` + `disallowedTools` | `tools` 才是可用工具集合；`allowedTools` 只是自动批准集合。阶段 1 按 SDK 建议用 `options.skills` 启用当前 Skill，不再依赖 deprecated `allowedTools: ['Skill']`；阶段 3 再加 `Write`/`Edit` |
+| `--tools / --allowedTools` | `options.tools` + `options.allowedTools` + `disallowedTools` | `tools` 才是可用工具集合；`allowedTools` 只是自动批准集合。节点绑定 Skill 时，`Skill` 动态加入 `tools`，`options.skills: [currentSkillName]` 限定具体 Skill，并由 `PreToolUse` 再校验名称；阶段 3 再加 `Write`/`Edit` |
 | `--model CLAUDE_MODEL` | `options.model` | |
 | `--system-prompt-file` | `options.systemPrompt` | 直接传字符串，不再写临时文件 |
 | `--permission-mode dontAsk` | `options.permissionMode` + `canUseTool` | 见 §12 |
@@ -382,7 +391,7 @@ Demo Handoff（把完成节点交付到外部 Frieren Demo 平台）保持**节�
 - **替换**：`spawn` + 行缓冲 + `handleLine` 全部由迭代 `query()` 的 `SDKMessage` 取代；临时 system-prompt 文件写入取消。
 - **鉴权**：SDK 认 `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`。Docker Compose / 生产部署必须通过环境变量注入这些值，不依赖读取 `~/.claude/settings.json`；本地开发可以把 `~/.claude/settings.json` 的 `env` 字段作为 `BATTLEFLOW_PROJECT_ENV=DEV` 下的 fallback。
 - **阶段 0 等价性**：为保持现有行为，先设置 `persistSession: false`、不开 `Skill`/`Write`/`Edit`，`cwd` 仍沿用当前工作区；阶段 1 再切节点 cwd 与 project Skill 发现。
-- **阶段 1 实现备注**：SDK adapter 使用 `options.skills: [currentSkillName]` 作为启用 Skill 的权威机制；`allowedTools` 继续只镜像 `BATTLEFLOW_CLAUDE_TOOLS` 的读/检索工具用于自动批准。
+- **阶段 1 实现备注**：SDK adapter 在有节点 Skill 时把 `Skill` 加入 `options.tools`，同时使用 `options.skills: [currentSkillName]` 过滤发现结果；`allowedTools` 继续只镜像 `BATTLEFLOW_CLAUDE_TOOLS` 的基础工具用于自动批准。真实 `Skill` tool call 会映射到既有 `AgentEvent`，页面以专用调用卡片展示 Skill 名称和运行状态，不把节点绑定伪装成工具调用。
 - **hooks**：`PreToolUse`（越界写路径白名单）、`SessionStart`（注入 Skill 强制激活指令）在 `options.hooks` 挂载。注意：已被 `allowedTools` 自动批准的工具不会再进入 `canUseTool`，因此路径安全不能只放在 `canUseTool`。
 
 ## 12. HITL 人机协同
@@ -433,6 +442,14 @@ Demo Handoff（把完成节点交付到外部 Frieren Demo 平台）保持**节�
 - **turn 内保活**：单轮若含 HITL 暂停（§12），会话在该轮内保持打开直至恢复。
 - **精简手动注入**：知识库片段、附件清单等尽量下沉为按需 `Read`（附件已走 addDir），减少每轮塞进上下文的量，让压缩作用在干净会话上。
 - **边界**：会话与 stepId 绑定；节点重跑或工作流归档时废弃对应会话，避免脏历史串味。
+
+Phase 6 当前落地行为：
+
+- SDK adapter 开启本地 session persistence，并在有历史 `session_id` 时传入 `options.resume`。
+- `/api/chat` 在创建新 run 前按 `(orgId, workflowId, stepId)` 选择最近可恢复的同节点 session，并把 `resume_session_id` / `resume_source_run_id` 写入新 run metadata。
+- 有 `resume_session_id` 时，BattleFlow 只把当前用户消息传给 SDK，不再重放旧的 user/assistant 全量历史；没有历史 session 的首轮或旧数据仍走 bounded history fallback。
+- 如果 Claude 报告已保存的 SDK session 不存在，本轮 run 会清除 resume metadata、记录 `resume_failed_session_id` / `resume_failed_reason`，并用 bounded history fallback 自动重试，不把坏 session 句柄作为用户可见失败。
+- 当前未引入 SDK `sessionStore`，因此 Postgres 保存的是 resume handle，而 Claude transcript 仍由 Claude Code 本地 session persistence 管理。多实例要做到真正跨实例恢复，需要后续评估 session store 或共享 Claude session 存储。
 
 ## 14. 运行态可靠性与状态保持
 
@@ -491,9 +508,11 @@ idle ──► running ──► completed
 
 - **并行时序**：同一执行组内并行节点 A、B 同时跑，B 读不到 A 的产物（A 尚未 promote）。"下游复用上游"仅在**串行依赖或跨执行组**成立。并行分支应各自产出，由后续**汇总节点**消费。此约束与"串行/并行最终汇成一份文档"吻合。
 - **强制激活**：无 100% 机制保证，靠"物化只放 1 个 Skill" + "注入强指令"叠加逼近。
+- **Layer 1 implemented: Claude tool policy guard**：BattleFlow now installs a universal SDK `PreToolUse` guard. `Read`, `Grep`, and `Glob` are limited to the node cwd plus explicit readable directories, with parent traversal, absolute paths outside approved roots, sibling nodes, repo paths, node metadata, and symlink escapes denied. `Bash`, `Agent`, `MultiEdit`, and MCP tools are denied by the guard, with `strictMcpConfig: true` and an empty `mcpServers` map by default.
+- **TODO: hard filesystem isolation**：The Layer 1 guard is still a product/runtime policy, not an OS sandbox. `cwd` is not chroot. A future hard-isolation phase should run the Claude process in a container or sandbox that mounts only the node cwd, read-only artifacts, and minimal Claude auth/session storage, so `/app` and host paths are not visible to the file tools at all.
 - **安全前置顺序**：CWD 隔离必须先于开放 Write/Edit 落地；共享 Skill 副本、`artifacts/` 均设只读。开写权限是安全姿态变更，落地时需同步更新 `docs/SECURITY.md`、`scripts/start.sh`、`Dockerfile`、`docker-compose.yml` 的工具默认值，并覆盖 `/api/agent-runtime` 校验。
 - **磁盘生命周期**：节点目录随执行累积。工作流归档/删除时递归删 `data/workflows/<orgId>/<wfId>/`；再加按 mtime 的兜底 GC。
-- **会话生命周期**：`session_id` 与 run 状态一并存 Postgres 并与 stepId 关联；多实例共享、进程/实例重启后可恢复。节点重跑或工作流归档时废弃对应会话。
+- **会话生命周期**：`session_id` 与 run 状态一并存 Postgres 并与 stepId 关联；当前实现可在同一 Claude session 存储可见的环境中 resume。多实例完整恢复仍依赖后续共享 session store 或共享 Claude session 存储。节点重跑或工作流归档时废弃对应会话。
 - **死字段清理**：前端 `model_id: 'doubao-...'` 未被 adapter 使用，应清理。
 - **产物重跑**（已定）：重跑把当前 artifact 播种进 cwd，模型用 `Edit` 增量编辑（或从零重写）；`promoteArtifact` 覆盖当前版 + `version++`，历史可选留档（见 §7.6）。
 

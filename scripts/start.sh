@@ -11,10 +11,10 @@ BATTLEFLOW_CLAUDE_TOOLS="${BATTLEFLOW_CLAUDE_TOOLS:-Read,Grep,Glob,WebSearch,Web
 CLAUDE_WORKSPACE_DIR="${CLAUDE_WORKSPACE_DIR:-${BATTLEFLOW_WORKSPACE_PATH}}"
 
 if [[ "${CLAUDE_COMMAND:-}" == *"claude-web-tools-wrapper.sh" ]]; then
-    echo "Ignoring legacy Claude web-tools wrapper for production start; using claude directly."
+    echo "Ignoring legacy Claude web-tools wrapper for production start; using the Agent SDK bundled runtime."
     unset CLAUDE_COMMAND
 fi
-CLAUDE_COMMAND="${CLAUDE_COMMAND:-claude}"
+CLAUDE_COMMAND="${CLAUDE_COMMAND:-}"
 
 
 start_service() {
