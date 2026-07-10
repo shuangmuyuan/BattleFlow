@@ -10,7 +10,7 @@ import { cleanExecutableSkillText } from './workflow-skill-draft';
 const execFile = promisify(execFileCallback);
 
 export type SkillScope = 'personal' | 'team' | 'official';
-export type SkillSourceType = 'local' | 'registry' | 'git';
+export type SkillSourceType = 'local';
 export type SkillStatus = 'imported' | 'pending_review' | 'published' | 'rejected' | 'archived';
 export type SkillVersionBump = 'patch' | 'minor' | 'major';
 export type SkillPackageAssetKind = 'attachment' | 'script' | 'template' | 'tool' | 'reference' | 'example' | 'task' | 'asset';
@@ -570,10 +570,6 @@ function getScope(value: unknown, fallback: SkillScope): SkillScope {
   return value === 'personal' || value === 'team' || value === 'official' ? value : fallback;
 }
 
-function getSourceType(value: unknown, fallback: SkillSourceType): SkillSourceType {
-  return value === 'local' || value === 'registry' || value === 'git' ? value : fallback;
-}
-
 function getStatus(value: unknown, fallback: SkillStatus): SkillStatus {
   return value === 'imported' || value === 'pending_review' || value === 'published' || value === 'rejected' || value === 'archived'
     ? value
@@ -1117,7 +1113,7 @@ function normalizeSkillRecord(value: unknown): SkillRecord | null {
     version: getString(record.version, versions[0]?.version || '1.0.0'),
     author: getString(record.author, ''),
     tags: toStringArray(record.tags),
-    source_type: getSourceType(record.source_type, 'local'),
+    source_type: 'local',
     source_uri: getString(record.source_uri) || undefined,
     scope: getScope(record.scope, 'personal'),
     status: getStatus(record.status, 'imported'),
@@ -1632,29 +1628,6 @@ function buildReviewId(sourceId: string) {
   return `${REVIEW_ID_PREFIX}${sourcePart}-${suffix}`;
 }
 
-async function allowedImportRoots() {
-  const configured = (process.env.SKILL_IMPORT_ROOTS || '')
-    .split(':')
-    .map((item) => item.trim())
-    .filter(Boolean);
-  const candidates = [cwd, path.join(cwd, 'skills'), '/root/data', ...configured];
-  const existing = await Promise.all(candidates.map(async (candidate) => {
-    if (!(await pathExists(candidate))) return null;
-    return fs.realpath(candidate);
-  }));
-  return existing.filter((item): item is string => Boolean(item));
-}
-
-async function assertAllowedImportPath(inputPath: string) {
-  const realInput = await fs.realpath(inputPath);
-  const roots = await allowedImportRoots();
-  const allowed = roots.some((root) => realInput === root || realInput.startsWith(`${root}${path.sep}`));
-  if (!allowed) {
-    throw new Error(`Import path is outside allowed roots: ${inputPath}`);
-  }
-  return realInput;
-}
-
 async function findPackageRoot(inputPath: string) {
   const stat = await fs.stat(inputPath);
   if (stat.isFile()) return path.dirname(inputPath);
@@ -1727,7 +1700,7 @@ async function loadSkillFromPackage(packagePath: string, options: ImportOptions 
   const changelogVersions = parseChangelog(changelog);
   const currentChangelog = changelogVersions.find((item) => item.version === version)?.changelog || '导入当前版本。';
 
-  const sourceType = options.sourceType || getSourceType(meta.source_type, 'local');
+  const sourceType: SkillSourceType = 'local';
   const scope = options.scope || getScope(meta.scope, 'personal');
   const status = options.status || getStatus(meta.status, scope === 'team' ? 'pending_review' : 'imported');
   const packageAssets = await discoverPackageAssets(packagePath);
@@ -1739,7 +1712,7 @@ async function loadSkillFromPackage(packagePath: string, options: ImportOptions 
     name: displayName,
     description,
     version,
-    author: getString(meta.author, options.sourceType === 'git' ? 'External Git Repository' : 'BattleFlow Team'),
+    author: getString(meta.author, 'BattleFlow Team'),
     tags: toStringArray(meta.tags),
     source_type: sourceType,
     source_uri: options.sourceUri || getString(meta.source_uri, packagePath),
@@ -1790,14 +1763,14 @@ async function loadSeedSkills() {
       const packagePath = path.join(seedRoot, entry.name);
       const record = await loadSkillFromPackage(packagePath, {
         scope: 'official',
-        sourceType: 'registry',
+        sourceType: 'local',
         sourceUri: `official://${entry.name}`,
         status: 'published',
       });
       return {
         ...record,
         scope: 'official' as SkillScope,
-        source_type: 'registry' as SkillSourceType,
+        source_type: 'local' as SkillSourceType,
         source_uri: `official://${entry.name}`,
         status: 'published' as SkillStatus,
       };
@@ -1952,12 +1925,11 @@ async function collectRegistryDirectory(registryPath: string, options: ImportOpt
     if (!relativePackagePath) continue;
     const packagePath = path.resolve(registryPath, relativePackagePath);
     const entryScope = options.scope || getScope(item.scope, 'personal');
-    const entrySourceType = options.sourceType || getSourceType(item.source_type, 'local');
     const entryStatus = options.status || getStatus(item.status, entryScope === 'team' ? 'pending_review' : 'imported');
     const entryOptions = {
       ...options,
       scope: entryScope,
-      sourceType: entrySourceType,
+      sourceType: 'local' as const,
       sourceUri: options.sourceUri || getString(item.source_uri, packagePath),
       status: entryStatus,
     };
@@ -2175,14 +2147,6 @@ export async function listSkillReviewRequests(filters: { status?: string } = {})
 export async function getSkill(id: string) {
   const skills = await listSkills();
   return skills.find((skill) => skill.id === id) || null;
-}
-
-export async function importSkillFromPath(inputPath: string, options: ImportOptions = {}) {
-  const realInput = await assertAllowedImportPath(inputPath);
-  if (options.scope === 'team') {
-    return importSkillReviewRequestsFromDirectory(realInput, options);
-  }
-  return importSkillDirectory(realInput, options);
 }
 
 function getUploadedZipLeafName(fileName: string) {
@@ -2416,43 +2380,6 @@ export async function importSkillFromUpload(file: File, options: ImportOptions =
     });
   } finally {
     await fs.rm(uploadDir, { recursive: true, force: true });
-  }
-}
-
-function parseGitImportUrl(input: string) {
-  const [url, rawSubPath = ''] = input.split('#');
-  const subPath = decodeURIComponent(rawSubPath.replace(/^path=/, '').trim());
-  if (subPath && (path.isAbsolute(subPath) || subPath.split(/[\\/]/).includes('..'))) {
-    throw new Error('Git subdirectory must be a relative path inside the repository');
-  }
-  return { url, subPath };
-}
-
-export async function importSkillFromGit(url: string, options: ImportOptions = {}) {
-  const gitImport = parseGitImportUrl(url);
-  if (!/^https?:\/\/|^git@/.test(gitImport.url)) {
-    throw new Error('Git URL must start with http(s):// or git@');
-  }
-
-  await ensureRegistry();
-  const cloneDir = path.join(tempRoot, `git-${randomUUID()}`);
-  try {
-    await execFile('git', ['clone', '--depth', '1', gitImport.url, cloneDir], { timeout: 120000 });
-    const importRoot = gitImport.subPath ? path.join(cloneDir, gitImport.subPath) : cloneDir;
-    if (options.scope === 'team') {
-      return await importSkillReviewRequestsFromDirectory(importRoot, {
-        ...options,
-        sourceType: 'git',
-        sourceUri: url,
-      });
-    }
-    return await importSkillDirectory(importRoot, {
-      ...options,
-      sourceType: 'git',
-      sourceUri: url,
-    });
-  } finally {
-    await fs.rm(cloneDir, { recursive: true, force: true });
   }
 }
 

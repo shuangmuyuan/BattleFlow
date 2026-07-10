@@ -5,12 +5,13 @@ Shared application logic.
 ## Key Files
 
 - `skill-registry.ts`: file-backed Skill registry, official seed loading, imports, reviews, publishing, rollback, archive, and Markdown rendering.
-- `workflow-registry.ts`: file-backed workspace/workflow store, steps, context files, reviewed outputs, snapshots, chat state, and Skill drafts.
-- `skill-tuning.ts`: Claude Code CLI powered generation of workflow-specific Skill drafts.
+- `workflow-registry.ts`: file-backed workspace/workflow store, steps, context files, reviewed outputs, chat state, and Skill drafts.
+- `skill-tuning.ts`: Claude Agent SDK powered generation of workflow-specific Skill drafts.
 - `integrations/frieren-demo.ts`: server-only Frieren Demo handoff client with HMAC signing, URL normalization, response parsing, and document size validation.
 - `knowledge-repository.ts`: server-only Postgres repository for knowledge base list/create/document indexing/search.
 - `agent-adapters/types.ts`: provider/runtime event and status types.
-- `agent-adapters/claude-code-cli.ts`: Claude Code CLI availability checks and streaming adapter.
+- `agent-adapters/claude-agent-sdk.ts`: Claude Agent SDK availability checks, streaming adapter, tool policy, and non-persistent helper execution.
+- `agent-adapters/agent-runtime-utils.ts`: shared prompt, attachment, workspace, and event normalization helpers.
 - `chat-human-input.ts`: in-process HITL deferred registry and pending metadata helpers for detached workflow chat runs.
 - `utils.ts`: shared `cn` utility.
 
@@ -51,7 +52,7 @@ Shared application logic.
 
 ## Agent Adapter Rules
 
-- Keep CLI permissions conservative.
-- Preserve stream-json parsing and error events.
+- Keep SDK permissions conservative.
+- Preserve SDK message mapping and error events.
 - Do not change tools, HITL surfaces, session persistence, or session resume behavior without updating `docs/SECURITY.md`.
 - Keep HITL pending state display-oriented and tied to authorized chat runs; `/api/chat/respond` must authorize from the stored run workflow, not client-supplied workflow IDs.

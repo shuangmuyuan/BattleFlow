@@ -26,15 +26,11 @@ export class KnowledgeValidationError extends Error {
   }
 }
 
-export type KnowledgeSourceType = 'builtin' | 'external';
-
 export interface KnowledgeBaseRecord {
   id: string;
   organization_id: string;
   name: string;
   description: string | null;
-  source_type: KnowledgeSourceType;
-  connection_config: Record<string, unknown> | null;
   dataset_name: string | null;
   is_active: boolean;
   created_by: string | null;
@@ -66,8 +62,6 @@ interface KnowledgeBaseRow {
   organization_id: string;
   name: string;
   description: string | null;
-  source_type: KnowledgeSourceType;
-  connection_config: Record<string, unknown> | null;
   dataset_name: string | null;
   is_active: boolean;
   created_by: string | null;
@@ -125,10 +119,6 @@ function normalizeOptionalString(value: string | null | undefined, maxLength: nu
   return trimmed.slice(0, maxLength);
 }
 
-function normalizeSourceType(value: string | null | undefined): KnowledgeSourceType {
-  return value === 'external' ? 'external' : 'builtin';
-}
-
 function makeDatasetName(name: string): string {
   const slug = name
     .toLowerCase()
@@ -148,8 +138,6 @@ function mapKnowledgeBase(row: KnowledgeBaseRow): KnowledgeBaseRecord {
     organization_id: row.organization_id,
     name: row.name,
     description: row.description,
-    source_type: row.source_type,
-    connection_config: row.connection_config,
     dataset_name: row.dataset_name,
     is_active: row.is_active,
     created_by: row.created_by,
@@ -185,8 +173,6 @@ export async function listKnowledgeBases(): Promise<KnowledgeBaseRecord[]> {
       kb.organization_id,
       kb.name,
       kb.description,
-      kb.source_type,
-      kb.connection_config,
       kb.dataset_name,
       kb.is_active,
       kb.created_by,
@@ -213,8 +199,6 @@ export async function getKnowledgeBaseById(id: string): Promise<KnowledgeBaseRec
         kb.organization_id,
         kb.name,
         kb.description,
-        kb.source_type,
-        kb.connection_config,
         kb.dataset_name,
         kb.is_active,
         kb.created_by,
@@ -237,8 +221,6 @@ export async function createKnowledgeBase(input: {
   name: string;
   description?: string | null;
   organizationId?: string | null;
-  sourceType?: string | null;
-  connectionConfig?: Record<string, unknown> | null;
   datasetName?: string | null;
   createdBy?: string | null;
 }): Promise<KnowledgeBaseRecord> {
@@ -251,7 +233,6 @@ export async function createKnowledgeBase(input: {
 
   const organizationId = normalizeOptionalString(input.organizationId, 36) || getDefaultOrganizationId();
   const description = normalizeOptionalString(input.description, 5000);
-  const sourceType = normalizeSourceType(input.sourceType);
   const datasetName = normalizeOptionalString(input.datasetName, 128) || makeDatasetName(name);
   const createdBy = normalizeOptionalString(input.createdBy, 36);
 
@@ -261,22 +242,18 @@ export async function createKnowledgeBase(input: {
         organization_id,
         name,
         description,
-        source_type,
-        connection_config,
         dataset_name,
         is_active,
         created_by,
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5::jsonb, $6, true, $7, now(), now())
+      VALUES ($1, $2, $3, $4, true, $5, now(), now())
       RETURNING
         id,
         organization_id,
         name,
         description,
-        source_type,
-        connection_config,
         dataset_name,
         is_active,
         created_by,
@@ -288,8 +265,6 @@ export async function createKnowledgeBase(input: {
       organizationId,
       name,
       description,
-      sourceType,
-      input.connectionConfig ? JSON.stringify(input.connectionConfig) : null,
       datasetName,
       createdBy,
     ],

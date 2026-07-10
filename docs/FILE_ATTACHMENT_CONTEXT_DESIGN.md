@@ -160,7 +160,7 @@ agent runtime 需要满足：
 
 ## Claude Code 工具策略
 
-当前 BattleFlow 的 AI 对话基于 `claude -p`。这个方案可以满足附件按需读取的目标，关键是不要把文件正文提前塞进 prompt，而是给 `claude -p` 一个受控工作目录和最小必要工具。
+当前 BattleFlow 的 AI 对话基于 Claude Agent SDK。这个方案可以满足附件按需读取的目标，关键是不要把文件正文提前塞进 prompt，而是给 SDK 调用一个受控工作目录和最小必要工具。
 
 推荐默认工具：
 
@@ -184,7 +184,7 @@ agent runtime 需要满足：
 
 实现注意：
 
-- 运行 `claude -p` 时，需要确保工作目录或 `--add-dir` 覆盖当前工作流附件目录。
+- 运行 Claude Agent SDK 时，需要确保 `cwd` 和受控附加读取目录覆盖当前工作流附件目录。
 - 工具白名单已扩展为 `Read`、`Grep`、`Glob`、`WebSearch`、`WebFetch`，但仍保持默认最小授权。
 - `Read`、`Grep`、`Glob` 只能看到当前工作流 runtime 目录；不能看到其它工作流、`.env`、凭据或系统路径。
 
@@ -219,7 +219,7 @@ BattleFlow 不应该把所有上传文件都急切解析成 prompt 文本。解�
 - 只有模型明确创建文件，或用户明确要求生成文档时，才展示为附件或 artifact；
 - 不应该把每一段 AI 回复都自动保存成 Markdown 输出文档；
 - artifact 卡片应该引用真实保存的文件，而不是普通聊天文本。
-- 对 `claude -p` 来说，“生成文档”不要求模型拥有写文件工具；模型输出文档内容或结构化 artifact payload，BattleFlow 后端负责保存文件并返回附件卡片。
+- 对 Claude Agent SDK 来说，“生成文档”不要求模型直接写共享产物；模型可以写节点内草稿，BattleFlow 后端负责确认、提升并返回产物卡片。
 
 这样可以避免“普通回答被错误展示成 Skill 输出文档”的问题。
 
@@ -277,5 +277,5 @@ BattleFlow 不应该把所有上传文件都急切解析成 prompt 文本。解�
 - 附件目录：放在工作流自己的 `data/workflows/<workspace-id>/<workflow-id>/attachments/` 下。
 - `.docx` / `.pdf` 解析：由 BattleFlow 服务端或受控解析工具生成 sidecar 文本文件，agent 只读取 sidecar 或原始可读文本。
 - 历史 prompt 注入内容：保留历史消息，不把已注入正文重新迁移进新 prompt；能找到原始文件时只补附件元数据链接。
-- `claude -p` 可继续作为 AI 对话 runtime，但需要默认启用 `Read`、`Grep`、`Glob`、`WebSearch`、`WebFetch` 这类最小必要工具。
+- Claude Agent SDK 作为 AI 对话 runtime 时，只启用 `Read`、`Grep`、`Glob`、`WebSearch`、`WebFetch` 以及受节点目录保护的 `Write`、`Edit` 等明确允许工具。
 - 写文件能力不作为默认工具开放；文档生成由模型输出内容、BattleFlow 后端负责落盘。

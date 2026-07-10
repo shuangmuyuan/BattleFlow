@@ -3,10 +3,6 @@ import { isConfiguredSuperAdminPrincipal } from './auth/super-admins';
 import { queryPostgres } from '../storage/database/postgres-client';
 
 const stateMaxAgeSeconds = 600;
-const defaultTokenMaxAgeSeconds = 24 * 60 * 60;
-
-export const battleflowAuthCookieName = 'battleflow_access_token';
-
 export interface BattleFlowUser {
   id: string;
   sso_id: string;
@@ -28,12 +24,6 @@ interface StatePayload {
   redirectUri: string;
   nextPath?: string;
   iat: number;
-}
-
-interface JwtPayload {
-  sub: string;
-  iat: number;
-  exp: number;
 }
 
 function getSecret() {
@@ -83,31 +73,6 @@ export function verifySsoState(state: string): StatePayload | null {
   const payload = parseJsonPart<StatePayload>(body);
   if (!payload?.redirectUri || !payload.iat) return null;
   if (Math.floor(Date.now() / 1000) - payload.iat > stateMaxAgeSeconds) return null;
-  return payload;
-}
-
-export function getTokenMaxAgeSeconds() {
-  const configured = Number.parseInt(process.env.BATTLEFLOW_AUTH_TOKEN_MAX_AGE_SECONDS || '', 10);
-  return Number.isFinite(configured) && configured > 0 ? configured : defaultTokenMaxAgeSeconds;
-}
-
-export function createSessionToken(userId: string) {
-  const now = Math.floor(Date.now() / 1000);
-  const payload: JwtPayload = {
-    sub: userId,
-    iat: now,
-    exp: now + getTokenMaxAgeSeconds(),
-  };
-  const header = base64UrlJson({ alg: 'HS256', typ: 'JWT' });
-  const body = base64UrlJson(payload);
-  return `${header}.${body}.${hmac(`${header}.${body}`)}`;
-}
-
-export function verifySessionToken(token: string): JwtPayload | null {
-  const [header, body, signature] = token.split('.');
-  if (!header || !body || !signature || !safeEqual(hmac(`${header}.${body}`), signature)) return null;
-  const payload = parseJsonPart<JwtPayload>(body);
-  if (!payload?.sub || !payload.exp || payload.exp <= Math.floor(Date.now() / 1000)) return null;
   return payload;
 }
 
@@ -251,50 +216,4 @@ export async function upsertSsoUser(profile: ReturnType<typeof normalizeIdTrustU
   ]);
 
   return result.rows[0];
-}
-
-export async function getUserBySessionToken(token: string): Promise<BattleFlowUser | null> {
-  const payload = token ? verifySessionToken(token) : null;
-  if (!payload?.sub) {
-    return null;
-  }
-
-  return getUserById(payload.sub);
-}
-
-export async function getUserById(id: string): Promise<BattleFlowUser | null> {
-  const result = await queryPostgres<BattleFlowUser>(`
-    SELECT
-      id,
-      sso_id,
-      username,
-      display_name,
-      email,
-      department,
-      department_id,
-      title,
-      mobile,
-      is_active,
-      is_admin,
-      created_at::text,
-      updated_at::text
-    FROM battleflow_users
-    WHERE id = $1
-    LIMIT 1
-  `, [id]);
-  return result.rows[0] || null;
-}
-
-export function publicUser(user: BattleFlowUser) {
-  return {
-    id: user.id,
-    username: user.username,
-    display_name: user.display_name,
-    email: user.email,
-    department: user.department,
-    department_id: user.department_id,
-    title: user.title,
-    mobile: user.mobile,
-    is_admin: user.is_admin,
-  };
 }

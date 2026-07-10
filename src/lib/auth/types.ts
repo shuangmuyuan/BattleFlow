@@ -8,7 +8,7 @@ export type TeamRole = 'team_admin' | 'team_manager' | 'team_member' | 'team_vie
 export type PlatformAdminRole = 'super_admin';
 export type ResourcePermission = 'read' | 'comment' | 'run' | 'create' | 'update' | 'approve' | 'publish' | 'delete' | 'admin';
 export type ResourceSubjectType = 'organization' | 'department' | 'team' | 'user';
-export type ResourceType = 'skill' | 'workflow' | 'knowledge_base' | 'prd_document' | string;
+export type ResourceType = 'skill' | 'workflow' | 'knowledge_base' | string;
 
 export interface AuthUser {
   id: string;

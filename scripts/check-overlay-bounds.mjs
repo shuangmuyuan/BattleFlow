@@ -23,28 +23,10 @@ const overlayContracts = [
     ],
   },
   {
-    name: 'SheetContent',
-    file: 'src/components/ui/sheet.tsx',
-    requiredTokens: [
-      'overflow-y-auto',
-      'overscroll-contain',
-      'max-h-[calc(100dvh-2rem)]',
-    ],
-  },
-  {
     name: 'PopoverContent',
     file: 'src/components/ui/popover.tsx',
     requiredTokens: [
       'max-h-[var(--radix-popover-content-available-height)]',
-      'overflow-y-auto',
-      'overscroll-contain',
-    ],
-  },
-  {
-    name: 'DrawerContent',
-    file: 'src/components/ui/drawer.tsx',
-    requiredTokens: [
-      'max-h-[80vh]',
       'overflow-y-auto',
       'overscroll-contain',
     ],

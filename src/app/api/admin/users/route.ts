@@ -6,13 +6,11 @@ import {
   readRequiredStringField,
 } from '@/app/api/organizations/_shared';
 import { requirePlatformPermission, requireUser } from '@/lib/auth/server';
-import { ForbiddenError } from '@/lib/auth/types';
 import {
   listPlatformUsers,
   SuperAdminManagementError,
   updatePlatformUserAdmin,
 } from '@/lib/auth/super-admins';
-import { battleflowAuthCookieName, getUserBySessionToken } from '@/lib/sso-auth';
 
 export const runtime = 'nodejs';
 
@@ -23,32 +21,9 @@ async function requirePlatformUserListAccess(
   request: NextRequest,
   action = viewPlatformUsersAction,
 ): Promise<{ actorUserId: string | null }> {
-  let firstPartyError: unknown;
-
-  try {
-    const context = await requireUser(request);
-    requirePlatformPermission(context, action);
-    return { actorUserId: context.user.id };
-  } catch (error) {
-    firstPartyError = error;
-  }
-
-  const token = request.cookies.get(battleflowAuthCookieName)?.value || '';
-  const ssoUser = await getUserBySessionToken(token);
-
-  if (!ssoUser) {
-    throw firstPartyError;
-  }
-
-  if (!ssoUser.is_active) {
-    throw new ForbiddenError('User is disabled');
-  }
-
-  if (!ssoUser.is_admin) {
-    throw new ForbiddenError();
-  }
-
-  return { actorUserId: null };
+  const context = await requireUser(request);
+  requirePlatformPermission(context, action);
+  return { actorUserId: context.user.id };
 }
 
 export async function GET(request: NextRequest) {

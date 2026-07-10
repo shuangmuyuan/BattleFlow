@@ -16,8 +16,6 @@ import {
   approveSkillReview,
   createWorkflowSkillReview,
   getSkill,
-  importSkillFromGit,
-  importSkillFromPath,
   importSkillFromUpload,
   listSkillReviewRequests,
   listSkills,
@@ -229,48 +227,6 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
     const action = String(body.action || '');
-
-    if (action === 'import_path') {
-      requireOwnedCreatePermission(context, 'skill.import');
-      const inputPath = String(body.path || '').trim();
-      if (!inputPath) return jsonError('path is required', 400);
-      const scope = getImportScope(body);
-      const versionBump = getVersionBump(body.version_bump);
-      const changelogNote = getChangelogNote(body.changelog_note);
-      const skills = await importSkillFromPath(inputPath, {
-        scope,
-        sourceType: 'local',
-        sourceUri: inputPath,
-        status: importStatusForScope(scope),
-        versionBump,
-        changelogNote,
-      });
-      await persistSkillItems(context, skills);
-      return jsonOk(importResponse(skills));
-    }
-
-    if (action === 'import_git') {
-      requireOwnedCreatePermission(context, 'skill.import');
-      const url = String(body.url || '').trim();
-      if (!url) return jsonError('url is required', 400);
-      const scope = getImportScope(body);
-      const versionBump = getVersionBump(body.version_bump);
-      const changelogNote = getChangelogNote(body.changelog_note);
-      const skills = await importSkillFromGit(url, {
-        scope,
-        sourceType: 'git',
-        sourceUri: url,
-        status: importStatusForScope(scope),
-        versionBump,
-        changelogNote,
-      });
-      await persistSkillItems(context, skills);
-      return jsonOk(importResponse(skills));
-    }
-
-    if (action === 'import_registry') {
-      return jsonError('Remote registry import API is reserved for a later integration', 501);
-    }
 
     if (action === 'publish_request') {
       const id = String(body.id || '').trim();

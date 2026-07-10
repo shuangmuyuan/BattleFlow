@@ -215,7 +215,7 @@ interface WorkflowStepValidationPhase {
   summary: string;
   findings: WorkflowStepValidationFinding[];
   rawText?: string;
-  generator?: 'claude-code-cli';
+  generator?: 'claude-agent-sdk';
 }
 
 interface WorkflowStepValidationAttempt {
@@ -343,7 +343,7 @@ interface WorkflowSkillDraft {
   validation_note?: string;
   quality_gates?: string[];
   source_context_summary?: string;
-  generator?: 'claude-code-cli';
+  generator?: 'claude-agent-sdk';
   enabled: boolean;
   status: 'draft' | 'submitted';
   submittedSkillId?: string;
@@ -1513,7 +1513,6 @@ interface KnowledgeBaseOption {
   id: string;
   name: string;
   description: string;
-  source_type?: 'builtin' | 'external';
   dataset_name?: string;
   document_count?: number;
   updated_at?: string;
@@ -3519,7 +3518,6 @@ export default function WorkflowsPage() {
             role: m.role,
             content: m.content,
           })),
-          agent_provider: 'claude-code-cli',
           workflow_id: workflow.id,
           workflow_step_id: currentStep.id,
           visible_user_message: userMessage,

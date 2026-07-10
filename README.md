@@ -5,10 +5,9 @@ BattleFlow 是一个面向 AI Native 产品规划的 Skill 编排和工作流平
 ## 当前能力
 
 - Skill 仓库：支持官方、团队、个人三类 Skill。
-- Skill 导入：支持本地包、服务器路径和 Git 仓库导入。
+- Skill 导入：只支持 ZIP 包上传。
 - 团队审核：个人 Skill 可以提交团队审核，审核通过后发布到团队仓库。
 - 版本管理：支持查看历史版本、下载 Skill Markdown、打开原始内容和回滚非官方 Skill。
-- 官方模板：内置市场洞察、竞品分析、用户需求拆解等产品规划 Skill。
 - 工作流基础页面：为后续把 Skill 编排为产品规划任务流预留入口。
 - 知识库和 Demo 页面：为规划资料沉淀、后续生成演示产物预留入口。
 
@@ -71,12 +70,9 @@ Skill registry：
 
 ```bash
 SKILL_REGISTRY_DIR=./data/skill-registry
-SKILL_IMPORT_ROOTS=
 ```
 
 `SKILL_REGISTRY_DIR` 默认指向项目内的 `data/skill-registry`。该目录是运行时数据，已在 `.gitignore` 中排除。
-
-`SKILL_IMPORT_ROOTS` 用于限制允许从服务器路径导入 Skill 的根目录，多个路径用系统分隔符分隔。
 
 ## 目录结构
 
@@ -114,20 +110,14 @@ skill-name/
 
 ```json
 {
-  "id": "market-insight",
-  "name": "市场洞察",
-  "description": "从行业趋势、市场规模、用户需求变化和机会空间提炼产品规划输入。",
+  "id": "example-skill",
+  "name": "Example Skill",
+  "description": "Example Skill description.",
   "version": "1.0.0",
   "author": "BattleFlow Team",
-  "tags": ["市场", "洞察"],
+  "tags": ["example"],
   "tools": ["web_search", "knowledge_query"]
 }
-```
-
-Git 仓库导入支持仓库子路径，例如：
-
-```text
-https://github.com/mattpocock/skills#skills/engineering/diagnose
 ```
 
 ## 校验命令

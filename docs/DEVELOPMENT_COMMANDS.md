@@ -98,10 +98,11 @@ BATTLEFLOW_DATABASE_URL=postgresql://... pnpm db:postgres:init
 This applies the full direct Postgres bootstrap:
 
 1. `scripts/database/001_knowledge_store.sql` for organizations, knowledge bases, documents, and search indexes.
-2. `scripts/database/002_account_org_permissions.sql` for accounts, sessions, organizations, grants, snapshots, milestones, and PRD documents.
+2. `scripts/database/002_account_org_permissions.sql` for accounts, sessions, organizations, and grants.
 3. `scripts/database/002_sso_users.sql` for SSO user compatibility.
 4. `scripts/database/004_notifications.sql` for notifications.
 5. `scripts/database/006_chat_runs.sql` for detached workflow chat runs and replayable run events.
+6. `scripts/database/007_remove_unused_planning_surfaces.sql` for retiring legacy planning tables and external knowledge-base connection fields.
 
 Targeted bootstrap commands are also available when only one area is missing:
 
@@ -133,7 +134,7 @@ The local route is `POST /api/demos/handoffs` with `{ workflowId, stepId }`. It 
 | `BATTLEFLOW_PROJECT_ENV` | `DEV` for development, `PROD` for production mode. |
 | `DEPLOY_RUN_PORT` | HTTP port used by scripts. |
 | `HOSTNAME` | Server hostname, defaults to `localhost`. |
-| `BATTLEFLOW_DATABASE_URL` | Server-only direct Postgres connection string for account, authorization, knowledge, PRD, and resource metadata operations. |
+| `BATTLEFLOW_DATABASE_URL` | Server-only direct Postgres connection string for account, authorization, knowledge, chat-run, and resource metadata operations. |
 | `BATTLEFLOW_DEFAULT_ORGANIZATION_ID` | Default organization used by single-tenant knowledge operations. |
 | `BATTLEFLOW_DATABASE_POOL_MAX` | Optional Postgres pool size, defaults to `5`. |
 | `BATTLEFLOW_DATABASE_SSL` | Optional Postgres SSL mode. Use `true` or `require` to enable SSL. |
@@ -144,10 +145,9 @@ The local route is `POST /api/demos/handoffs` with `{ workflowId, stepId }`. It 
 | `FRIEREN_DEMO_BASE_URL` | Server-only external Demo platform base URL. Use a trailing slash or no trailing slash; the client normalizes paths. |
 | `FRIEREN_DEMO_HMAC_SECRET` | Server-only shared HMAC secret for Frieren Demo integration requests. Never expose to the browser or commit real values. |
 | `SKILL_REGISTRY_DIR` | File-backed Skill registry root. |
-| `SKILL_IMPORT_ROOTS` | Allowed server-path roots for Skill imports. |
 | `WORKFLOW_REGISTRY_DIR` | File-backed workflow registry root. |
-| `CLAUDE_COMMAND` | Optional custom Claude Code executable for the Agent SDK. Leave unset to use the version-matched runtime bundled with `@anthropic-ai/claude-agent-sdk`. Legacy CLI helper flows still default to the `claude` executable. |
+| `CLAUDE_COMMAND` | Optional custom Claude executable for the Agent SDK. Leave unset to use the version-matched runtime bundled with `@anthropic-ai/claude-agent-sdk`. |
 | `CLAUDE_MODEL` | Claude model alias, defaults to `sonnet`. |
-| `CLAUDE_WORKSPACE_DIR` | Working directory for Claude CLI turns. |
-| `BATTLEFLOW_CLAUDE_TOOLS` | Optional comma-separated Claude Code tools for SDK-backed workflow chat and CLI-backed helper flows. `Read`, `Grep`, `Glob`, `WebSearch`, `WebFetch`, `Write`, and `Edit` are accepted for SDK workflow chat; `Write` and `Edit` are guarded to the active node cwd. Legacy CLI helper calls filter this value back to the read/web subset. `MultiEdit`, `Bash`, and unknown tools are ignored. Local `pnpm dev` and production `pnpm start` default to `Read,Grep,Glob,WebSearch,WebFetch,Write,Edit` unless explicitly overridden. |
+| `CLAUDE_WORKSPACE_DIR` | Base working directory for Claude Agent SDK turns. |
+| `BATTLEFLOW_CLAUDE_TOOLS` | Optional comma-separated Claude Code tools for SDK-backed workflow chat. `Read`, `Grep`, `Glob`, `WebSearch`, `WebFetch`, `Write`, and `Edit` are accepted; `Write` and `Edit` are guarded to the active node cwd. `MultiEdit`, `Bash`, and unknown tools are ignored. Local `pnpm dev` and production `pnpm start` default to `Read,Grep,Glob,WebSearch,WebFetch,Write,Edit` unless explicitly overridden. |
 | `BATTLEFLOW_CLAUDE_SETTINGS_PATH` | Optional local-development fallback path for a Claude settings JSON file whose `env` block should be merged into the SDK subprocess environment. Do not use this as the Docker/production secret source; inject Anthropic credentials as environment variables instead. |

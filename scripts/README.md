@@ -13,8 +13,10 @@ Repository automation scripts.
 - `check-responsive-layout.mjs`: static contract check for dashboard responsive layout classes.
 - `apply-postgres-migration.mjs`: applies static SQL migrations to `BATTLEFLOW_DATABASE_URL`.
 - `migrate-resource-metadata.mjs`: backfills Skill/workflow business metadata and owner grants from file-backed runtime registries into Postgres.
+- `cleanup-official-seed-skills.mjs`: reports or deletes the removed official Seed Skill rows and file-registry entries; apply mode preserves historical workflow steps while clearing their retired Skill bindings.
 - `database/005_workflow_private_grants.sql`: removes legacy organization-wide workflow grants so user-created workflows stay private by default.
 - `database/006_chat_runs.sql`: creates detached workflow chat run state and replayable SSE event tables used by `/api/chat`.
+- `database/007_remove_unused_planning_surfaces.sql`: removes retired PRD, milestone, snapshot, and external knowledge-base connection storage from existing Postgres deployments.
 
 ## Rules
 

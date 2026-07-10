@@ -348,62 +348,6 @@ CREATE TABLE IF NOT EXISTS workflow_steps (
 CREATE INDEX IF NOT EXISTS workflow_steps_workflow_id_idx ON workflow_steps (workflow_id);
 CREATE INDEX IF NOT EXISTS workflow_steps_skill_id_idx ON workflow_steps (skill_id);
 
-CREATE TABLE IF NOT EXISTS step_snapshots (
-  id varchar(128) PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  step_id varchar(128) NOT NULL REFERENCES workflow_steps(id) ON DELETE CASCADE,
-  workflow_id varchar(128) NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
-  output text NOT NULL,
-  conversation jsonb,
-  snapshot_type varchar(20) NOT NULL DEFAULT 'auto',
-  label varchar(128),
-  created_by varchar(36),
-  created_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS step_snapshots_step_id_idx ON step_snapshots (step_id);
-CREATE INDEX IF NOT EXISTS step_snapshots_workflow_id_idx ON step_snapshots (workflow_id);
-
-CREATE TABLE IF NOT EXISTS workflow_snapshots (
-  id varchar(128) PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  workflow_id varchar(128) NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
-  snapshot jsonb NOT NULL,
-  snapshot_type varchar(20) NOT NULL DEFAULT 'auto',
-  label varchar(128),
-  created_by varchar(36),
-  created_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS workflow_snapshots_workflow_id_idx ON workflow_snapshots (workflow_id);
-
-CREATE TABLE IF NOT EXISTS milestones (
-  id varchar(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  workflow_id varchar(128) NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
-  workflow_snapshot_id varchar(128) REFERENCES workflow_snapshots(id),
-  step_snapshot_id varchar(128) REFERENCES step_snapshots(id),
-  name varchar(128) NOT NULL,
-  description text,
-  milestone_type varchar(20) NOT NULL DEFAULT 'manual',
-  created_by varchar(36),
-  created_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS milestones_workflow_id_idx ON milestones (workflow_id);
-
-CREATE TABLE IF NOT EXISTS prd_documents (
-  id varchar(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  workflow_id varchar(128) NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
-  organization_id varchar(36) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  title varchar(200) NOT NULL,
-  content text NOT NULL,
-  version varchar(20) NOT NULL DEFAULT '1.0.0',
-  created_by varchar(36),
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz
-);
-
-CREATE INDEX IF NOT EXISTS prd_documents_workflow_id_idx ON prd_documents (workflow_id);
-CREATE INDEX IF NOT EXISTS prd_documents_org_id_idx ON prd_documents (organization_id);
-
 CREATE TABLE IF NOT EXISTS workflow_assets (
   id varchar(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
   workflow_id varchar(128) NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
@@ -484,23 +428,6 @@ ALTER TABLE IF EXISTS workflow_steps
   ALTER COLUMN id TYPE varchar(128),
   ALTER COLUMN workflow_id TYPE varchar(128),
   ALTER COLUMN skill_id TYPE varchar(128);
-
-ALTER TABLE IF EXISTS step_snapshots
-  ALTER COLUMN id TYPE varchar(128),
-  ALTER COLUMN step_id TYPE varchar(128),
-  ALTER COLUMN workflow_id TYPE varchar(128);
-
-ALTER TABLE IF EXISTS workflow_snapshots
-  ALTER COLUMN id TYPE varchar(128),
-  ALTER COLUMN workflow_id TYPE varchar(128);
-
-ALTER TABLE IF EXISTS milestones
-  ALTER COLUMN workflow_id TYPE varchar(128),
-  ALTER COLUMN workflow_snapshot_id TYPE varchar(128),
-  ALTER COLUMN step_snapshot_id TYPE varchar(128);
-
-ALTER TABLE IF EXISTS prd_documents
-  ALTER COLUMN workflow_id TYPE varchar(128);
 
 ALTER TABLE IF EXISTS workflow_assets
   ALTER COLUMN workflow_id TYPE varchar(128);
@@ -598,11 +525,6 @@ CREATE TRIGGER workflow_steps_set_updated_at
 BEFORE UPDATE ON workflow_steps
 FOR EACH ROW EXECUTE FUNCTION battleflow_set_updated_at();
 
-DROP TRIGGER IF EXISTS prd_documents_set_updated_at ON prd_documents;
-CREATE TRIGGER prd_documents_set_updated_at
-BEFORE UPDATE ON prd_documents
-FOR EACH ROW EXECUTE FUNCTION battleflow_set_updated_at();
-
 DROP TRIGGER IF EXISTS resource_access_grants_set_updated_at ON resource_access_grants;
 CREATE TRIGGER resource_access_grants_set_updated_at
 BEFORE UPDATE ON resource_access_grants
@@ -630,9 +552,6 @@ BEGIN
     GRANT SELECT, INSERT, UPDATE, DELETE ON workflow_workspaces TO battleflow;
     GRANT SELECT, INSERT, UPDATE, DELETE ON workflows TO battleflow;
     GRANT SELECT, INSERT, UPDATE, DELETE ON workflow_steps TO battleflow;
-    GRANT SELECT, INSERT, DELETE ON step_snapshots TO battleflow;
-    GRANT SELECT, INSERT, DELETE ON workflow_snapshots TO battleflow;
-    GRANT SELECT, INSERT, DELETE ON milestones TO battleflow;
     GRANT SELECT, INSERT, UPDATE, DELETE ON workflow_assets TO battleflow;
     IF to_regclass('public.knowledge_bases') IS NOT NULL THEN
       GRANT SELECT, INSERT, UPDATE ON knowledge_bases TO battleflow;
@@ -641,7 +560,6 @@ BEGIN
     IF to_regclass('public.knowledge_documents') IS NOT NULL THEN
       GRANT SELECT, INSERT, UPDATE ON knowledge_documents TO battleflow;
     END IF;
-    GRANT SELECT, INSERT, UPDATE, DELETE ON prd_documents TO battleflow;
     GRANT SELECT, INSERT, UPDATE, DELETE ON resource_access_grants TO battleflow;
     GRANT SELECT, INSERT ON audit_events TO battleflow;
   END IF;

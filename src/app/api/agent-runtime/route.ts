@@ -10,7 +10,7 @@ export async function GET() {
 
   return NextResponse.json(
     {
-      default_provider: process.env.CHAT_AGENT_PROVIDER || 'claude-agent-sdk',
+      default_provider: 'claude-agent-sdk',
       adapters: [claudeAgentSdk],
     },
     {

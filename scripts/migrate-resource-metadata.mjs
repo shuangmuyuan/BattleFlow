@@ -290,7 +290,7 @@ async function loadOfficialSkills() {
       version: meta.version || '1.0.0',
       author: meta.author || 'BattleFlow',
       tags: Array.isArray(meta.tags) ? meta.tags : [],
-      source_type: item.source_type || 'registry',
+      source_type: 'local',
       scope: 'official',
       status: item.status || 'published',
       methodology: meta.definition?.methodology || '',
@@ -313,7 +313,7 @@ async function migrateSkills(client) {
   const officialSkills = await loadOfficialSkills();
   let count = 0;
   for (const skill of officialSkills) {
-    await upsertSkill(client, skill, { scope: 'official', source_type: 'registry', status: 'published' });
+    await upsertSkill(client, skill, { scope: 'official', source_type: 'local', status: 'published' });
     count += 1;
   }
   for (const skill of index.skills || []) {

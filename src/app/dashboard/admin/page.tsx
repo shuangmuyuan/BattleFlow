@@ -128,7 +128,7 @@ interface ApiError {
 }
 
 type SkillScope = 'personal' | 'team' | 'official';
-type SkillSourceType = 'local' | 'registry' | 'git';
+type SkillSourceType = 'local';
 type SkillStatus = 'imported' | 'pending_review' | 'published' | 'rejected' | 'archived';
 type VersionBump = 'patch' | 'minor' | 'major';
 type SkillReviewOperation = 'create' | 'update';

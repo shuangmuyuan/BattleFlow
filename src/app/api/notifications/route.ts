@@ -2,39 +2,19 @@ import { NextRequest } from 'next/server';
 import { readJsonRecord } from '@/app/api/auth/_shared';
 import { managementErrorResponse, noStoreJson } from '@/app/api/organizations/_shared';
 import { requireUser } from '@/lib/auth/server';
-import { ForbiddenError } from '@/lib/auth/types';
 import {
   listNotificationsForRecipient,
   markNotificationsReadForRecipient,
   type NotificationRecipient,
 } from '@/lib/notifications';
-import { battleflowAuthCookieName, getUserBySessionToken } from '@/lib/sso-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 async function resolveNotificationRecipient(request: NextRequest): Promise<NotificationRecipient> {
-  let firstPartyError: unknown;
-
-  try {
-    const context = await requireUser(request);
-    return { kind: 'account', userId: context.user.id };
-  } catch (error) {
-    firstPartyError = error;
-  }
-
-  const token = request.cookies.get(battleflowAuthCookieName)?.value || '';
-  const ssoUser = await getUserBySessionToken(token);
-  if (!ssoUser) {
-    throw firstPartyError;
-  }
-
-  if (!ssoUser.is_active) {
-    throw new ForbiddenError('User is disabled');
-  }
-
-  return { kind: 'battleflow', userId: ssoUser.id };
+  const context = await requireUser(request);
+  return { kind: 'account', userId: context.user.id };
 }
 
 function readNotificationIds(value: unknown): string[] | undefined {

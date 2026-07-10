@@ -34,7 +34,7 @@ export interface WorkflowStepValidationPhaseRecord {
   summary: string;
   findings: WorkflowStepValidationFindingRecord[];
   rawText?: string;
-  generator?: 'claude-code-cli';
+  generator?: 'claude-agent-sdk';
 }
 
 export interface WorkflowStepValidationAttemptRecord {
@@ -296,7 +296,7 @@ export interface WorkflowSkillDraftRecord {
   validation_note?: string;
   quality_gates?: string[];
   source_context_summary?: string;
-  generator?: 'claude-code-cli';
+  generator?: 'claude-agent-sdk';
   enabled: boolean;
   status: 'draft' | 'submitted';
   submittedSkillId?: string;
@@ -929,7 +929,7 @@ function normalizeValidationPhase(value: unknown): WorkflowStepValidationPhaseRe
         .map((finding, index) => normalizeValidationFinding(finding, index))
       : [],
     rawText: typeof phase.rawText === 'string' ? phase.rawText : undefined,
-    generator: phase.generator === 'claude-code-cli' ? 'claude-code-cli' : undefined,
+    generator: phase.generator === 'claude-agent-sdk' ? 'claude-agent-sdk' : undefined,
   };
 }
 
@@ -997,7 +997,7 @@ function normalizeSkillDrafts(value: unknown): Record<string, WorkflowSkillDraft
           validation_note: typeof draft.validation_note === 'string' ? draft.validation_note : undefined,
           quality_gates: normalizeStringArray(draft.quality_gates),
           source_context_summary: typeof draft.source_context_summary === 'string' ? draft.source_context_summary : undefined,
-          generator: draft.generator === 'claude-code-cli' ? 'claude-code-cli' : undefined,
+          generator: draft.generator === 'claude-agent-sdk' ? 'claude-agent-sdk' : undefined,
           enabled: Boolean(draft.enabled),
           status: draft.status === 'submitted' ? 'submitted' : 'draft',
           submittedSkillId: typeof draft.submittedSkillId === 'string' ? draft.submittedSkillId : undefined,

@@ -14,20 +14,18 @@ BattleFlow is a workspace for AI-native product planning. It helps teams turn re
 ## Core Jobs
 
 1. Maintain a Skill repository with official, team, and personal Skills.
-2. Import Skills from uploads, server paths, and Git repositories.
+2. Import Skills from uploaded ZIP packages.
 3. Review personal Skill changes before publishing them to the team scope.
 4. Compose Skills into workflows that produce structured planning artifacts.
 5. Attach context files, reviewed materials, and knowledge sources to workflow steps.
-6. Generate durable Markdown outputs that can become PRD sections.
-7. Preserve step snapshots and milestones for later review.
+6. Generate durable Markdown outputs for downstream review and reuse.
 
 ## Current Capabilities
 
-- Official seed Skills: market insight, competitor analysis, and user-needs breakdown.
 - File-backed Skill registry under `data/skill-registry/` by default.
 - File-backed workflow registry under `data/workflows/` by default.
 - Dashboard pages for Skills, workflows, knowledge, demos, and workspace overview.
-- Chat route that uses the Claude Code CLI adapter for AI collaboration.
+- Chat, Skill tuning, and workflow validation use the Claude Agent SDK adapter.
 - First-party account, organization, and resource authorization backed by direct Postgres.
 - UI validation scripts that enforce overlay and responsive layout contracts.
 

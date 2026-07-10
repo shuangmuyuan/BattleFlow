@@ -55,7 +55,7 @@ pnpm build
 - Import a personal Skill and verify only the owner can read, update, archive, or use package assets.
 - Import or publish a team Skill and verify granted organization/team users can read and run it.
 - Verify a user with only a read grant cannot publish, update, archive, or delete the Skill.
-- Create a workflow and verify only the owner or users with workflow grants can read details, snapshots, milestones, chat context, and generated PRD documents.
+- Create a workflow and verify only the owner or users with workflow grants can read details, chat context, outputs, and promoted artifacts.
 - Remove a resource grant and verify stale browser tabs no longer receive protected resource data after refresh.
 
 ### Knowledge And Prompt Context

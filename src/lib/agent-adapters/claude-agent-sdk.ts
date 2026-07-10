@@ -15,11 +15,10 @@ import {
   type UserDialogRequest,
   type UserDialogResult,
 } from '@anthropic-ai/claude-agent-sdk';
-import { getConfiguredClaudeTools } from './claude-code-tools';
+import { getConfiguredClaudeTools, normalizeClaudeTools } from './claude-tools';
 import {
   buildConversationPrompt,
   buildToolCallEvent,
-  getClaudeCommand,
   getClaudeModel,
   getClaudeWorkspaceDir,
   getString,
@@ -31,13 +30,14 @@ import {
   summarizeToolResult,
   trimDiagnosticText,
   writeAttachments,
-} from './claude-code-cli';
+} from './agent-runtime-utils';
 import type {
   AgentEvent,
   AgentHumanInputQuestion,
   AgentHumanInputRequest,
   AgentHumanInputResponse,
   AgentRuntimeStatus,
+  AgentRunResult,
   AgentTurnInput,
 } from './types';
 
@@ -758,7 +758,7 @@ function buildClaudeAgentSdkOptions(
   abortController: AbortController,
   emit?: (event: AgentEvent) => void,
 ): Options {
-  const configuredTools = getConfiguredClaudeTools();
+  const configuredTools = input.tools ? normalizeClaudeTools(input.tools) : getConfiguredClaudeTools();
   const executablePath = getClaudeSdkExecutablePath();
   const env = buildClaudeRuntimeEnv();
   const skills = normalizeSkillNames(input.skills);
@@ -789,7 +789,7 @@ function buildClaudeAgentSdkOptions(
     model: getClaudeModel(),
     ...(executablePath ? { pathToClaudeCodeExecutable: executablePath } : {}),
     permissionMode: requireWriteApproval ? 'default' : 'dontAsk',
-    persistSession: true,
+    persistSession: input.persistSession !== false,
     ...(resumeSessionId ? { resume: resumeSessionId } : {}),
     settingSources: hasProjectSkills ? ['project'] : [],
     ...(hasProjectSkills ? { skills } : {}),
@@ -1106,4 +1106,58 @@ export function streamClaudeAgentSdkTurn(input: AgentTurnInput) {
       }
     },
   });
+}
+
+export async function runClaudeAgentSdkPrompt(
+  input: AgentTurnInput,
+  timeoutMs = 120_000,
+): Promise<AgentRunResult> {
+  const abortController = new AbortController();
+  let timedOut = false;
+  const abortHandler = () => abortController.abort(input.signal?.reason);
+  const timer = setTimeout(() => {
+    timedOut = true;
+    abortController.abort(new Error(`Claude Agent SDK timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
+
+  if (input.signal?.aborted) abortHandler();
+  input.signal?.addEventListener('abort', abortHandler, { once: true });
+
+  try {
+    const reader = streamClaudeAgentSdkTurn({
+      ...input,
+      persistSession: false,
+      signal: abortController.signal,
+      tools: input.tools ?? [],
+    }).getReader();
+    let streamedText = '';
+    let finalText = '';
+    let usage: AgentRunResult['usage'];
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value.type === 'assistant_message') streamedText += value.text;
+      if (value.type === 'assistant_final') finalText = value.text;
+      if (value.type === 'usage') {
+        usage = {
+          inputTokens: value.inputTokens,
+          outputTokens: value.outputTokens,
+          costUsd: value.costUsd,
+          model: value.model,
+        };
+      }
+      if (value.type === 'error') throw new Error(value.error);
+      if (value.type === 'session_status' && value.status === 'aborted') {
+        throw new Error(timedOut ? `Claude Agent SDK timed out after ${timeoutMs}ms` : 'Claude Agent SDK request aborted');
+      }
+    }
+
+    const text = (finalText || streamedText).trim();
+    if (!text) throw new Error('Claude Agent SDK returned empty output');
+    return { text, usage };
+  } finally {
+    clearTimeout(timer);
+    input.signal?.removeEventListener('abort', abortHandler);
+  }
 }

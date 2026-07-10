@@ -6,17 +6,14 @@ BattleFlow API route handlers.
 
 | Route | Responsibility |
 | --- | --- |
-| `agent-runtime` | Reports Claude Code CLI adapter availability and configured defaults. |
+| `agent-runtime` | Reports Claude Agent SDK runtime availability and configured defaults. |
 | `chat` | Starts, resumes, stops, and answers HITL prompts for product-planning chat runs with Skill, workflow, knowledge, and uploaded-file context. |
 | `dashboard/stats` | Provides dashboard overview counts and recent workflow state. |
 | `demos/handoffs` | Creates and reads workflow-node Demo handoff links through the external Frieren Demo integration after workflow authorization. |
 | `knowledge` | Provides knowledge-base data for the dashboard. Document indexing/search uses direct Postgres when configured. |
-| `prd` | Reads and writes PRD documents through direct Postgres. |
 | `skills` | Lists, imports, reviews, publishes, rolls back, downloads, and archives Skills. |
-| `skills/tune` | Generates workflow Skill tuning drafts through the Claude Code CLI path. |
+| `skills/tune` | Generates workflow Skill tuning drafts through the Claude Agent SDK path. |
 | `workflows` | Manages file-backed workspaces and workflows. |
-| `workflows/milestones` | Manages workflow milestone records. |
-| `workflows/snapshots` | Manages step and workflow snapshots. |
 
 ## Demo Handoff Route
 

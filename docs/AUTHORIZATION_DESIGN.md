@@ -12,7 +12,7 @@ The first release uses direct Postgres through `BATTLEFLOW_DATABASE_URL` as the 
 - Users can belong to multiple organizations.
 - Teams can include members across departments.
 - Department permissions inherit to child departments for all actions.
-- Skills, workflows, knowledge bases, PRD documents, and future organization resources must support department and team authorization.
+- Skills, workflows, knowledge bases, workflow artifacts, and future organization resources must support department and team authorization.
 - Super admins have maximum product permissions and can view all organization content.
 - Super admins must never be able to read database connection strings, service-role keys, environment variables, or other secret values through product UI or API responses.
 - The first release does not include email verification or password reset.
@@ -291,7 +291,7 @@ Add or update routes for:
 - super admins;
 - resource grants.
 
-Existing routes for Skills, workflows, knowledge bases, PRD documents, dashboard stats, chat, and workflow snapshots/milestones must use the shared auth context before reading or mutating resources.
+Existing routes for Skills, workflows, knowledge bases, dashboard stats, chat, and workflow artifacts must use the shared auth context before reading or mutating resources.
 
 Direct access to `BATTLEFLOW_DATABASE_URL` does not imply product authorization. Route handlers must reject unauthorized requests before reading or writing protected rows, files, package assets, or prompt context.
 
@@ -302,7 +302,7 @@ Skills and workflows should move from file-backed production facts to Postgres-b
 Store in Postgres:
 
 - Skill metadata, scope, status, author, tags, versions, review state, publish history, rollback history, and asset manifests.
-- Workflow workspace metadata, workflows, steps, step chat state, context selections, reviewed outputs, snapshots, milestones, Skill drafts, and PRD relationships.
+- Workflow workspace metadata, workflows, steps, step chat state, context selections, reviewed outputs, promoted artifacts, and Skill drafts.
 - Resource grants and organization ownership for both Skills and workflows.
 
 Store as files or future object storage:

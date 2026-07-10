@@ -8,7 +8,6 @@ import {
   FileCode2,
   Play,
   BookOpen,
-  FileText,
   ArrowRight,
   TrendingUp,
   Clock,
@@ -30,7 +29,6 @@ interface DashboardStats {
   totalWorkflows: number;
   activeWorkflows: number;
   totalKnowledgeBases: number;
-  completedPrds: number;
 }
 
 interface DashboardStatsResponse {
@@ -38,7 +36,6 @@ interface DashboardStatsResponse {
   workflowCount?: number;
   activeWorkflowCount?: number;
   knowledgeBaseCount?: number;
-  completedPrdCount?: number;
   recentWorkflows?: RecentWorkflow[];
   recentSkills?: Array<{ id: string; name: string; scope?: string; version?: string }>;
 }
@@ -69,7 +66,6 @@ export default function DashboardPage() {
     totalWorkflows: 0,
     activeWorkflows: 0,
     totalKnowledgeBases: 0,
-    completedPrds: 0,
   });
   const [recentWorkflows, setRecentWorkflows] = useState<RecentWorkflow[]>([]);
   const [recentSkills, setRecentSkills] = useState<Array<{ id: string; name: string; scope?: string; version?: string }>>([]);
@@ -102,7 +98,6 @@ export default function DashboardPage() {
             activeWorkflows: statsData.activeWorkflowCount
               ?? workflows.filter((workflow) => workflow.status === 'in_progress').length,
             totalKnowledgeBases: statsData.knowledgeBaseCount ?? 0,
-            completedPrds: statsData.completedPrdCount ?? 0,
           });
         }
       } finally {
@@ -141,7 +136,7 @@ export default function DashboardPage() {
         <div className="flex min-h-full flex-col gap-4">
 
       {/* Stats */}
-      <div className="grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Card className={`${appCardClassName} overflow-hidden`}>
           <CardContent className="flex h-20 items-center gap-3 p-3">
             <div className="rounded-md border border-info/20 bg-info/10 p-2">
@@ -183,17 +178,6 @@ export default function DashboardPage() {
             <div>
               <p className="text-2xl font-bold">{stats.totalKnowledgeBases}</p>
               <p className="text-xs text-muted-foreground">知识库</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className={appCardClassName}>
-          <CardContent className="flex h-20 items-center gap-3 p-3">
-            <div className="rounded-md border border-border bg-muted p-2">
-              <FileText className="h-5 w-5 text-foreground/70" />
-            </div>
-            <div>
-              <p className="text-2xl font-bold">{stats.completedPrds}</p>
-              <p className="text-xs text-muted-foreground">PRD 产出</p>
             </div>
           </CardContent>
         </Card>

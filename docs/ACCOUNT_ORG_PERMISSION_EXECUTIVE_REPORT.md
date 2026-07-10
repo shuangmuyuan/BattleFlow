@@ -14,7 +14,7 @@ The work also keeps large Skill and workflow package assets in file or object st
 - Department permissions inherit to child departments for all actions.
 - Team permissions can span departments.
 - Platform super admins can view and manage product content across organizations, but still cannot access secret material.
-- Skills, workflows, snapshots, milestones, PRD material, knowledge access, and chat prompt context are protected by organization and resource authorization checks.
+- Skills, workflows, promoted artifacts, knowledge access, and chat prompt context are protected by organization and resource authorization checks.
 
 ## Technical Details
 

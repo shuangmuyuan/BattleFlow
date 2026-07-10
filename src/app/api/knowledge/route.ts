@@ -266,8 +266,6 @@ export async function POST(request: NextRequest) {
         name,
         description: readString(body.description) ?? null,
         organizationId: context.activeOrganization.id,
-        sourceType: readString(body.source_type) ?? null,
-        connectionConfig: readRecord(body.connection_config),
         datasetName: readString(body.dataset_name) ?? null,
         createdBy: context.user.id,
       });

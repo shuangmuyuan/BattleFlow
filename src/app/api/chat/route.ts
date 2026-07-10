@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { NextRequest } from 'next/server';
-import { getConfiguredClaudeTools } from '@/lib/agent-adapters/claude-code-tools';
+import { getConfiguredClaudeTools } from '@/lib/agent-adapters/claude-tools';
 import { streamClaudeAgentSdkTurn } from '@/lib/agent-adapters/claude-agent-sdk';
 import type { AgentEvent, AgentHumanInputRequest, AgentInputAttachment, AgentToolCallEvent } from '@/lib/agent-adapters/types';
 import { requireOrganizationContext, requirePermission } from '@/lib/auth/server';
@@ -2032,14 +2032,6 @@ export async function POST(request: NextRequest) {
       workflow_attachment_files: workflowAttachmentFiles,
       workflow_artifacts: workflow.artifacts,
     });
-    const provider = String(body.agent_provider || process.env.CHAT_AGENT_PROVIDER || 'claude-agent-sdk');
-    if (provider !== 'claude-agent-sdk' && provider !== 'claude-code-cli' && provider !== 'claude-cli') {
-      return new Response(JSON.stringify({ error: `Unsupported agent provider: ${provider}` }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-
     const previousStepRuns = await listChatRuns({
       organizationId: context.activeOrganization.id,
       workflowId,
@@ -2063,7 +2055,7 @@ export async function POST(request: NextRequest) {
       userMessage: getString(body.visible_user_message, getLastUserMessage(messages)),
       createdBy: context.user.id,
       metadata: {
-        provider,
+        provider: 'claude-agent-sdk',
         workflow_step_id: stepId,
         ...(resumableSession ? {
           resume_session_id: resumableSession.sessionId,

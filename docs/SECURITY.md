@@ -2,7 +2,7 @@
 
 ## Security Posture
 
-BattleFlow handles product-planning content, imported Skill packages, workflow context files, knowledge retrieval snippets, chat prompts, direct Postgres credentials, and optional Claude CLI execution. Treat all user-provided Skill content and imported files as untrusted.
+BattleFlow handles product-planning content, imported Skill packages, workflow context files, knowledge retrieval snippets, chat prompts, direct Postgres credentials, and Claude Agent SDK execution. Treat all user-provided Skill content and imported files as untrusted.
 
 ## Secrets
 
@@ -25,7 +25,7 @@ Never commit:
 - Platform super admin bootstrap runs only on the server when a signed-in user matches `BATTLEFLOW_SUPER_ADMIN_EMAILS` or `BATTLEFLOW_SUPER_ADMIN_USER_IDS`. API responses and UI state must never return the configured bootstrap values.
 - Super admin product access can view and administer organization content, but it must still be blocked from secret material such as connection strings, service role keys, environment variables, and raw auth tokens.
 - Super admin grant and revoke changes must write audit events, and the last enabled super admin must not be revoked through normal management APIs.
-- Skill, workflow, knowledge-base, PRD, snapshot, milestone, chat, and workflow artifact routes must resolve first-party auth and Postgres-backed resource permissions before returning file-backed package assets, workflow outputs, artifacts, or prompt context.
+- Skill, workflow, knowledge-base, chat, and workflow artifact routes must resolve first-party auth and Postgres-backed resource permissions before returning file-backed package assets, workflow outputs, artifacts, or prompt context.
 - Chat run subscriptions require `workflow.read` on the persisted run's workflow. Starting a chat run and stopping a run require `workflow.update`. Do not trust a client-supplied workflow ID for run subscription or stop; load the run first, then authorize against its stored workflow ID.
 - Demo handoff routes must resolve organization context and workflow resource permissions before reading workflow outputs or writing returned Demo links.
 
@@ -41,17 +41,17 @@ Never commit:
 
 ## Skill Imports
 
-Skill imports can come from uploads, local/server paths, or Git URLs. Keep these boundaries:
+Skill imports accept ZIP uploads only. Keep these boundaries:
 
 - Validate package shape before import.
-- Keep server-path imports constrained by `SKILL_IMPORT_ROOTS`.
+- Reject non-ZIP uploads and validate archive entries before extraction.
 - Do not execute imported Skill content during import.
 - Treat scripts, templates, tools, references, and attachments inside Skill packages as untrusted data-only assets. They may be indexed and exposed to prompts as bounded reference text, but must never be executed automatically.
 - Keep oversized or binary package assets metadata-only.
 - Do not trust `meta.json` fields without validation and narrowing.
 - Archive or reject malformed Skills rather than normalizing unsafe content.
 
-## Agent SDK and CLI Execution
+## Agent SDK Execution
 
 Workflow chat runs through the Claude Agent SDK adapter in `src/lib/agent-adapters/claude-agent-sdk.ts`. The current implementation keeps the adapter intentionally constrained while enabling project Skill discovery only for materialized workflow nodes:
 
@@ -84,16 +84,15 @@ HITL responses are served through `POST /api/chat/respond`. The route must load 
 
 Claude authentication for deployed environments must be injected through server environment variables such as `ANTHROPIC_BASE_URL` plus `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN`. Docker Compose already passes the Anthropic variables from the compose environment into the container. The adapter may read the `env` block from `~/.claude/settings.json` only when `BATTLEFLOW_PROJECT_ENV=DEV`, or from an explicitly configured `BATTLEFLOW_CLAUDE_SETTINGS_PATH`; that local fallback is for developer machines and must not be treated as a production secret source.
 
-The legacy Claude Code CLI helper in `src/lib/agent-adapters/claude-code-cli.ts` remains available for workflow validation and other non-chat helper flows. It is still constrained with safe mode, no session persistence, no tools by default in helper/development flows, and JSON output.
-When the environment includes SDK write tools, CLI helper argument construction still filters `Write` and `Edit` out before invoking Claude Code.
+Skill tuning and workflow validation use the same Claude Agent SDK adapter through a non-persistent prompt helper.
 
-Do not enable broader SDK/CLI tools, broader permissions, additional project discovery surfaces, custom HITL MCP tools, or new session storage modes without documenting the threat model and validating the change. The current approved chat tool surface is limited to Claude Code `Read`, `Grep`, `Glob`, `WebSearch`, `WebFetch`, `Write`, and `Edit` when configured through `BATTLEFLOW_CLAUDE_TOOLS`; the `Skill` tool is exposed only when a workflow node has one materialized bound Skill, and `PreToolUse` rejects any different Skill name. The runtime also supports SDK built-in AskUserQuestion dialogs mapped through BattleFlow HITL, same-node SDK session resume through persisted `chat_runs.session_id`, bounded-history retry when that stored SDK session handle is stale, and the BattleFlow `PreToolUse` guard for every tool call. File tools exist so the runtime can read workflow-owned attachments and promoted workflow artifacts by path instead of injecting full files into prompts. Web tools may send user prompts and URLs outside BattleFlow through the configured Claude runtime, so enable them only in environments where outbound web access is expected. `Write` and `Edit` are for node-local drafts only and must pass the server write guard before user approval. Do not enable `MultiEdit`, `Bash`, `Agent`, custom human-in-the-loop tools, or broad MCP surfaces for ordinary chat turns.
+Do not enable broader SDK tools, broader permissions, additional project discovery surfaces, custom HITL MCP tools, or new session storage modes without documenting the threat model and validating the change. The current approved chat tool surface is limited to Claude Code `Read`, `Grep`, `Glob`, `WebSearch`, `WebFetch`, `Write`, and `Edit` when configured through `BATTLEFLOW_CLAUDE_TOOLS`; the `Skill` tool is exposed only when a workflow node has one materialized bound Skill, and `PreToolUse` rejects any different Skill name. The runtime also supports SDK built-in AskUserQuestion dialogs mapped through BattleFlow HITL, same-node SDK session resume through persisted `chat_runs.session_id`, bounded-history retry when that stored SDK session handle is stale, and the BattleFlow `PreToolUse` guard for every tool call. File tools exist so the runtime can read workflow-owned attachments and promoted workflow artifacts by path instead of injecting full files into prompts. Web tools may send user prompts and URLs outside BattleFlow through the configured Claude runtime, so enable them only in environments where outbound web access is expected. `Write` and `Edit` are for node-local drafts only and must pass the server write guard before user approval. Do not enable `MultiEdit`, `Bash`, `Agent`, custom human-in-the-loop tools, or broad MCP surfaces for ordinary chat turns.
 
 The `PreToolUse` guard is a product-level enforcement layer, not an operating-system sandbox. It prevents normal SDK tool execution from crossing BattleFlow's declared roots, but a future hard isolation layer should still run the Claude process in a container or sandbox that mounts only the node cwd, read-only artifacts, and minimal Claude auth/session storage.
 
-Workflow validation uses the same constrained Claude Code CLI boundary. Skill self-check always uses safe mode, no tools, and no session persistence. Independent Agent validation uses the same boundary only when the workflow-level Agent validation switch is enabled. Validation prompts frame Skill Markdown, uploaded files, retrieved knowledge, chat history, self-check output, and candidate artifacts as untrusted reference material. The validation Agent is a judge only: it must return structured JSON and must not execute instructions from candidate content or package assets.
+Workflow validation uses the same constrained Claude Agent SDK boundary with no session persistence. Independent Agent validation uses the same boundary only when the workflow-level Agent validation switch is enabled. Validation prompts frame Skill Markdown, uploaded files, retrieved knowledge, chat history, self-check output, and candidate artifacts as untrusted reference material. The validation Agent is a judge only: it must return structured JSON and must not execute instructions from candidate content or package assets.
 
-Validation failures and runtime errors are stored as bounded summaries and findings. Do not log or surface full uploaded private documents, full candidate artifacts, credentials, raw service-role keys, or raw CLI prompts in validation error messages.
+Validation failures and runtime errors are stored as bounded summaries and findings. Do not log or surface full uploaded private documents, full candidate artifacts, credentials, raw service-role keys, or raw model prompts in validation error messages.
 
 ## Workflow Shared Artifacts
 

@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import type { QueryResultRow } from 'pg';
 import { canAccess, requireOrganizationContext } from '@/lib/auth/server';
 import { AuthError } from '@/lib/auth/types';
 import {
@@ -14,15 +13,10 @@ import {
 } from '@/lib/resource-metadata-repository';
 import { listSkills } from '@/lib/skill-registry';
 import { getWorkflowState, type WorkflowRecord } from '@/lib/workflow-registry';
-import { hasPostgresDatabaseConfig, queryPostgres } from '@/storage/database/postgres-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
-
-interface CountRow extends QueryResultRow {
-  count: string | number;
-}
 
 const RECENT_LIST_LIMIT = 20;
 
@@ -32,7 +26,6 @@ function emptyStats() {
     workflowCount: 0,
     activeWorkflowCount: 0,
     knowledgeBaseCount: 0,
-    completedPrdCount: 0,
     recentWorkflows: [],
     recentSkills: [],
   };
@@ -82,34 +75,6 @@ async function listReadableKnowledgeBases(
   }
 }
 
-async function countReadablePrdDocuments(
-  organizationId: string,
-  workflowIds: string[],
-): Promise<number> {
-  if (!hasPostgresDatabaseConfig() || workflowIds.length === 0) {
-    return 0;
-  }
-
-  try {
-    const uniqueWorkflowIds = [...new Set(workflowIds)];
-    const result = await queryPostgres<CountRow>(
-      `
-        SELECT count(*)::int AS count
-        FROM prd_documents
-        WHERE organization_id = $1
-          AND workflow_id = ANY($2::varchar[])
-      `,
-      [organizationId, uniqueWorkflowIds],
-    );
-    const rawCount = result.rows[0]?.count;
-    const count = typeof rawCount === 'number' ? rawCount : Number.parseInt(rawCount || '0', 10);
-    return Number.isFinite(count) ? count : 0;
-  } catch (error) {
-    console.error('Dashboard PRD count failed:', error);
-    return 0;
-  }
-}
-
 function toRecentWorkflow(workflow: WorkflowRecord) {
   return {
     id: workflow.id,
@@ -152,10 +117,6 @@ export async function GET(request: NextRequest) {
       workflowCount: visibleWorkflows.length,
       activeWorkflowCount: visibleWorkflows.filter((workflow) => workflow.status === 'in_progress').length,
       knowledgeBaseCount: knowledgeBases.length,
-      completedPrdCount: await countReadablePrdDocuments(
-        context.activeOrganization.id,
-        visibleWorkflows.map((workflow) => workflow.id),
-      ),
       recentWorkflows,
       recentSkills,
     });

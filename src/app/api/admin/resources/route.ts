@@ -6,7 +6,7 @@ import { managementErrorResponse, noStoreJson } from '../../organizations/_share
 
 export const runtime = 'nodejs';
 
-type ManagedResourceType = 'skill' | 'workflow' | 'knowledge_base' | 'prd_document';
+type ManagedResourceType = 'skill' | 'workflow' | 'knowledge_base';
 
 interface ResourceStatusRow {
   resource_type: ManagedResourceType;
@@ -14,7 +14,7 @@ interface ResourceStatusRow {
   grant_count: number;
 }
 
-const resourceTypes: ManagedResourceType[] = ['skill', 'workflow', 'knowledge_base', 'prd_document'];
+const resourceTypes: ManagedResourceType[] = ['skill', 'workflow', 'knowledge_base'];
 
 function requestedOrganizationId(request: NextRequest): string | null {
   return request.nextUrl.searchParams.get('organizationId');
@@ -46,10 +46,6 @@ export async function GET(request: NextRequest) {
           UNION ALL
           SELECT 'knowledge_base'::varchar AS resource_type, count(*)::int AS resource_count
           FROM knowledge_bases
-          WHERE organization_id = $1
-          UNION ALL
-          SELECT 'prd_document'::varchar AS resource_type, count(*)::int AS resource_count
-          FROM prd_documents
           WHERE organization_id = $1
         ),
         grant_counts AS (

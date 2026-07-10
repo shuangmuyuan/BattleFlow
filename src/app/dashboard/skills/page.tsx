@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Archive, CheckCircle2, Clock3, Download, FileCode2, GitBranch, GitPullRequest, Globe, LockKeyhole, MoreVertical, PackageCheck, RotateCcw, Search, ShieldCheck, Star, Tag, Upload, Users } from 'lucide-react';
+import { AlertCircle, Archive, CheckCircle2, Clock3, Download, FileCode2, GitPullRequest, History, LockKeyhole, MoreVertical, PackageCheck, RotateCcw, Search, ShieldCheck, Star, Tag, Upload, Users } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -45,7 +45,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { PageHeader, appCardClassName, appPageClassName } from '@/components/battleflow/ui';
 
 type SkillScope = 'personal' | 'team' | 'official';
-type SkillSourceType = 'local' | 'registry' | 'git';
+type SkillSourceType = 'local';
 type SkillStatus = 'imported' | 'pending_review' | 'published' | 'rejected' | 'archived';
 type VersionBump = 'patch' | 'minor' | 'major';
 type SkillReviewOperation = 'create' | 'update';
@@ -157,9 +157,7 @@ const reviewOperationLabels: Record<SkillReviewOperation, string> = {
 };
 
 const sourceLabels: Record<SkillSourceType, string> = {
-  local: '本地导入',
-  registry: '注册中心',
-  git: 'Git 同步',
+  local: 'ZIP 上传',
 };
 
 const slugAcronyms = new Set(['ai', 'api', 'cli', 'dcp', 'id', 'prd', 'tr1', 'tr2', 'ui', 'ux']);
@@ -201,15 +199,8 @@ function formatFileSize(size: number) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function getSourceIcon(type: SkillSourceType) {
-  switch (type) {
-    case 'git':
-      return <GitBranch />;
-    case 'registry':
-      return <Globe />;
-    default:
-      return <FileCode2 />;
-  }
+function getSourceIcon() {
+  return <FileCode2 />;
 }
 
 function getSkillDescription(skill: Skill) {
@@ -267,12 +258,6 @@ function getSourceMeta(skill: Skill) {
 
   if (source.startsWith('upload:')) {
     return { label: '上传包', detail: fileName };
-  }
-  if (source.startsWith('official://')) {
-    return { label: '注册中心', detail: source.replace('official://', '') };
-  }
-  if (source.startsWith('http://') || source.startsWith('https://') || source.endsWith('.git')) {
-    return { label: sourceLabels[skill.source_type], detail: source };
   }
   return { label: sourceLabels[skill.source_type], detail: fileName };
 }
@@ -351,11 +336,8 @@ export default function SkillsPage() {
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
-  const [importSource, setImportSource] = useState<SkillSourceType>('local');
   const [importScope, setImportScope] = useState<'personal' | 'team'>('personal');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [serverPath, setServerPath] = useState('');
-  const [importUrl, setImportUrl] = useState('');
   const [versionBump, setVersionBump] = useState<VersionBump>('patch');
   const [importChangelogNote, setImportChangelogNote] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -473,58 +455,15 @@ export default function SkillsPage() {
     setSuccessMessage('');
 
     try {
-      let res: Response;
-      if (importSource === 'local' && selectedFile) {
-        const formData = new FormData();
-        formData.set('action', 'import_upload');
-        formData.set('scope', importScope);
-        formData.set('visibility', importScope === 'team' ? 'public' : 'private');
-        formData.set('version_bump', versionBump);
-        formData.set('changelog_note', importChangelogNote.trim());
-        formData.set('file', selectedFile);
-        res = await fetch('/api/skills', { method: 'POST', body: formData });
-      } else if (importSource === 'local') {
-        if (!serverPath.trim()) throw new Error('请选择 zip 包或填写远端 Skill 目录路径');
-        res = await fetch('/api/skills', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'import_path',
-            path: serverPath.trim(),
-            scope: importScope,
-            visibility: importScope === 'team' ? 'public' : 'private',
-            version_bump: versionBump,
-            changelog_note: importChangelogNote.trim(),
-          }),
-        });
-      } else if (importSource === 'git') {
-        if (!importUrl.trim()) throw new Error('请填写 Git 仓库地址');
-        res = await fetch('/api/skills', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'import_git',
-            url: importUrl.trim(),
-            scope: importScope,
-            visibility: importScope === 'team' ? 'public' : 'private',
-            version_bump: versionBump,
-            changelog_note: importChangelogNote.trim(),
-          }),
-        });
-      } else {
-        res = await fetch('/api/skills', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'import_registry',
-            url: importUrl.trim(),
-            scope: importScope,
-            visibility: importScope === 'team' ? 'public' : 'private',
-            version_bump: versionBump,
-            changelog_note: importChangelogNote.trim(),
-          }),
-        });
-      }
+      if (!selectedFile) throw new Error('请选择要导入的 ZIP 包');
+      const formData = new FormData();
+      formData.set('action', 'import_upload');
+      formData.set('scope', importScope);
+      formData.set('visibility', importScope === 'team' ? 'public' : 'private');
+      formData.set('version_bump', versionBump);
+      formData.set('changelog_note', importChangelogNote.trim());
+      formData.set('file', selectedFile);
+      const res = await fetch('/api/skills', { method: 'POST', body: formData });
 
       const data = (await res.json()) as ApiSkillResponse;
       if (!res.ok) throw new Error(data.error || 'Import failed');
@@ -532,8 +471,6 @@ export default function SkillsPage() {
       await fetchSkills();
       setImportDialogOpen(false);
       setSelectedFile(null);
-      setServerPath('');
-      setImportUrl('');
       setImportChangelogNote('');
       const importedSummary = (data.skills || []).map((skill) => `${getSkillDisplayName(skill)} v${skill.version}`).join('、');
       const reviewSummary = (data.review_requests || [])
@@ -600,7 +537,7 @@ export default function SkillsPage() {
             <DialogHeader className="border-b border-border/40 px-6 py-5 pr-12">
               <DialogTitle>导入 Skill</DialogTitle>
               <DialogDescription>
-                支持上传 zip 包、填写远端目录路径或同步 Git 仓库。远程注册中心 API 先保留入口。
+                上传包含 Skill 定义和资源文件的 ZIP 包。
               </DialogDescription>
             </DialogHeader>
 
@@ -636,17 +573,7 @@ export default function SkillsPage() {
               </Field>
 
               <Field>
-                <FieldLabel>来源</FieldLabel>
-                <Tabs value={importSource} onValueChange={(value) => setImportSource(value as SkillSourceType)}>
-                  <TabsList>
-                    <TabsTrigger value="local">本地 / 路径</TabsTrigger>
-                    <TabsTrigger value="git">Git 仓库</TabsTrigger>
-                    <TabsTrigger value="registry">注册中心</TabsTrigger>
-                  </TabsList>
-                  <TabsContent value="local" className="mt-4">
-                    <FieldGroup className="gap-4">
-                      <Field>
-                        <FieldLabel htmlFor="skill-package">上传 zip 包</FieldLabel>
+                <FieldLabel htmlFor="skill-package">上传 ZIP 包</FieldLabel>
                         <input
                           ref={fileInputRef}
                           id="skill-package"
@@ -712,45 +639,6 @@ export default function SkillsPage() {
                         <FieldDescription>
                           zip 内应包含 skill.md、meta.json、CHANGELOG.md，或包含 registry.json 的批量包。
                         </FieldDescription>
-                      </Field>
-                      <Field>
-                        <FieldLabel htmlFor="server-path">远端目录路径</FieldLabel>
-                        <Input
-                          id="server-path"
-                          placeholder="/root/data/skill-packages/market-insight"
-                          value={serverPath}
-                          onChange={(event) => setServerPath(event.target.value)}
-                        />
-                        <FieldDescription>
-                          用于在服务器上调试导入目录或 registry.json，允许根目录限制在项目目录和 /root/data。
-                        </FieldDescription>
-                      </Field>
-                    </FieldGroup>
-                  </TabsContent>
-                  <TabsContent value="git" className="mt-4">
-                    <Field>
-                      <FieldLabel htmlFor="git-url">Git 仓库地址</FieldLabel>
-                      <Input
-                        id="git-url"
-                        placeholder="https://github.com/org/skill-library.git"
-                        value={importUrl}
-                        onChange={(event) => setImportUrl(event.target.value)}
-                      />
-                      <FieldDescription>
-                        仓库根目录可以是单个 Skill 包、registry.json、Claude plugin；也可以追加 #skills/path 导入子目录。
-                      </FieldDescription>
-                    </Field>
-                  </TabsContent>
-                  <TabsContent value="registry" className="mt-4">
-                    <Alert>
-                      <AlertCircle />
-                      <AlertTitle>接口预留</AlertTitle>
-                      <AlertDescription>
-                        远程注册中心 API 会保留入口，本阶段先落地本地包和 Git 仓库两种来源。
-                      </AlertDescription>
-                    </Alert>
-                  </TabsContent>
-                </Tabs>
               </Field>
 
               <Field>
@@ -859,7 +747,7 @@ export default function SkillsPage() {
                   <FileCode2 />
                 </EmptyMedia>
                 <EmptyTitle>暂无匹配 Skill</EmptyTitle>
-                <EmptyDescription>可以上传 zip 包，或从 Git 仓库导入一批 Skill。</EmptyDescription>
+                <EmptyDescription>上传 ZIP 包即可导入一个或一批 Skill。</EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
                 <Button onClick={() => setImportDialogOpen(true)}>
@@ -882,7 +770,7 @@ export default function SkillsPage() {
                   <CardHeader className="pb-4">
                     <div className="flex min-w-0 items-start gap-3">
                       <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border ${getScopeCardClassName(skill.scope)} [&_svg]:h-5 [&_svg]:w-5`}>
-                        {getSourceIcon(skill.source_type)}
+                        {getSourceIcon()}
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex min-w-0 items-start gap-2">
@@ -918,7 +806,7 @@ export default function SkillsPage() {
                               setVersionSkill(skill);
                             }}
                           >
-                            <GitBranch />
+                            <History />
                             版本管理
                           </DropdownMenuItem>
                           {skill.scope === 'personal' && (
@@ -1051,7 +939,7 @@ export default function SkillsPage() {
             <>
               <DialogHeader>
                 <div className="flex flex-wrap items-center gap-2">
-                  {getSourceIcon(detailSkill.source_type)}
+                  {getSourceIcon()}
                   <DialogTitle className="text-xl">{getSkillDisplayName(detailSkill)}</DialogTitle>
                   <Badge variant="outline">v{detailSkill.version}</Badge>
                   <ScopeBadge scope={detailSkill.scope} />

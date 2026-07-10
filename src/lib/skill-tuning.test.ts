@@ -1,13 +1,12 @@
-import { EventEmitter } from 'node:events';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SkillRecord } from './skill-registry';
 
 const mocks = vi.hoisted(() => ({
-  spawn: vi.fn(),
+  runClaudeAgentSdkPrompt: vi.fn(),
 }));
 
-vi.mock('node:child_process', () => ({
-  spawn: mocks.spawn,
+vi.mock('./agent-adapters/claude-agent-sdk', () => ({
+  runClaudeAgentSdkPrompt: mocks.runClaudeAgentSdkPrompt,
 }));
 
 import { generateWorkflowSkillDraft } from './skill-tuning';
@@ -86,26 +85,7 @@ function baseSkill(): SkillRecord {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.spawn.mockImplementation(() => {
-    const child = new EventEmitter() as EventEmitter & {
-      stdout: EventEmitter;
-      stderr: EventEmitter;
-      kill: ReturnType<typeof vi.fn>;
-    };
-    child.stdout = new EventEmitter();
-    child.stderr = new EventEmitter();
-    child.kill = vi.fn();
-
-    queueMicrotask(() => {
-      child.stdout.emit('data', Buffer.from(`${JSON.stringify({
-        type: 'result',
-        result: generatedDraftSections,
-      })}\n`));
-      child.emit('close', 0);
-    });
-
-    return child;
-  });
+  mocks.runClaudeAgentSdkPrompt.mockResolvedValue({ text: generatedDraftSections });
 });
 
 describe('skill tuning generation', () => {
@@ -129,5 +109,6 @@ describe('skill tuning generation', () => {
     expect(draft.change_items).toEqual(['补充风险假设', '补充验证标准']);
     expect(draft.quality_gates).toEqual(['检查验证标准']);
     expect(draft.tuning_request).toBe('保留繁體原文：請強化風險');
+    expect(draft.generator).toBe('claude-agent-sdk');
   });
 });

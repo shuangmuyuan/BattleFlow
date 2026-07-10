@@ -1,6 +1,5 @@
-import { spawn } from 'node:child_process';
-import { buildClaudeToolsArgs } from './agent-adapters/claude-code-tools';
 import { randomUUID } from 'node:crypto';
+import { runClaudeAgentSdkPrompt } from './agent-adapters/claude-agent-sdk';
 import {
   SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION,
   toSimplifiedChineseDeep,
@@ -8,19 +7,6 @@ import {
 } from './simplified-chinese';
 import type { SkillRecord } from './skill-registry';
 import { cleanExecutableSkillText } from './workflow-skill-draft';
-
-interface ClaudeCodeStreamEvent {
-  type?: string;
-  is_error?: boolean;
-  result?: string;
-  event?: {
-    type?: string;
-    delta?: {
-      type?: string;
-      text?: string;
-    };
-  };
-}
 
 export interface SkillTuningContextMessage {
   role: 'user' | 'assistant';
@@ -71,7 +57,7 @@ export interface GeneratedWorkflowSkillDraft {
   source_context_summary?: string;
   enabled: boolean;
   status: 'draft';
-  generator: 'claude-code-cli';
+  generator: 'claude-agent-sdk';
   created_at: string;
   updated_at: string;
 }
@@ -101,18 +87,6 @@ interface RawGeneratedDraft {
 
 const MAX_CONTEXT_CHARS = 9000;
 
-function getClaudeCommand() {
-  return process.env.CLAUDE_COMMAND || 'claude';
-}
-
-function getClaudeModel() {
-  return process.env.CLAUDE_MODEL || 'sonnet';
-}
-
-function getClaudeWorkspaceDir() {
-  return process.env.CLAUDE_WORKSPACE_DIR || process.cwd();
-}
-
 function truncateText(value: string | undefined, maxLength: number) {
   const text = (value || '').trim();
   if (text.length <= maxLength) return text;
@@ -140,7 +114,7 @@ function extractJsonObject(text: string): RawGeneratedDraft {
   const start = withoutFence.indexOf('{');
   const end = withoutFence.lastIndexOf('}');
   if (start < 0 || end <= start) {
-    throw new Error('Claude CLI did not return a JSON object');
+    throw new Error('Claude Agent SDK did not return a JSON object');
   }
 
   return JSON.parse(withoutFence.slice(start, end + 1)) as RawGeneratedDraft;
@@ -234,113 +208,12 @@ function simplifyGeneratedDraft(rawDraft: RawGeneratedDraft): RawGeneratedDraft 
   };
 }
 
-function runClaudeCli(systemPrompt: string, prompt: string, timeoutMs = 120_000) {
-  return new Promise<string>((resolve, reject) => {
-    const command = getClaudeCommand();
-    const args = [
-      '-p',
-      '--safe-mode',
-      '--no-session-persistence',
-      '--verbose',
-      '--output-format',
-      'stream-json',
-      '--include-partial-messages',
-      '--model',
-      getClaudeModel(),
-      ...buildClaudeToolsArgs(),
-      '--permission-mode',
-      'dontAsk',
-      '--system-prompt',
-      systemPrompt,
-      prompt,
-    ];
-
-    const child = spawn(command, args, {
-      cwd: getClaudeWorkspaceDir(),
-      env: {
-        ...process.env,
-        CI: '1',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    let stdoutBuffer = '';
-    let stderrBuffer = '';
-    let finalResult = '';
-    let deltaText = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGTERM');
-      reject(new Error(`Claude Code CLI timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    const handleLine = (line: string) => {
-      if (!line.trim()) return;
-      try {
-        const event = JSON.parse(line) as ClaudeCodeStreamEvent;
-        if (event.type === 'stream_event' && event.event?.type === 'content_block_delta') {
-          deltaText += event.event.delta?.text || '';
-          return;
-        }
-        if (event.type === 'result') {
-          if (event.is_error) {
-            throw new Error(event.result || 'Claude Code CLI request failed');
-          }
-          finalResult = event.result || finalResult;
-        }
-      } catch (error) {
-        if (error instanceof SyntaxError) {
-          stderrBuffer += `${line}\n`;
-          return;
-        }
-        throw error;
-      }
-    };
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdoutBuffer += chunk.toString('utf8');
-      const lines = stdoutBuffer.split(/\r?\n/);
-      stdoutBuffer = lines.pop() || '';
-      try {
-        for (const line of lines) handleLine(line);
-      } catch (error) {
-        clearTimeout(timer);
-        child.kill('SIGTERM');
-        reject(error);
-      }
-    });
-
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderrBuffer += chunk.toString('utf8');
-      if (stderrBuffer.length > 6000) stderrBuffer = stderrBuffer.slice(-6000);
-    });
-
-    child.on('error', (error) => {
-      clearTimeout(timer);
-      reject(new Error(`Claude Code CLI unavailable: ${error.message}`));
-    });
-
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (stdoutBuffer.trim()) {
-        try {
-          handleLine(stdoutBuffer);
-        } catch (error) {
-          reject(error);
-          return;
-        }
-      }
-      if (code && code !== 0) {
-        reject(new Error(stderrBuffer.trim() || `Claude Code CLI exited with code ${code}`));
-        return;
-      }
-      const result = (finalResult || deltaText).trim();
-      if (!result) {
-        reject(new Error(stderrBuffer.trim() || 'Claude Code CLI returned empty output'));
-        return;
-      }
-      resolve(result);
-    });
-  });
+async function runClaudeAgentSdkText(systemPrompt: string, prompt: string, timeoutMs = 120_000) {
+  const result = await runClaudeAgentSdkPrompt({
+    systemPrompt,
+    messages: [{ role: 'user', content: prompt }],
+  }, timeoutMs);
+  return result.text;
 }
 
 function buildPrompt(input: GenerateWorkflowSkillDraftInput) {
@@ -472,12 +345,12 @@ export async function generateWorkflowSkillDraft(input: GenerateWorkflowSkillDra
     'You must return only valid JSON matching the requested schema.',
     SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION,
   ].join('\n');
-  const rawText = await runClaudeCli(systemPrompt, buildPrompt({ ...input, instruction }));
+  const rawText = await runClaudeAgentSdkText(systemPrompt, buildPrompt({ ...input, instruction }));
   let rawDraft: RawGeneratedDraft;
   try {
     rawDraft = simplifyGeneratedDraft(extractGeneratedDraft(rawText));
   } catch {
-    const repairedText = await runClaudeCli(
+    const repairedText = await runClaudeAgentSdkText(
       [
         'You repair malformed structured text. Return only the requested section format.',
         SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION,
@@ -554,7 +427,7 @@ export async function generateWorkflowSkillDraft(input: GenerateWorkflowSkillDra
     source_context_summary: asString(rawDraft.source_context_summary) || undefined,
     enabled: true,
     status: 'draft',
-    generator: 'claude-code-cli',
+    generator: 'claude-agent-sdk',
     created_at: now,
     updated_at: now,
   };

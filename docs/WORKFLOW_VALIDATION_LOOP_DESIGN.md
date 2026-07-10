@@ -76,12 +76,12 @@ pending -> in_progress -> completed
 
 ### 2.4 当前 Agent 运行边界
 
-`src/lib/agent-adapters/claude-code-cli.ts` 已经把 Claude CLI 约束在较保守的模式：
+`src/lib/agent-adapters/claude-agent-sdk.ts` 通过非持久化 helper 将验证调用约束在较保守的模式：
 
 - safe mode；
 - no session persistence；
 - no tools；
-- JSON 流式输出。
+- 结构化结果归一化。
 
 验证 Agent 应该沿用这个边界。它只做只读判断，不执行脚本、不读写文件、不调用外部工具。
 
@@ -312,7 +312,7 @@ export interface WorkflowStepValidationAttemptRecord {
     summary: string;
     findings: WorkflowStepValidationFinding[];
     rawText?: string;
-    generator: 'claude-code-cli';
+    generator: 'claude-agent-sdk';
   };
   status: 'running' | 'passed' | 'failed' | 'error';
   created_at: string;
@@ -709,7 +709,7 @@ If a database-backed workflow execution model is added later, add or map:
 
 - `workflow_step_validations`；
 - `workflow_steps.validation_status`；
-- `step_snapshots.snapshot_type = validation_candidate`。
+- validation candidate storage mapped to the durable workflow model.
 
 文件注册表和数据库语义要保持一致。
 

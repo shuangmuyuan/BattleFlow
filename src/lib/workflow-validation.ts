@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { runClaudeCodeCliPrompt } from './agent-adapters/claude-code-cli';
+import { runClaudeAgentSdkPrompt } from './agent-adapters/claude-agent-sdk';
 import {
   normalizeAiGeneratedText,
   SIMPLIFIED_CHINESE_OUTPUT_INSTRUCTION,
@@ -403,12 +403,12 @@ function buildRuntimeErrorPhase(summary: string, rawText?: string): WorkflowStep
         severity: 'blocking',
         criterion: '验证运行时必须在只读模式下返回严格 JSON 结果。',
         issue: safeSummary,
-        recommendation: '请稍后重试验证；如果持续失败，需要人工检查 Claude CLI 登录、预算、网络或验证输出格式。',
+        recommendation: '请稍后重试验证；如果持续失败，需要人工检查 Claude Agent SDK 登录、网络或验证输出格式。',
         evidence: safeRawText,
       },
     ],
     rawText: safeRawText,
-    generator: 'claude-code-cli',
+    generator: 'claude-agent-sdk',
   };
 }
 
@@ -428,7 +428,7 @@ function buildRepairPrompt(rawText: string, parseError: string) {
 
 async function runValidationPrompt(prompt: string, input: WorkflowValidationRuntimeInput) {
   try {
-    const runResult = await runClaudeCodeCliPrompt({
+    const runResult = await runClaudeAgentSdkPrompt({
       systemPrompt: VALIDATION_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: prompt }],
       signal: input.signal,
@@ -439,11 +439,11 @@ async function runValidationPrompt(prompt: string, input: WorkflowValidationRunt
     if (parsed.ok) {
       return toValidationPhaseRecord(parsed.result, {
         rawText: limitValidationDiagnostic(runText, MAX_VALIDATION_RAW_TEXT_CHARS),
-        generator: 'claude-code-cli',
+        generator: 'claude-agent-sdk',
       });
     }
 
-    const repairResult = await runClaudeCodeCliPrompt({
+    const repairResult = await runClaudeAgentSdkPrompt({
       systemPrompt: VALIDATION_REPAIR_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: buildRepairPrompt(parsed.rawText, parsed.error) }],
       signal: input.signal,
@@ -454,7 +454,7 @@ async function runValidationPrompt(prompt: string, input: WorkflowValidationRunt
     if (repaired.ok) {
       return toValidationPhaseRecord(repaired.result, {
         rawText: limitValidationDiagnostic(repairText, MAX_VALIDATION_RAW_TEXT_CHARS),
-        generator: 'claude-code-cli',
+        generator: 'claude-agent-sdk',
       });
     }
 
@@ -540,7 +540,7 @@ export function resolveValidationGateResult(
 
 export function toValidationPhaseRecord(
   result: ParsedWorkflowValidationResult,
-  options: { rawText?: string; generator?: 'claude-code-cli' } = {},
+  options: { rawText?: string; generator?: 'claude-agent-sdk' } = {},
 ): WorkflowStepValidationPhaseRecord {
   return {
     outcome: result.outcome,

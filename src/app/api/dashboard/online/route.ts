@@ -3,7 +3,6 @@ import { createHash } from 'crypto';
 import type { QueryResultRow } from 'pg';
 import { requireUser } from '@/lib/auth/server';
 import { AUTH_SESSION_COOKIE_NAME, AuthError } from '@/lib/auth/types';
-import { battleflowAuthCookieName, getUserBySessionToken } from '@/lib/sso-auth';
 import { queryPostgres } from '@/storage/database/postgres-client';
 
 export const runtime = 'nodejs';
@@ -29,8 +28,8 @@ function parseCount(value: string | number | undefined): number {
   return Number.isFinite(count) ? Math.max(0, count) : 0;
 }
 
-function fingerprintSession(source: 'account' | 'sso', token: string): string {
-  return `${source}:${createHash('sha256').update(token).digest('hex')}`;
+function fingerprintSession(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
 }
 
 function pruneOnlinePresence(now: number): void {
@@ -43,12 +42,12 @@ function pruneOnlinePresence(now: number): void {
   });
 }
 
-function markOnlinePresence(source: 'account' | 'sso', token: string): number {
+function markOnlinePresence(token: string): number {
   const now = Date.now();
   pruneOnlinePresence(now);
 
   if (token) {
-    onlinePresenceBySessionKey.set(fingerprintSession(source, token), now);
+    onlinePresenceBySessionKey.set(fingerprintSession(token), now);
   }
 
   return onlinePresenceBySessionKey.size;
@@ -75,7 +74,7 @@ export async function GET(request: NextRequest) {
   try {
     const accountToken = request.cookies.get(AUTH_SESSION_COOKIE_NAME)?.value || '';
     await requireUser(request);
-    const processPresenceCount = markOnlinePresence('account', accountToken);
+    const processPresenceCount = markOnlinePresence(accountToken);
     const onlineCount = await countRecentlySeenAccounts();
 
     return jsonResponse({
@@ -83,18 +82,6 @@ export async function GET(request: NextRequest) {
       windowSeconds: ONLINE_WINDOW_SECONDS,
     });
   } catch (error) {
-    const ssoToken = request.cookies.get(battleflowAuthCookieName)?.value || '';
-    const ssoUser = await getUserBySessionToken(ssoToken).catch(() => null);
-
-    if (ssoUser?.is_active) {
-      const processPresenceCount = markOnlinePresence('sso', ssoToken);
-
-      return jsonResponse({
-        onlineCount: Math.max(1, processPresenceCount),
-        windowSeconds: ONLINE_WINDOW_SECONDS,
-      });
-    }
-
     if (error instanceof AuthError) {
       return jsonResponse({ onlineCount: 0, error: error.message }, error.status);
     }

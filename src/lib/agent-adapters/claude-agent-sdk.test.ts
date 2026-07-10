@@ -4,7 +4,7 @@ import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { AgentEvent } from './types';
-import { buildClaudeToolsArgs, getConfiguredClaudeTools } from './claude-code-tools';
+import { getConfiguredClaudeTools } from './claude-tools';
 
 const mocks = vi.hoisted(() => ({
   query: vi.fn(),
@@ -14,7 +14,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: mocks.query,
 }));
 
-import { checkClaudeAgentSdkRuntime, streamClaudeAgentSdkTurn } from './claude-agent-sdk';
+import { checkClaudeAgentSdkRuntime, runClaudeAgentSdkPrompt, streamClaudeAgentSdkTurn } from './claude-agent-sdk';
 
 type MockQuery = AsyncGenerator<SDKMessage, void> & {
   close: ReturnType<typeof vi.fn>;
@@ -43,6 +43,7 @@ type CapturedSdkOptions = {
   persistSession?: boolean;
   resume?: string;
   settingSources?: string[];
+  tools?: string[];
   skills?: string[];
   strictMcpConfig?: boolean;
   supportedDialogKinds?: string[];
@@ -51,7 +52,6 @@ type CapturedSdkOptions = {
       previewFormat?: string;
     };
   };
-  tools?: string[];
   writableRoot?: string;
 };
 
@@ -155,13 +155,6 @@ describe('getConfiguredClaudeTools', () => {
       ...process.env,
       BATTLEFLOW_CLAUDE_TOOLS: 'Read Write Edit MultiEdit Bash Nope',
     })).toEqual(['Read', 'Write', 'Edit']);
-  });
-
-  it('keeps legacy CLI tool args read-only even when SDK write tools are configured', () => {
-    expect(buildClaudeToolsArgs({
-      ...process.env,
-      BATTLEFLOW_CLAUDE_TOOLS: 'Read,Grep,Write,Edit',
-    })).toEqual(['--tools', 'Read,Grep', '--allowedTools', 'Read,Grep']);
   });
 });
 
@@ -1116,6 +1109,38 @@ describe('streamClaudeAgentSdkTurn', () => {
     const events = await readAgentStream(stream);
 
     expect(events).toContainEqual({ type: 'error', error: 'Not logged in · Please run /login' });
+  });
+
+  it('runs helper prompts without tools or session persistence', async () => {
+    mocks.query.mockReturnValue(createMockQuery([
+      sdkMessage({
+        type: 'result',
+        subtype: 'success',
+        duration_ms: 10,
+        duration_api_ms: 9,
+        is_error: false,
+        num_turns: 1,
+        result: 'Validated',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        usage: {},
+        modelUsage: {},
+        permission_denials: [],
+        uuid: 'uuid-result',
+        session_id: 'session-helper',
+      }),
+    ]));
+
+    const result = await runClaudeAgentSdkPrompt({
+      messages: [{ role: 'user', content: 'Validate this.' }],
+      systemPrompt: 'Return a validation result.',
+    });
+    const call = mocks.query.mock.calls[0]?.[0] as { options?: CapturedSdkOptions };
+
+    expect(result.text).toBe('Validated');
+    expect(call.options?.tools).toEqual([]);
+    expect(call.options?.allowedTools).toEqual([]);
+    expect(call.options?.persistSession).toBe(false);
   });
 
   it('marks SDK runtime unavailable when server credentials are missing', async () => {

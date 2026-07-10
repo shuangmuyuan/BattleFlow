@@ -1,4 +1,4 @@
-export type AgentProvider = 'claude-agent-sdk' | 'claude-code-cli' | 'claude-cli';
+export type AgentProvider = 'claude-agent-sdk';
 
 export type AgentChatRole = 'user' | 'assistant' | 'system';
 
@@ -84,8 +84,8 @@ export interface AgentRuntimeStatus {
   model?: string;
   cwd?: string;
   readableDirectories?: string[];
-  mode: 'agent-sdk' | 'structured-cli';
-  outputFormat: 'sdk-message' | 'stream-json';
+  mode: 'agent-sdk';
+  outputFormat: 'sdk-message';
   toolsEnabled: boolean;
   tools?: string[];
   disallowedTools?: string[];
@@ -111,6 +111,8 @@ export interface AgentTurnInput {
   attachments?: AgentInputAttachment[];
   readableDirectories?: string[];
   writableRoot?: string;
+  tools?: string[];
+  persistSession?: boolean;
   onHumanInputRequest?: (
     request: AgentHumanInputRequest,
     options: { signal: AbortSignal },

@@ -34,26 +34,29 @@ BattleFlow currently has two storage styles:
 2. Direct Postgres data model and resource metadata:
    - `src/storage/database/postgres-client.ts` creates a server-only Postgres pool from `BATTLEFLOW_DATABASE_URL`.
    - `scripts/database/001_knowledge_store.sql` bootstraps organizations, knowledge bases, knowledge documents, and lexical/trigram search indexes.
-   - `scripts/database/002_account_org_permissions.sql` bootstraps first-party accounts, sessions, organizations, resource grants, snapshots, milestones, and PRD documents.
+   - `scripts/database/002_account_org_permissions.sql` bootstraps first-party accounts, sessions, organizations, and resource grants.
    - `scripts/database/006_chat_runs.sql` bootstraps detached workflow chat runs and replayable run events.
 
 Agents must preserve the distinction between source files and runtime registry data.
+
+### Tracked Storage Convergence TODO
+
+Workflow and Skill business metadata still use transitional dual storage: Postgres is preferred for reads when configured, while `data/workflows/store.json` and `data/skill-registry/index.json` remain fallback or mutation stores in parts of the runtime. Converge this architecture in a dedicated migration phase rather than deleting the file-backed paths as ordinary dead code.
+
+Before switching to Postgres-only reads and writes, add an idempotent server-side migration with a dry-run report, explicit organization and owner mapping, backups, newer-record conflict protection, and reconciliation of IDs, counts, workflow state, steps, Skill versions, and review requests. After production data is verified, remove the JSON metadata fallback and dual-write paths. Continue storing Skill package contents, node workspaces, uploads, and promoted artifacts on the filesystem or a future object store; those files are not metadata fallback.
 
 ## API Routes
 
 All API handlers use App Router route handlers under `src/app/api`.
 
 - `/api/skills` manages Skill list/detail/download/import/review/rollback/archive.
-- `/api/skills/tune` generates workflow Skill tuning drafts through the Claude Code CLI.
+- `/api/skills/tune` generates workflow Skill tuning drafts through the Claude Agent SDK.
 - `/api/workflows` manages file-backed workspaces and workflows.
 - `/api/workflows/artifacts` streams server-promoted workflow artifacts after `workflow.read` authorization and artifact path containment checks.
-- `/api/workflows/snapshots` manages workflow step snapshots.
-- `/api/workflows/milestones` manages milestones.
 - `/api/chat` starts and resumes product-planning chat runs with knowledge and workflow context. POST creates a detached Postgres `chat_runs` record, starts Claude Agent SDK work in the server process, and returns an SSE subscription to persisted `chat_run_events`. GET with `workflow_id` lists authorized runs, including `waiting_human` pending prompts; GET with `run_id` replays events after `Last-Event-ID` or `after`; DELETE marks a run canceled and aborts only when the current process owns its controller.
 - `/api/chat/respond` submits a user answer or tool approval decision for a pending workflow chat run. It loads the run by `runId`, authorizes against the stored workflow with `workflow.update`, and resolves only the in-process deferred request that matches `runId + promptId`.
 - `/api/demos/handoffs` creates and reads node-level Demo handoff records after workflow authorization. `POST` requires `workflow.update`, sends the current completed step's durable `step.output` to the external Demo platform, and stores the returned link in `workflow.demoHandoffs`; `GET` requires `workflow.read`.
-- `/api/agent-runtime` reports Claude Code CLI adapter availability.
-- `/api/prd` reads and writes PRD documents through direct Postgres.
+- `/api/agent-runtime` reports Claude Agent SDK runtime availability and configured tools.
 - `/api/knowledge` handles knowledge data for the dashboard. Knowledge document indexing/search uses direct Postgres when `BATTLEFLOW_DATABASE_URL` is configured.
 
 Route handlers that access the file system or spawn CLI processes must keep `runtime = 'nodejs'`.
@@ -95,8 +98,7 @@ Workflow chat run lifecycle is detached from the browser SSE connection:
 - Run rows persist the latest `session_id`, but the actual Claude transcript is managed by Claude Code session persistence. Without a shared SDK `sessionStore` or shared Claude session storage, multi-instance deployments should treat `session_id` as a resume handle that is strongest when the same runtime filesystem can see the transcript.
 - Successful, failed, and canceled terminal states persist an assistant or error message back to the workflow step chat so a later workflow refresh can recover the final user-visible state.
 
-The legacy Claude Code CLI adapter in `src/lib/agent-adapters/claude-code-cli.ts` remains available for workflow validation and helper flows such as `runClaudeCodeCliPrompt`. Do not grant SDK/CLI write tools, broaden permissions, or add new project discovery surfaces without a security review.
-Even when `BATTLEFLOW_CLAUDE_TOOLS` includes `Write` and `Edit` for SDK workflow chat, legacy CLI helper argument construction filters the tool list back to the read/web subset.
+Skill tuning and workflow validation use the same Claude Agent SDK adapter through a non-persistent prompt helper. Do not grant broader SDK tools, broaden permissions, or add new project discovery surfaces without a security review.
 
 ## Workflow Validation Loop
 
@@ -105,7 +107,7 @@ Workflow step completion is guarded by a validation loop:
 1. The user produces and saves a candidate assistant output for the active step.
 2. The dashboard calls `POST /api/workflows/validation` with `start_step_validation` or `retry_step_validation`.
 3. The route stores the candidate as `step.candidateOutput`, hashes it, writes a `validation_candidate` step snapshot, creates a validation attempt, and moves the step to `self_checking`.
-4. The runtime runs a Skill self-check through the Claude Code CLI adapter in safe mode with no tools and no session persistence, then persists the phase.
+4. The runtime runs a Skill self-check through the Claude Agent SDK adapter with no session persistence, then persists the phase.
 5. If the workflow-level Agent validation switch is enabled, the runtime runs an independent Agent validation against the same candidate and acceptance criteria. The switch is off by default while the Agent gate is being refined.
 6. When the required phases pass, the route sets `step.status = "completed"`, promotes the candidate into `step.output`, and writes a server-promoted workflow artifact plus `artifacts/manifest.json`. With Agent validation disabled, Skill self-check is the only required phase.
 7. Failed or error results from any required phase set `step.status = "validation_failed"`, keep the candidate in candidate fields, leave `step.output` unchanged, and keep downstream steps blocked.

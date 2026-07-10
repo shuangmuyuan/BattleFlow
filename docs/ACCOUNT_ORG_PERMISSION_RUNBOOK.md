@@ -12,7 +12,7 @@ Implemented:
 - multiple organizations per user;
 - organization members, departments, department inheritance, and cross-department teams;
 - platform super admin bootstrap and management;
-- Postgres-backed resource authorization for Skills, workflows, knowledge bases, PRD documents, snapshots, milestones, and chat prompt context;
+- Postgres-backed resource authorization for Skills, workflows, knowledge bases, workflow artifacts, and chat prompt context;
 - hybrid Skill/workflow storage where business metadata and permission indexes live in Postgres while package/file assets remain in file or object storage.
 
 Not implemented in the first release:

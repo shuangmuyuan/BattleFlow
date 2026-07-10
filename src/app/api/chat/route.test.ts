@@ -154,8 +154,8 @@ vi.mock('@/lib/agent-adapters/claude-agent-sdk', () => ({
   streamClaudeAgentSdkTurn: mocks.streamClaudeAgentSdkTurn,
 }));
 
-vi.mock('@/lib/agent-adapters/claude-code-tools', async () => (
-  vi.importActual('../../../lib/agent-adapters/claude-code-tools')
+vi.mock('@/lib/agent-adapters/claude-tools', async () => (
+  vi.importActual('../../../lib/agent-adapters/claude-tools')
 ));
 
 vi.mock('@/lib/auth/server', () => ({

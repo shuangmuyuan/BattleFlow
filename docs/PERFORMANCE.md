@@ -8,7 +8,7 @@
 - Workflow validation gates through `/api/workflows/validation`.
 - Chat streaming through `/api/chat`.
 - Detached chat run persistence through `chat_runs` and `chat_run_events`.
-- Claude CLI Skill tuning through `/api/skills/tune`.
+- Claude Agent SDK Skill tuning through `/api/skills/tune`.
 - File-backed registry read/write paths.
 - Direct Postgres pool usage in server routes and repositories.
 
@@ -50,5 +50,5 @@ File-backed registries are simple and inspectable but not meant for high-concurr
 - Keep prompt/context budgets conservative; BattleFlow does not set a per-turn Claude spend cap.
 - Surface adapter availability through `/api/agent-runtime` without blocking dashboard rendering.
 - Browser disconnects should not be used as a runtime cancellation mechanism. Use explicit DELETE stop semantics so long generations are not restarted or lost because of refreshes, mobile network changes, or tab navigation.
-- Validation prompts use bounded candidate, Skill, previous-step, and recent-message context. Keep those budgets conservative because each validation can make two CLI calls plus one repair call when JSON parsing fails.
-- `/api/workflows/validation` is currently synchronous from the browser's perspective. Long Claude CLI runs can hold the request open; if usage grows, move validation into a queued/background job with polling rather than increasing prompt size or route timeouts.
+- Validation prompts use bounded candidate, Skill, previous-step, and recent-message context. Keep those budgets conservative because each validation can make two SDK calls plus one repair call when JSON parsing fails.
+- `/api/workflows/validation` is currently synchronous from the browser's perspective. Long Claude Agent SDK runs can hold the request open; if usage grows, move validation into a queued/background job with polling rather than increasing prompt size or route timeouts.

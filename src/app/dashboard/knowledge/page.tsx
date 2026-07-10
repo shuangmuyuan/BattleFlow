@@ -18,7 +18,6 @@ import {
   Search,
   BookOpen,
   FileUp,
-  ExternalLink,
   Database,
   Clock,
   LockKeyhole,
@@ -40,8 +39,6 @@ interface KnowledgeBase {
   id: string;
   name: string;
   description: string;
-  source_type: 'builtin' | 'external';
-  connection_config: Record<string, string> | null;
   dataset_name: string;
   document_count: number;
   updated_at: string;
@@ -81,9 +78,7 @@ export default function KnowledgePage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [newKbName, setNewKbName] = useState('');
   const [newKbDesc, setNewKbDesc] = useState('');
-  const [newKbSource, setNewKbSource] = useState<'builtin' | 'external'>('builtin');
   const [newKbVisibility, setNewKbVisibility] = useState<KnowledgeVisibility>('private');
-  const [newKbUrl, setNewKbUrl] = useState('');
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [selectedKb, setSelectedKb] = useState<KnowledgeBase | null>(null);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -222,9 +217,7 @@ export default function KnowledgePage() {
           action: 'create',
           name: newKbName,
           description: newKbDesc,
-          source_type: newKbSource,
           visibility: newKbVisibility,
-          connection_config: newKbSource === 'external' ? { type: 'custom', url: newKbUrl } : null,
         }),
       });
       const data = await res.json();
@@ -235,7 +228,6 @@ export default function KnowledgePage() {
       setNewKbName('');
       setNewKbDesc('');
       setNewKbVisibility('private');
-      setNewKbUrl('');
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : '知识库创建失败');
     }
@@ -389,16 +381,9 @@ export default function KnowledgePage() {
                       <CardHeader className="px-5 pb-2">
                         <div className="flex min-w-0 items-start justify-between gap-3">
                           <div className="flex min-w-0 items-center gap-2">
-                            {kb.source_type === 'builtin' ? (
-                              <Database className="h-4 w-4 text-brand" />
-                            ) : (
-                              <ExternalLink className="h-4 w-4 text-muted-foreground" />
-                            )}
+                            <Database className="h-4 w-4 text-brand" />
                             <CardTitle className="truncate text-base">{kb.name}</CardTitle>
                           </div>
-                          <StatusBadge className="shrink-0" tone={kb.source_type === 'builtin' ? 'brand' : 'neutral'}>
-                            {kb.source_type === 'builtin' ? '内置' : '外部'}
-                          </StatusBadge>
                         </div>
                         <div className="mt-2 flex flex-wrap gap-2">
                           <Badge variant="outline" className="gap-1.5">
@@ -449,11 +434,6 @@ export default function KnowledgePage() {
                             检索
                           </Button>
                         </div>
-                        {kb.source_type === 'external' && kb.connection_config && (
-                          <p className="text-xs text-muted-foreground mt-2 truncate">
-                            连接: {kb.connection_config.url}
-                          </p>
-                        )}
                       </CardContent>
                     </Card>
                   );
@@ -551,7 +531,7 @@ export default function KnowledgePage() {
         <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>新建知识库</DialogTitle>
-            <DialogDescription>创建内置知识库或对接外部知识库服务</DialogDescription>
+            <DialogDescription>创建用于上传、沉淀和检索团队材料的知识库</DialogDescription>
           </DialogHeader>
           <FieldGroup className="min-h-0 flex-1 gap-4 overflow-y-auto pr-1">
             <Field>
@@ -572,12 +552,6 @@ export default function KnowledgePage() {
                 onChange={(e) => setNewKbDesc(e.target.value)}
               />
             </Field>
-            <Tabs value={newKbSource} onValueChange={(v) => setNewKbSource(v as 'builtin' | 'external')}>
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="builtin">内置知识库</TabsTrigger>
-                <TabsTrigger value="external">外部知识库</TabsTrigger>
-              </TabsList>
-            </Tabs>
             <Field>
               <FieldLabel>可见层级</FieldLabel>
               <ToggleGroup
@@ -596,17 +570,6 @@ export default function KnowledgePage() {
                 </ToggleGroupItem>
               </ToggleGroup>
             </Field>
-            {newKbSource === 'external' && (
-              <Field>
-                <FieldLabel htmlFor="knowledge-url">外部服务 URL</FieldLabel>
-                <Input
-                  id="knowledge-url"
-                  placeholder="https://your-knowledge-base.example.com/api"
-                  value={newKbUrl}
-                  onChange={(e) => setNewKbUrl(e.target.value)}
-                />
-              </Field>
-            )}
           </FieldGroup>
           <DialogFooter>
             <Button className="w-full sm:w-auto" onClick={handleCreateKb} disabled={!newKbName}>
