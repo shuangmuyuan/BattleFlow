@@ -6403,7 +6403,7 @@ export default function WorkflowsPage() {
                       );
                       const displayedStepStatus = validationStageByStepId[step.id]
                         || (stepNeedsHumanInput ? 'waiting_human' : stepIsStreaming ? 'in_progress' : shouldRenderParallelStepAsIdle ? 'pending' : step.status);
-                      const showNodeConfirm = step.id === currentStep?.id && currentStepHasConfirmableOutput;
+                      const showNodeConfirm = step.id === currentStep?.id && isStepConfirmableStatus(step.status);
 
                       return (
                         <div
@@ -6451,6 +6451,7 @@ export default function WorkflowsPage() {
                                 size="sm"
                                 className="h-8 w-full gap-1.5 text-xs"
                                 disabled={!currentStepCanConfirm}
+                                aria-describedby={!currentStepHasConfirmableOutput ? `step-confirm-hint-${step.id}` : undefined}
                                 onClick={() => {
                                   void handleConfirmStep();
                                 }}
@@ -6464,6 +6465,14 @@ export default function WorkflowsPage() {
                                 )}
                                 {currentStepConfirmLabel}
                               </Button>
+                              {!currentStepHasConfirmableOutput && (
+                                <p
+                                  id={`step-confirm-hint-${step.id}`}
+                                  className="mt-2 text-center text-[11px] leading-4 text-muted-foreground"
+                                >
+                                  请先让 AI 写入节点产物
+                                </p>
+                              )}
                             </div>
                           )}
                         </div>
