@@ -1003,7 +1003,7 @@ describe('streamClaudeAgentSdkTurn', () => {
     expect(events).toContainEqual({ type: 'error', error: 'Budget exceeded' });
   });
 
-  it('terminates when Claude attempts a tool that is unavailable in the runtime', async () => {
+  it('keeps streaming when Claude attempts a tool that is unavailable in the runtime', async () => {
     const query = createMockQuery([
       sdkMessage({
         type: 'assistant',
@@ -1043,7 +1043,7 @@ describe('streamClaudeAgentSdkTurn', () => {
         duration_api_ms: 9,
         is_error: false,
         num_turns: 1,
-        result: 'SHOULD_NOT_BE_EMITTED',
+        result: 'Recovered without Bash.',
         stop_reason: 'end_turn',
         total_cost_usd: 0,
         usage: {},
@@ -1069,16 +1069,13 @@ describe('streamClaudeAgentSdkTurn', () => {
       status: 'failed',
       error: expect.stringContaining('No such tool available'),
     }));
+    expect(events).not.toContainEqual(expect.objectContaining({ type: 'error' }));
     expect(events).toContainEqual({
-      type: 'error',
-      error: 'Bash is not available in the current Claude runtime. Use only the configured BattleFlow tools for this workflow node.',
+      type: 'assistant_message',
+      text: 'Recovered without Bash.',
     });
-    expect(events).not.toContainEqual(expect.objectContaining({
-      type: 'assistant_final',
-      text: 'SHOULD_NOT_BE_EMITTED',
-    }));
-    expect(events).not.toContainEqual({ type: 'session_status', status: 'done' });
-    expect(query.close).toHaveBeenCalled();
+    expect(events).toContainEqual({ type: 'session_status', status: 'done' });
+    expect(query.close).not.toHaveBeenCalled();
   });
 
   it('uses result text when the SDK returns a success subtype with an error flag', async () => {

@@ -51,7 +51,6 @@ const PROTECTED_NODE_FILE_NAMES = new Set(['.battleflow-node-workspace.json']);
 const TOOL_PATH_KEYS = ['file_path', 'filePath', 'path'];
 const READABLE_FILE_TOOLS = new Set(['Read', 'Grep', 'Glob']);
 const ASK_USER_QUESTION_DIALOG_KINDS = ['ask_user_question', 'AskUserQuestion'];
-const UNAVAILABLE_TOOL_ERROR_PATTERN = /No such tool available|exists but is not enabled|Use one of the available tools instead|invalid tool call/i;
 
 type ToolPolicyValidation = { allowed: true; targetPath?: string } | { allowed: false; reason: string };
 
@@ -132,22 +131,6 @@ function getThrownErrorText(error: unknown) {
   return trimDiagnosticText(
     error.message.replace(/^Claude Code returned an error result:\s*/i, ''),
   ) || 'Claude Agent SDK request failed';
-}
-
-function getToolRuntimeErrorText(...values: unknown[]): string {
-  return values.flatMap((value) => {
-    if (typeof value === 'string') return [value];
-    if (Array.isArray(value)) return value.map((item) => getToolRuntimeErrorText(item)).filter(Boolean);
-    if (isRecord(value)) {
-      return Object.values(value).map((item) => getToolRuntimeErrorText(item)).filter(Boolean);
-    }
-    return [];
-  }).join('\n');
-}
-
-function isUnavailableToolRuntimeError(...values: unknown[]) {
-  const text = getToolRuntimeErrorText(...values);
-  return Boolean(text && UNAVAILABLE_TOOL_ERROR_PATTERN.test(text));
 }
 
 function getClaudeSettingsPath() {
@@ -1028,14 +1011,6 @@ export function streamClaudeAgentSdkTurn(input: AgentTurnInput) {
                 error: toolResult.isError ? resultPreview || 'Tool call failed' : undefined,
                 parentId: message.parent_tool_use_id || undefined,
               }));
-              if (toolResult.isError && isUnavailableToolRuntimeError(resultPreview, result, message.tool_use_result)) {
-                sdkQuery?.close();
-                closeWith({
-                  type: 'error',
-                  error: `${toolName} is not available in the current Claude runtime. Use only the configured BattleFlow tools for this workflow node.`,
-                });
-                return;
-              }
             }
             continue;
           }
