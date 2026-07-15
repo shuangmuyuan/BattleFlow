@@ -368,6 +368,7 @@ beforeEach(() => {
   mocks.materializeNodeWorkspace.mockImplementation(async (input: {
     stepId: string;
     inputArtifacts?: Array<{ artifact: WorkflowArtifactRecord; legacyNodeOutput?: { relativePath: string } }>;
+    uploadedFiles?: Array<{ id?: string; name?: string }>;
   }) => {
     const cwd = `/tmp/battleflow-runtime/org-1/workflow-1/nodes/${input.stepId}`;
     const inputArtifacts = (input.inputArtifacts || []).map(({ artifact, legacyNodeOutput }) => ({
@@ -385,6 +386,16 @@ beforeEach(() => {
       updatedAt: artifact.updated_at,
       nodeRelativePath: `inputs/previous-step-outputs/${artifact.producedByStepId}/${legacyNodeOutput?.relativePath || artifact.fileName}`,
     }));
+    const uploadedFiles = (input.uploadedFiles || []).flatMap((file, index) => {
+      if (!file.id) return [];
+      return [{
+        id: file.id,
+        name: file.name || `upload-${index + 1}`,
+        mimeType: 'application/octet-stream',
+        size: 0,
+        nodeRelativePath: `inputs/uploads/${file.id}-${file.name || `upload-${index + 1}`}`,
+      }];
+    });
     return {
       cwd,
       skillsRoot: `${cwd}/.claude/skills`,
@@ -395,6 +406,7 @@ beforeEach(() => {
       inputsDirectory: `${cwd}/inputs`,
       inputManifestPath: `${cwd}/inputs/manifest.json`,
       inputArtifacts,
+      uploadedFiles,
       contextFingerprint: inputArtifacts.length > 0 ? 'context-with-inputs' : 'context-without-inputs',
     };
   });
@@ -1387,6 +1399,7 @@ describe('Chat API route', () => {
       stepId: 'step-1',
       skill: expect.objectContaining({ id: 'skill-1' }),
       inputArtifacts: [],
+      uploadedFiles: [],
       artifactSeed: currentArtifact,
     });
   });
@@ -1517,13 +1530,13 @@ describe('Chat API route', () => {
       systemPrompt: string;
       readableDirectories: string[];
     };
-    expect(agentInput.systemPrompt).toContain('absolute_path="/tmp/battleflow-attachments/enabled-step.md"');
-    expect(agentInput.systemPrompt).toContain('absolute_path="/tmp/battleflow-attachments/disabled-step.md"');
+    expect(agentInput.systemPrompt).toContain('relative_path="inputs/uploads/attachment-enabled-Enabled previous step.md"');
+    expect(agentInput.systemPrompt).toContain('relative_path="inputs/uploads/attachment-disabled-Second previous step.md"');
     expect(agentInput.systemPrompt).not.toContain('/tmp/battleflow-attachments/future-step.md');
     expect(agentInput.systemPrompt).not.toContain('ENABLED_PREVIOUS_OUTPUT_SHOULD_NOT_BE_INLINED');
     expect(agentInput.systemPrompt).not.toContain('DISABLED_PREVIOUS_OUTPUT_SHOULD_NOT_APPEAR');
     expect(agentInput.systemPrompt).not.toContain('FUTURE_OUTPUT_SHOULD_NOT_APPEAR');
-    expect(agentInput.readableDirectories).toContain('/tmp/battleflow-attachments');
+    expect(agentInput.readableDirectories).toEqual([]);
   });
 
   it('materializes the server-side Skill and passes node cwd with a single Skill filter', async () => {
@@ -1575,6 +1588,7 @@ describe('Chat API route', () => {
       stepId: 'step-1',
       skill: serverSkill,
       inputArtifacts: [],
+      uploadedFiles: [],
     });
     const agentInput = mocks.streamClaudeAgentSdkTurn.mock.calls[0][0] as {
       systemPrompt: string;

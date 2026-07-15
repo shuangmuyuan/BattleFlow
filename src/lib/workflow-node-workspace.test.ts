@@ -301,6 +301,37 @@ describe('materializeNodeWorkspace', () => {
     expect(workspace.contextFingerprint).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it('copies uploaded attachments into the current node inputs directory', async () => {
+    const uploadPath = path.join(tempRoot, 'runtime', 'org-1', 'workflow-1', 'attachments', 'message-1', 'source.md');
+    const extractedPath = `${uploadPath}.extracted.md`;
+    mkdirSync(path.dirname(uploadPath), { recursive: true });
+    writeFileSync(uploadPath, '# Source attachment\n');
+    writeFileSync(extractedPath, '# Extracted attachment\n');
+
+    const workspace = await materializeNodeWorkspace({
+      organizationId: 'org-1',
+      workflowId: 'workflow-1',
+      stepId: 'step-current',
+      skill: createSkill(),
+      uploadedFiles: [{
+        id: 'attachment-1',
+        name: 'source.md',
+        type: 'text/markdown',
+        size: 20,
+        absolutePath: uploadPath,
+        extractedTextPath: extractedPath,
+      }],
+    });
+
+    expect(workspace.uploadedFiles).toEqual([expect.objectContaining({
+      id: 'attachment-1',
+      nodeRelativePath: 'inputs/uploads/attachment-1-source.md',
+      extractedTextNodeRelativePath: 'inputs/uploads/attachment-1-source.md.extracted.md',
+    })]);
+    expect(readFileSync(path.join(workspace.cwd, 'inputs/uploads/attachment-1-source.md'), 'utf8')).toBe('# Source attachment\n');
+    expect(readFileSync(path.join(workspace.cwd, 'inputs/uploads/attachment-1-source.md.extracted.md'), 'utf8')).toBe('# Extracted attachment\n');
+  });
+
   it('uses a completed node document as the source for a legacy summary artifact', async () => {
     const artifact = createArtifact({
       producedByStepId: 'step-previous',

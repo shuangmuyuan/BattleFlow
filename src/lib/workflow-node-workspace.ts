@@ -7,6 +7,7 @@ import { resolveWorkflowNodeOutputDownload } from './workflow-node-outputs';
 import type { WorkflowArtifactRecord } from './workflow-registry';
 import {
   getWorkflowNodeRuntimeDirectory,
+  getWorkflowRuntimeRoot,
   isPathInsideRoot,
   sanitizeWorkflowRuntimeSegment,
 } from './workflow-runtime-paths';
@@ -14,6 +15,7 @@ import {
 const NODE_WORKSPACE_METADATA_FILE = '.battleflow-node-workspace.json';
 const NODE_INPUTS_DIRECTORY = 'inputs';
 const NODE_INPUTS_MANIFEST_FILE = 'manifest.json';
+const NODE_UPLOADS_DIRECTORY = 'uploads';
 const PREVIOUS_STEP_OUTPUTS_DIRECTORY = 'previous-step-outputs';
 const SKILL_FILE_CANDIDATES = ['SKILL.md', 'skill.md'];
 
@@ -41,6 +43,25 @@ export interface MaterializedNodeInputArtifact {
   nodeRelativePath: string;
 }
 
+export interface NodeWorkspaceUploadFile {
+  id?: string;
+  name?: string;
+  type?: string;
+  size?: number;
+  sha256?: string;
+  absolutePath?: string;
+  extractedTextPath?: string;
+}
+
+export interface MaterializedNodeUploadFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  nodeRelativePath: string;
+  extractedTextNodeRelativePath?: string;
+}
+
 export interface MaterializeNodeWorkspaceInput {
   organizationId: string;
   workflowId: string;
@@ -48,6 +69,7 @@ export interface MaterializeNodeWorkspaceInput {
   skill: Pick<SkillRecord, 'id' | 'skill_id' | 'name' | 'display_name' | 'version' | 'skill_md' | 'versions' | 'package_assets'>;
   artifactSeed?: Pick<WorkflowArtifactRecord, 'path' | 'fileName' | 'checksum' | 'id' | 'updated_at'>;
   inputArtifacts?: NodeWorkspaceInputArtifact[];
+  uploadedFiles?: NodeWorkspaceUploadFile[];
 }
 
 export interface MaterializedNodeWorkspace {
@@ -60,6 +82,7 @@ export interface MaterializedNodeWorkspace {
   inputsDirectory: string;
   inputManifestPath: string;
   inputArtifacts: MaterializedNodeInputArtifact[];
+  uploadedFiles: MaterializedNodeUploadFile[];
   contextFingerprint: string;
   seededArtifactPath?: string;
 }
@@ -77,6 +100,7 @@ interface NodeWorkspaceMetadata {
   seededArtifactChecksum?: string;
   seededArtifactUpdatedAt?: string;
   inputArtifacts: MaterializedNodeInputArtifact[];
+  uploadedFiles: MaterializedNodeUploadFile[];
   contextFingerprint: string;
   materializedAt: string;
 }
@@ -137,6 +161,17 @@ function sanitizeInputFileName(fileName: string | undefined, fallback: string) {
     .slice(0, 100);
   const safeExtension = /^\.(?:md|markdown|txt|json|csv)$/.test(extension) ? extension : '.md';
   return `${stem || fallback}${safeExtension}`;
+}
+
+function sanitizeUploadFileName(fileName: string | undefined, fallback: string) {
+  const baseName = path.basename((fileName || '').trim());
+  const extension = path.extname(baseName).toLowerCase().replace(/[^a-z0-9.]/g, '');
+  const stem = path.basename(baseName, path.extname(baseName))
+    .replace(/[<>:"/\\|?*\u0000-\u001F]+/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 100);
+  return `${stem || fallback}${extension || '.bin'}`;
 }
 
 async function pathExists(filePath: string) {
@@ -352,10 +387,64 @@ async function materializeInputArtifacts(
   return { inputsDirectory, inputManifestPath, inputArtifacts: materialized };
 }
 
+async function materializeUploadedFiles(
+  input: MaterializeNodeWorkspaceInput,
+  cwd: string,
+): Promise<MaterializedNodeUploadFile[]> {
+  const uploadsDirectory = path.join(cwd, NODE_INPUTS_DIRECTORY, NODE_UPLOADS_DIRECTORY);
+  const runtimeRoot = getWorkflowRuntimeRoot();
+  await fs.rm(uploadsDirectory, { recursive: true, force: true });
+  await fs.mkdir(uploadsDirectory, { recursive: true });
+
+  const materialized: MaterializedNodeUploadFile[] = [];
+  const seen = new Set<string>();
+  for (const [index, file] of (input.uploadedFiles || []).entries()) {
+    const sourcePath = file.absolutePath?.trim();
+    if (!sourcePath || !path.isAbsolute(sourcePath)) continue;
+
+    const sourceRealPath = await fs.realpath(sourcePath).catch(() => null);
+    if (!sourceRealPath || !isPathInsideRoot(sourceRealPath, runtimeRoot)) continue;
+
+    const id = sanitizePathSegment(file.id || `upload-${index + 1}`, 'uploadId');
+    if (seen.has(id)) continue;
+    seen.add(id);
+
+    const fileName = sanitizeUploadFileName(file.name, `upload-${index + 1}`);
+    const targetRelativePath = path.posix.join(NODE_INPUTS_DIRECTORY, NODE_UPLOADS_DIRECTORY, `${id}-${fileName}`);
+    const targetPath = path.resolve(cwd, ...targetRelativePath.split('/'));
+    if (!isPathInsideRoot(targetPath, uploadsDirectory)) {
+      throw new Error('Uploaded file path is outside the node uploads directory.');
+    }
+    await fs.copyFile(sourceRealPath, targetPath);
+
+    let extractedTextNodeRelativePath: string | undefined;
+    const extractedSourcePath = file.extractedTextPath?.trim();
+    if (extractedSourcePath && path.isAbsolute(extractedSourcePath)) {
+      const extractedRealPath = await fs.realpath(extractedSourcePath).catch(() => null);
+      if (extractedRealPath && isPathInsideRoot(extractedRealPath, runtimeRoot)) {
+        extractedTextNodeRelativePath = `${targetRelativePath}.extracted.md`;
+        await fs.copyFile(extractedRealPath, path.resolve(cwd, ...extractedTextNodeRelativePath.split('/')));
+      }
+    }
+
+    materialized.push({
+      id,
+      name: file.name || fileName,
+      mimeType: file.type || 'application/octet-stream',
+      size: typeof file.size === 'number' ? file.size : 0,
+      nodeRelativePath: targetRelativePath,
+      ...(extractedTextNodeRelativePath ? { extractedTextNodeRelativePath } : {}),
+    });
+  }
+
+  return materialized;
+}
+
 function buildContextFingerprint(
   input: MaterializeNodeWorkspaceInput,
   skillName: string,
   inputArtifacts: MaterializedNodeInputArtifact[],
+  uploadedFiles: MaterializedNodeUploadFile[],
 ) {
   return createHash('sha256').update(JSON.stringify({
     skillId: input.skill.id,
@@ -371,6 +460,13 @@ function buildContextFingerprint(
       checksum: artifact.checksum,
       version: artifact.version,
       nodeRelativePath: artifact.nodeRelativePath,
+    })),
+    uploadedFiles: uploadedFiles.map((file) => ({
+      id: file.id,
+      name: file.name,
+      size: file.size,
+      nodeRelativePath: file.nodeRelativePath,
+      extractedTextNodeRelativePath: file.extractedTextNodeRelativePath,
     })),
   })).digest('hex');
 }
@@ -404,7 +500,13 @@ export async function materializeNodeWorkspace(
   await fs.rename(tempSkillsRoot, skillsRoot);
   const seededArtifactPath = await seedArtifactDraft(input, cwd);
   const materializedInputs = await materializeInputArtifacts(input, cwd);
-  const contextFingerprint = buildContextFingerprint(input, skillName, materializedInputs.inputArtifacts);
+  const materializedUploads = await materializeUploadedFiles(input, cwd);
+  const contextFingerprint = buildContextFingerprint(
+    input,
+    skillName,
+    materializedInputs.inputArtifacts,
+    materializedUploads,
+  );
 
   const metadataPath = path.join(cwd, NODE_WORKSPACE_METADATA_FILE);
   const metadata: NodeWorkspaceMetadata = {
@@ -422,6 +524,7 @@ export async function materializeNodeWorkspace(
       seededArtifactUpdatedAt: input.artifactSeed?.updated_at,
     } : {}),
     inputArtifacts: materializedInputs.inputArtifacts,
+    uploadedFiles: materializedUploads,
     contextFingerprint,
     materializedAt: new Date().toISOString(),
   };
@@ -435,6 +538,7 @@ export async function materializeNodeWorkspace(
     skillFilePath: path.join(skillDirectory, path.basename(skillFilePath)),
     metadataPath,
     ...materializedInputs,
+    uploadedFiles: materializedUploads,
     contextFingerprint,
     ...(seededArtifactPath ? { seededArtifactPath } : {}),
   };
